@@ -499,10 +499,16 @@ function createCampus(): ProjectDocument {
   poly(p, 'parcel', 'Property boundary', outset(STK, 7), null, '#f3f4f0');
   poly(p, 'building', 'Stockmann', STK, null, '#d8d2c6');
   const all = p.floors.map(f => f.id);
-  for (const [f, dept, , color, sub, office] of STK_FLOORS) {
+  for (const [f, dept, elevation, color, sub, office] of STK_FLOORS) {
     const level = f === 'floor-basement' ? -2 : f === 'floor-b1' ? -1 : f === 'floor-ground' ? 0 : Number(f.slice(-2));
-    // Zone plate carries the atrium hole so the void shows through every floor in the stacked view.
-    plate(p, 'zone', f, dept, [ATRIUM], color);
+    // Zone plate carries the atrium hole so the void shows through the selling floors in the stacked
+    // view. Only the floors ABOVE the hall, though, because a void has a floor: the light well opens
+    // down onto the ground hall the way Stockmann's own does, and the storeys under it are solid.
+    // Punched through those too, the atrium was a shaft with nothing at the end of it — from a
+    // gallery you looked past the food market, past the building, and onto the parcel polygon, and
+    // that flat grey read as a hole in the model rather than as a hole in the building.
+    const voids = elevation > 0 ? [ATRIUM] : [];
+    plate(p, 'zone', f, dept, voids, color);
     const from = p.barriers.length;
     outlineWalls(p, f, STK);
     p.barriers.slice(from).forEach(b => {
@@ -552,7 +558,7 @@ function createCampus(): ProjectDocument {
     }
     if (office) stockmannOffices(p, f, STK, ATRIUM, [CORE_E, CORE_W]);
     else {
-      plate(p, 'room', f, dept, [ATRIUM, CORE_E, CORE_W], color);
+      plate(p, 'room', f, dept, [...voids, CORE_E, CORE_W], color);
       sub.forEach((name, i) => {
         const poi = createObject('poi', [-40, i * 7 - 7] as Point, f, name);
         poi.symbol = 'personnel';
