@@ -17,9 +17,11 @@ import {
   OPENING_MIN_SEGMENT,
   addBarrier,
   barrierEnds,
+  centroid,
   closeRing,
   createObject,
   divideSpaces,
+  enclosedRegions,
   refreshPortals,
   spaceAt,
 } from '../schema';
@@ -33,7 +35,7 @@ import {
   type ResolvedOpening,
 } from './openings';
 import { faceSegments, mergeRuns, symbolPoints } from './runs';
-import { addGap, along, closeCorners, pairWalls, snapEnds, traceRing, type Wall } from './walls';
+import { addGap, along, closeCorners, pairWalls, snapEnds, type Wall } from './walls';
 
 /** Import a floor's worth of plan entities into `draft`. Call inside a transaction. */
 export function importPlanEntities(
@@ -66,7 +68,7 @@ export function importPlanEntities(
     );
   }
   emitBarriers(draft, floorId, envelope, partitions, passages, report);
-  emitRooms(draft, floorId, envelope, partitions, report);
+  emitRooms(draft, floorId, partitions, passages, report);
   emitOpenings(draft, floorId, envelope, partitions, openings, report);
   nameRooms(draft, floorId, regional, layers, report);
   refreshPortals(draft);
@@ -187,28 +189,40 @@ function dropStubs(draft: ProjectDocument, report: PlanImportReport) {
 function emitRooms(
   draft: ProjectDocument,
   floorId: string | null,
-  envelope: Wall[],
   partitions: Wall[],
+  passages: Map<Wall, [number, number][]>,
   report: PlanImportReport,
 ) {
-  const ring = traceRing(envelope);
-  if (!ring) {
-    report.skipped.push('interior plate: envelope inner faces did not close into a ring — no rooms created');
+  // Every region the walls enclose, in one read. The previous approach traced a single plate from
+  // the envelope and then cut it once per partition, which asked far more of the drawing than it
+  // could give: a partition had to span the whole plate to divide it, so a floor laid out around a
+  // hall — partitions meeting each other rather than crossing the building — came back as one room.
+  // A basement whose envelope did not quite close came back as none at all, plate and rooms both.
+  //
+  // The walls already say where the rooms are. Subtracting their bodies from the floor's extent
+  // falls apart into exactly those rooms, whatever shape they are and whatever meets what.
+  const regions = enclosedRegions(draft, floorId);
+  if (!regions.length) {
+    report.skipped.push('no enclosed regions: the walls do not close around anything');
     return;
   }
-  const cx = ring.reduce((s, p) => s + p[0], 0) / ring.length;
-  const cy = ring.reduce((s, p) => s + p[1], 0) / ring.length;
-  const plate = createObject('room', [cx, cy], floorId, 'Room');
-  plate.rings = [closeRing(ring)];
-  const xs = ring.map(p => p[0]),
-    ys = ring.map(p => p[1]);
-  plate.width = Math.max(...xs) - Math.min(...xs);
-  plate.depth = Math.max(...ys) - Math.min(...ys);
-  draft.objects.push(plate);
-  // Longest partitions cut first; the divider extends past the room edges so the both-ends-outside
-  // rule holds. A cut the geometry refuses skips that divider, not the import.
-  for (const w of [...partitions].sort((x, y) => y.hi - y.lo - (x.hi - x.lo)))
+  for (const ring of regions) {
+    const room = createObject('room', centroid(ring as Point[]), floorId, 'Room');
+    room.rings = [closeRing(ring)];
+    const xs = ring.map((p: Point) => p[0]),
+      ys = ring.map((p: Point) => p[1]);
+    room.width = Math.max(...xs) - Math.min(...xs);
+    room.depth = Math.max(...ys) - Math.min(...ys);
+    draft.objects.push(room);
+  }
+  // A doorless passage is a gap in a partition, so the regions either side of it are one region —
+  // the walls really do leave them open to each other. The drawing still says they are two places
+  // with a way through, which is what an open boundary means, so cut along those partitions and let
+  // portal inference call the result open.
+  for (const w of partitions) {
+    if (!(passages.get(w) ?? []).length) continue;
     divideSpaces(draft, floorId, along(w, w.lo - 0.25), along(w, w.hi + 0.25));
+  }
   report.rooms = draft.objects.filter(o => o.kind === 'room' && o.floorId === floorId).length;
 }
 
