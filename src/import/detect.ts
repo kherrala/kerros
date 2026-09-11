@@ -21,6 +21,7 @@ export const LAYER_ROLES: LayerRole[] = [
   'doors',
   'windows',
   'labels',
+  'stairs',
 ];
 
 export interface LayerReport {
@@ -62,6 +63,7 @@ const NAME_HINTS: Record<LayerRole, RegExp> = {
   doors: /\bOVI|OVET|DOOR|A-DOOR/i,
   windows: /IKKUNA|WINDOW|A-GLAZ/i,
   labels: /HUONE|ROOM|TUNNUS|NAME|A-AREA-IDEN/i,
+  stairs: /PORTA|STAIR|TRAPP|A-FLOR-STRS/i,
 };
 
 const hint = (r: { layer: string }, role: LayerRole) => (NAME_HINTS[role].test(r.layer) ? 0.25 : 0);
@@ -236,4 +238,5 @@ const DEFAULTS: PlanLayerMap = {
   doors: /^27_/,
   windows: /^26_/,
   labels: /^55_/,
+  stairs: /^82_/,
 };

@@ -1,6 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { bridgeDoorways, importPlanEntities, type PlanEntity } from './planImport';
-import { addBarrier, enclosedRegions, validateProject, type Point } from '../schema';
+import {
+  addBarrier,
+  enclosedRegions,
+  flights,
+  primaryShafts,
+  servedFloors,
+  validateProject,
+  type Point,
+} from '../schema';
 import { newProject } from '../model/testFixtures';
 
 // A synthetic two-room house in the prefab-CAD idiom the importer understands: the envelope drawn
@@ -220,7 +228,7 @@ describe('an oblique doorway the Manhattan pass cannot see', () => {
         c = p.junctions.find(j => j.id === b.endId)!.position;
       return Math.abs(a[0] - c[0]) > 0.05 && Math.abs(a[1] - c[1]) > 0.05;
     });
-  const report = () => ({ walls: 0, rooms: 0, doors: 0, windows: 0, passages: 0, named: 0, skipped: [] });
+  const report = () => ({ walls: 0, stairs: 0, rooms: 0, doors: 0, windows: 0, passages: 0, named: 0, skipped: [] });
 
   it('bridges the gap a door is drawn across, and closes the room', () => {
     const p = cutCorner();
@@ -279,5 +287,49 @@ describe('windows are read from their jambs', () => {
     // Each is its own opening, about 0.8 m — not one 2.6 m hole, and not nothing at all.
     for (const w of widths) expect(w).toBeGreaterThan(0.6);
     for (const w of widths) expect(w).toBeLessThan(1);
+  });
+});
+
+describe('stairs are read off the drawing', () => {
+  // Treads: parallel lines across the run, which is how a plan draws a flight.
+  const withStair = (x0: number): PlanEntity[] => [
+    ...HOUSE,
+    ...Array.from({ length: 8 }, (_, i) => ({
+      type: 'LINE' as const,
+      layer: '82_PORTAAT',
+      a: [x0, 2 + i * 0.26] as Point,
+      b: [x0 + 1.1, 2 + i * 0.26] as Point,
+    })),
+  ];
+  it('places a flight where the treads are, serving the floor it is drawn on', () => {
+    const p = newProject();
+    const report = importPlanEntities(p, structuredClone(withStair(2)), { floorId: 'floor-ground' });
+    expect(report.stairs).toBe(1);
+    const [stair] = p.objects.filter(o => o.kind === 'stairs');
+    expect(stair).toBeTruthy();
+    expect(stair.position[0]).toBeCloseTo(2.55, 1);
+    // A sheet knows only its own storey; what the stair connects is read across the sheets later.
+    expect(stair.servedFloorIds).toEqual(['floor-ground']);
+    expect(() => validateProject(p)).not.toThrow();
+  });
+  it('gives a floor with no stair drawn on it no stair', () => {
+    const p = newProject();
+    const report = importPlanEntities(p, structuredClone(HOUSE), { floorId: 'floor-ground' });
+    expect(report.stairs).toBe(0);
+    expect(p.objects.filter(o => o.kind === 'stairs')).toHaveLength(0);
+  });
+  it('reads one shaft from the same stair drawn on two storeys', () => {
+    // What importing a real set of sheets does: the same flight, once per floor it appears on. Read
+    // together they are one stair connecting both, which is what servedFloors answers.
+    const p = newProject();
+    p.floors.push({ id: 'floor-1', buildingId: 'building-main', name: 'First', elevation: 3, height: 3 });
+    importPlanEntities(p, structuredClone(withStair(2)), { floorId: 'floor-ground' });
+    importPlanEntities(p, structuredClone(withStair(2)), { floorId: 'floor-1' });
+    const stairs = p.objects.filter(o => o.kind === 'stairs');
+    expect(stairs).toHaveLength(2);
+    expect(servedFloors(p, stairs[0]).map(f => f.id)).toEqual(['floor-ground', 'floor-1']);
+    expect(flights(p, stairs[0])).toHaveLength(1);
+    // One of them draws; the other is the same stair seen again.
+    expect([...primaryShafts(p)].filter(id => stairs.some(s => s.id === id))).toHaveLength(1);
   });
 });

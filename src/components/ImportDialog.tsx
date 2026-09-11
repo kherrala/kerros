@@ -23,6 +23,7 @@ const ROLE_LABELS: Record<LayerRole, string> = {
   doors: 'Doors',
   windows: 'Windows',
   labels: 'Room labels',
+  stairs: '',
 };
 /** What a layer looks like, for the line under a role's name. */
 const described = (detection: LayerDetection, layer: string) => {

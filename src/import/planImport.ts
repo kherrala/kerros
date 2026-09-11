@@ -47,7 +47,16 @@ export function importPlanEntities(
 ): PlanImportReport {
   const layers = options.layers ?? VERTEX_LAYERS;
   const { floorId } = options;
-  const report: PlanImportReport = { walls: 0, rooms: 0, doors: 0, windows: 0, passages: 0, named: 0, skipped: [] };
+  const report: PlanImportReport = {
+    walls: 0,
+    stairs: 0,
+    rooms: 0,
+    doors: 0,
+    windows: 0,
+    passages: 0,
+    named: 0,
+    skipped: [],
+  };
 
   const regional = planRegion(entities, layers.interiorFace);
   const { envelope, partitions } = reconstructWalls(regional, layers, report);
@@ -74,6 +83,7 @@ export function importPlanEntities(
   emitBarriers(draft, floorId, envelope, partitions, passages, report);
   // Before the rooms, because a bridged doorway is what closes the region they are read from.
   bridgeDoorways(draft, floorId, doorPts, report);
+  emitStairs(draft, floorId, regional, layers, report);
   emitRooms(draft, floorId, partitions, passages, report);
   emitOpenings(draft, floorId, envelope, partitions, openings, report);
   nameRooms(draft, floorId, regional, layers, report);
@@ -287,6 +297,69 @@ function emitOpenings(
       if (o.kind === 'door') report.doors++;
       else report.windows++;
     }
+  }
+}
+
+/** The flights of stairs the drawing shows, one object per stair.
+ *
+ *  A stair is drawn as its treads, on a layer of their own, and that block of parallel lines is the
+ *  flight's footprint — where it stands, how wide it is, how far it runs and which way it climbs. All
+ *  of which the importer had been throwing away: it read walls, openings, rooms and labels and no
+ *  vertical circulation at all, so every stair and lift in an imported document was something a
+ *  person added afterwards by hand.
+ *
+ *  A sheet only says what is on that storey, so each says its stair serves its own floor and no
+ *  other. Where the same stair is drawn on the sheets above and below, importing them into one
+ *  document puts the same flight in the same place on each — and `servedFloors` reads a shaft's
+ *  reach across all of them, so the stair ends up connecting exactly the levels it is drawn on. A
+ *  cellar with no stair drawn simply does not get one. */
+function emitStairs(
+  draft: ProjectDocument,
+  floorId: string | null,
+  regional: PlanEntity[],
+  layers: NonNullable<PlanImportOptions['layers']>,
+  report: PlanImportReport,
+) {
+  if (!layers.stairs) return;
+  const treads: [Point, Point][] = [];
+  for (const e of regional) {
+    if (!layers.stairs.test(e.layer)) continue;
+    if (e.type === 'LINE' && e.a && e.b) treads.push([e.a, e.b]);
+    if (e.type === 'POLYLINE' && e.points)
+      for (let i = 1; i < e.points.length; i++) treads.push([e.points[i - 1], e.points[i]]);
+  }
+  if (!treads.length) return;
+  // One stair, or several: a building can have a core at each end. Treads of the same flight touch
+  // or nearly touch; two cores are metres apart.
+  const flights: [Point, Point][][] = [];
+  for (const t of treads) {
+    const near = flights.find(g => g.some(([a, b]) => t.some(p => distance(p, a) < 1.5 || distance(p, b) < 1.5)));
+    if (near) near.push(t);
+    else flights.push([t]);
+  }
+  for (const group of flights) {
+    const pts = group.flat();
+    const xs = pts.map(p => p[0]),
+      ys = pts.map(p => p[1]);
+    const width = Math.max(...xs) - Math.min(...xs),
+      depth = Math.max(...ys) - Math.min(...ys);
+    // A flight is at least a stride wide and at least a stride long, and a staircase big enough to
+    // fill a room is something else drawn on the stair layer.
+    if (Math.min(width, depth) < 0.6 || Math.max(width, depth) > 8) {
+      report.skipped.push(`stair symbol ${width.toFixed(1)} x ${depth.toFixed(1)} m is not a flight`);
+      continue;
+    }
+    const centre: Point = [(Math.max(...xs) + Math.min(...xs)) / 2, (Math.max(...ys) + Math.min(...ys)) / 2];
+    const stair = createObject('stairs', centre, floorId, 'Stairs');
+    // The treads lie ACROSS the run, so the flight climbs along the shorter side of their block —
+    // which is what makes a stair read as a stair rather than as a plate the size of its landing.
+    const acrossX = width >= depth;
+    stair.width = acrossX ? width : depth;
+    stair.depth = acrossX ? depth : width;
+    stair.rotation = acrossX ? 0 : 90;
+    stair.servedFloorIds = floorId ? [floorId] : [];
+    draft.objects.push(stair);
+    report.stairs++;
   }
 }
 

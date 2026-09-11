@@ -16,6 +16,16 @@ import type { Floor, Point, ProjectDocument, Ring, SiteObject } from './types';
 /** True for the kinds that connect levels. */
 export const isVertical = (kind: string) => kind === 'stairs' || kind === 'elevator';
 
+/** Which shaft this object is part of.
+ *
+ *  A shaft is one thing standing in one place reaching several levels, and that is how the document
+ *  can describe it: one object, one position, one `servedFloorIds`. Older documents — the demo among
+ *  them — instead repeat the object on every storey it serves, because that is what you had to do
+ *  before anything read the served list. Both must draw as one lift, so a shaft is identified by what
+ *  makes it the same shaft: its kind, its name, and where it stands. */
+export const shaftKey = (object: SiteObject) =>
+  `${object.kind}|${object.name}|${object.position[0].toFixed(2)}|${object.position[1].toFixed(2)}`;
+
 /** Every level this shaft reaches, lowest first.
  *
  *  `servedFloorIds` when it is authored — that is the document's own statement and outranks any
@@ -23,8 +33,15 @@ export const isVertical = (kind: string) => kind === 'stairs' || kind === 'eleva
  *  draw a stair going nowhere, which is visibly wrong and easy to fix, than to invent a connection
  *  that routing would then happily send someone through. */
 export function servedFloors(project: ProjectDocument, object: SiteObject): Floor[] {
-  const ids = object.servedFloorIds?.length ? object.servedFloorIds : object.floorId ? [object.floorId] : [];
-  return [...new Set(ids)]
+  // Every twin's reach, not just this one's. A plan sheet only says what is on its own storey, so an
+  // import gives the same stair once per floor it is drawn on, each claiming only that floor. Read
+  // together they say what the stair actually connects — which is the question being asked, and the
+  // reason a stair imported from three sheets is one flight and not three plates.
+  const key = shaftKey(object);
+  const ids = project.objects
+    .filter(o => isVertical(o.kind) && shaftKey(o) === key)
+    .flatMap(o => (o.servedFloorIds?.length ? o.servedFloorIds : o.floorId ? [o.floorId] : []));
+  return [...new Set(ids.length ? ids : object.floorId ? [object.floorId] : [])]
     .map(id => project.floors.find(f => f.id === id))
     .filter((f): f is Floor => !!f)
     .sort((a, b) => a.elevation - b.elevation);
@@ -93,16 +110,6 @@ export const runFor = (rise: number, pitch: number = PITCH.stairs) => rise / Mat
 
 /** The pitch a flight actually climbs at, given the run the plan gives it. */
 export const pitchOf = (rise: number, run: number) => (run > 0 ? (Math.atan(rise / run) * 180) / Math.PI : 90);
-
-/** Which shaft this object is part of.
- *
- *  A shaft is one thing standing in one place reaching several levels, and that is how the document
- *  can describe it: one object, one position, one `servedFloorIds`. Older documents — the demo among
- *  them — instead repeat the object on every storey it serves, because that is what you had to do
- *  before anything read the served list. Both must draw as one lift, so a shaft is identified by what
- *  makes it the same shaft: its kind, its name, and where it stands. */
-export const shaftKey = (object: SiteObject) =>
-  `${object.kind}|${object.name}|${object.position[0].toFixed(2)}|${object.position[1].toFixed(2)}`;
 
 /** The one twin that stands for the shaft: the lowest, so the flights count upward from the bottom.
  *  A shaft described the modern way — one object — is trivially its own primary. */

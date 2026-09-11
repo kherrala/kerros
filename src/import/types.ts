@@ -37,6 +37,9 @@ export interface PlanLayerMap {
   windows: RegExp;
   /** Room label texts. Area figures (pure numbers) are ignored automatically. */
   labels: RegExp;
+  /** Stair treads. Optional: a sheet with no stair on it simply has none, which is a fact about the
+   *  building and not a failure. Where it is drawn, the symbol's extent is the flight's footprint. */
+  stairs?: RegExp;
 }
 export const VERTEX_LAYERS: PlanLayerMap = {
   exteriorFace: /^12_/,
@@ -45,6 +48,7 @@ export const VERTEX_LAYERS: PlanLayerMap = {
   doors: /^27_/,
   windows: /^26_/,
   labels: /^55_/,
+  stairs: /^82_/,
 };
 
 export interface PlanImportOptions {
@@ -53,6 +57,8 @@ export interface PlanImportOptions {
 }
 export interface PlanImportReport {
   walls: number;
+  /** Flights of stairs read off the drawing. */
+  stairs: number;
   rooms: number;
   doors: number;
   windows: number;
