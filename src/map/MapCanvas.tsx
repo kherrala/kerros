@@ -12,6 +12,7 @@ import type { AssetRepository, Point, ProjectDocument, SiteObject, Tool } from '
 import type { StatusReading } from '../model/live';
 import type { BasemapConfig } from '../model/host';
 import {
+  add,
   barrierEnds,
   closeRing,
   drawingCorners,
@@ -20,6 +21,7 @@ import {
   openRing,
   pointInRing,
   ringArea,
+  rotate,
   toLngLat,
   toLocal,
 } from '../model/geometry';
@@ -32,7 +34,6 @@ import { draftFeatures, makeFeatures, navGraphFeatures, visibleOnFloor } from '.
 import { routeArrowImage, routeFeatures } from './route';
 import { aimCenter, JourneyPlayer } from './journey';
 import type { Route } from '../model/navigation';
-import { cameraPeek } from './cameraPeek';
 import { SceneLayer } from './SceneLayer';
 import { undergroundView } from './underground';
 import { loadBasemap } from './loadBasemap';
@@ -80,11 +81,13 @@ export interface MapCanvasProps {
   onSelect: (id: string) => void;
   onHoverObject?: (id: string | null) => void;
   onVertexMove(
-    kind: 'junction' | 'ring' | 'object' | 'barrier' | 'node',
+    kind: 'junction' | 'ring' | 'object' | 'barrier' | 'node' | 'opening' | 'rotate' | 'coverage',
     id: string,
     point: Point,
     ring?: number,
     vertex?: number,
+    /** Shift was held on release: take the drop exactly as given, ignoring any snapping. */
+    free?: boolean,
   ): void;
   onError: (message: string) => void;
   onReady?: (map: GLMap) => void;
@@ -1407,7 +1410,7 @@ export function MapCanvas(props: MapCanvasProps) {
   const screen = (p: Point) => map.current?.project(toLngLat(p, props.project.origin));
   function startDrag(
     event: React.PointerEvent<HTMLButtonElement>,
-    kind: 'junction' | 'ring' | 'object' | 'barrier' | 'node',
+    kind: 'junction' | 'ring' | 'object' | 'barrier' | 'node' | 'opening' | 'rotate' | 'coverage',
     id: string,
     ring?: number,
     vertex?: number,
@@ -1512,7 +1515,14 @@ export function MapCanvas(props: MapCanvasProps) {
         suppressClick.current = true;
         const rect = m.getContainer().getBoundingClientRect();
         const ll = m.unproject([e.clientX - rect.left, e.clientY - rect.top]);
-        latest.current.onVertexMove(kind, id, toLocal([ll.lng, ll.lat], props.project.origin), ring, vertex);
+        latest.current.onVertexMove(
+          kind,
+          id,
+          toLocal([ll.lng, ll.lat], props.project.origin),
+          ring,
+          vertex,
+          e.shiftKey,
+        );
         setFrame(n => n + 1);
         setTimeout(() => {
           suppressClick.current = false;
@@ -1715,14 +1725,7 @@ export function MapCanvas(props: MapCanvasProps) {
             >
               <EntityIcon kind={o.kind} size={o.kind === 'door' ? 14 : 17} symbol={o.symbol} />
               {o.feedId && <i className={`status-dot ${statusTone(status)}`} />}
-              {o.kind === 'camera' ? (
-                <span className="marker-tooltip camera-peek">
-                  <img src={cameraPeek(o)} alt="" width={232} height={130} />
-                  <span>{o.name} · sample capture</span>
-                </span>
-              ) : (
-                <span className="marker-tooltip">{o.name}</span>
-              )}
+              <span className="marker-tooltip">{o.name}</span>
             </button>
           );
         })}
@@ -1749,20 +1752,68 @@ export function MapCanvas(props: MapCanvasProps) {
           props.tool === 'select' &&
           !props.threeD &&
           selectedObject &&
-          !selectedObject.barrierId &&
           (() => {
             const s = screen(selectedObject.position);
+            // An opening cannot go wherever the pointer went — it belongs to its wall. Same handle,
+            // different constraint: the drop is projected back onto the barrier it is fitted to.
+            const attached = !!selectedObject.barrierId;
             return s ? (
               <button
                 className="move-handle"
-                aria-label="Move selected object"
+                aria-label={attached ? 'Slide along the wall' : 'Move selected object'}
                 data-wx={selectedObject.position[0]}
                 data-wy={selectedObject.position[1]}
                 style={{ left: s.x, top: s.y }}
-                onPointerDown={e => startDrag(e, 'object', selectedObject.id)}
+                onPointerDown={e => startDrag(e, attached ? 'opening' : 'object', selectedObject.id)}
               >
                 ✥
               </button>
+            ) : null;
+          })()}
+        {props.canEdit &&
+          props.tool === 'select' &&
+          !props.threeD &&
+          selectedObject &&
+          !selectedObject.barrierId &&
+          selectedObject.rotation !== undefined &&
+          (() => {
+            // A turned object had no visible affordance at all: the angle was a number in a panel.
+            // The handle stands off along the object's own facing, at arm's length from its footprint.
+            const reach = Math.max(1.6, (Math.abs(selectedObject.width) + Math.abs(selectedObject.depth)) / 2 + 0.8);
+            const at = add(selectedObject.position, rotate([reach, 0], selectedObject.rotation));
+            const s = screen(at);
+            return s ? (
+              <button
+                className="rotate-handle"
+                aria-label="Turn selected object"
+                data-wx={at[0]}
+                data-wy={at[1]}
+                style={{ left: s.x, top: s.y }}
+                onPointerDown={e => startDrag(e, 'rotate', selectedObject.id)}
+              />
+            ) : null;
+          })()}
+        {props.canEdit &&
+          props.tool === 'select' &&
+          !props.threeD &&
+          selectedObject?.kind === 'camera' &&
+          (() => {
+            // One handle for the whole cone: how far it reaches is the distance, how wide it opens
+            // is twice the angle off the camera's facing. Dragging it does both at once, which is
+            // how you actually aim a camera — pull it to the thing you want in frame.
+            const range = selectedObject.coverageRange ?? 12;
+            const half = (selectedObject.coverageAngle ?? 70) / 2;
+            const at = add(selectedObject.position, rotate([range, 0], selectedObject.rotation + half));
+            const s = screen(at);
+            return s ? (
+              <button
+                className="coverage-handle"
+                aria-label="Camera reach and field of view"
+                data-wx={at[0]}
+                data-wy={at[1]}
+                style={{ left: s.x, top: s.y }}
+                onPointerDown={e => startDrag(e, 'coverage', selectedObject.id)}
+              />
             ) : null;
           })()}
         {props.canEdit &&

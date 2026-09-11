@@ -25,7 +25,6 @@ import { isArea, isSpace } from '../model/types';
 import { barrierEnds, distance, moveOrigin, objectArea, objectPosition } from '../model/geometry';
 import { entryInto, zoneSpaces } from '../model/ontology';
 import { statusLabel, statusTone } from '../adapters/status';
-import { cameraPeek } from '../map/cameraPeek';
 import { EntityIcon } from './Icons';
 import { Field, Toggle } from './controls';
 
@@ -271,12 +270,9 @@ export function Inspector(props: Props) {
                   </div>
                 </div>
                 {watcher && (
-                  <div className="event-footage">
-                    <img src={cameraPeek(watcher)} alt="" width={232} height={130} />
-                    <span>
-                      <Camera size={13} /> {watcher.name} · covers this {object!.kind}
-                    </span>
-                  </div>
+                  <p className="helper">
+                    <Camera size={13} /> {watcher.name} covers this {object!.kind}.
+                  </p>
                 )}
               </section>
             )}

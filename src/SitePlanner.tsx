@@ -62,6 +62,7 @@ import {
   addBarrier,
   alignDrawing,
   barrierEnds,
+  segmentProjection,
   centroid,
   closeRing,
   distance,
@@ -797,15 +798,61 @@ export function SitePlanner({
     ];
   }, [editing, threeD, tool, proposal, openingFit, draft, hover, held]);
   function vertexMove(
-    kind: 'junction' | 'ring' | 'object' | 'barrier' | 'node',
+    kind: 'junction' | 'ring' | 'object' | 'barrier' | 'node' | 'opening' | 'rotate' | 'coverage',
     id: string,
     raw: Point,
     ringIndex = 0,
     index = 0,
+    free = false,
   ) {
-    const point: Point = snapping ? [Math.round(raw[0] * 2) / 2, Math.round(raw[1] * 2) / 2] : raw;
+    // Shift releases the drop from the grid — the escape hatch for a camera that has to point at a
+    // particular corner, or a wall that genuinely runs at 3°.
+    const grid = snapping && !free;
+    const point: Point = grid ? [Math.round(raw[0] * 2) / 2, Math.round(raw[1] * 2) / 2] : raw;
     if (kind === 'object') {
       updateObject(id, { position: point });
+      return;
+    }
+    // An opening lives on its wall, so a drag slides it along that wall rather than moving it to
+    // where the pointer went. Offset is clamped so the leaf stays wholly on the segment — the same
+    // rule validation enforces, applied while dragging instead of refused afterwards.
+    if (kind === 'opening') {
+      const opening = project.objects.find(o => o.id === id);
+      const barrier = project.barriers.find(b => b.id === opening?.barrierId);
+      if (!opening || !barrier) return;
+      const [a, b] = barrierEnds(project, barrier);
+      const hit = segmentProjection(raw, a, b);
+      const half = opening.width / 2;
+      if (hit.length < opening.width) return;
+      const offset = Math.max(half, Math.min(hit.length - half, hit.t * hit.length));
+      const ux = (b[0] - a[0]) / hit.length,
+        uy = (b[1] - a[1]) / hit.length;
+      updateObject(id, { offset, position: [a[0] + ux * offset, a[1] + uy * offset] });
+      return;
+    }
+    if (kind === 'rotate') {
+      const object = project.objects.find(o => o.id === id);
+      if (!object) return;
+      const degrees = (Math.atan2(raw[1] - object.position[1], raw[0] - object.position[0]) * 180) / Math.PI;
+      // Snapping holds a turned object to 15° detents; Shift lets it point anywhere.
+      updateObject(id, { rotation: grid ? Math.round(degrees / 15) * 15 : Math.round(degrees * 10) / 10 });
+      return;
+    }
+    // One handle carries both halves of a camera's cone: its distance is the reach, its bearing off
+    // the camera's facing is half the field of view.
+    if (kind === 'coverage') {
+      const object = project.objects.find(o => o.id === id);
+      if (!object) return;
+      const dx = raw[0] - object.position[0],
+        dy = raw[1] - object.position[1];
+      const range = Math.max(1, Math.min(120, Math.hypot(dx, dy)));
+      const bearing = (Math.atan2(dy, dx) * 180) / Math.PI;
+      const half = Math.abs(((((bearing - (object.rotation ?? 0)) % 360) + 540) % 360) - 180);
+      const spread = Math.max(10, Math.min(350, half * 2));
+      updateObject(id, {
+        coverageRange: Math.round(range * 10) / 10,
+        coverageAngle: grid ? Math.round(spread / 5) * 5 : Math.round(spread),
+      });
       return;
     }
     if (kind === 'node') {

@@ -2463,25 +2463,6 @@
 }
 
 /* Camera hover peek: a synthetic CCTV frame in place of the plain name tooltip. */
-.marker-tooltip.camera-peek {
-  padding: 0;
-  overflow: hidden;
-  border-radius: 10px;
-  width: 232px;
-  background: #10131c;
-}
-.marker-tooltip.camera-peek img {
-  display: block;
-  width: 232px;
-  height: 130px;
-}
-.marker-tooltip.camera-peek > span {
-  display: block;
-  padding: 5px 9px 6px;
-  font-size: 11px;
-  font-weight: 600;
-  color: #eceff8;
-}
 .marker-tooltip.flip-y {
   bottom: auto;
   top: calc(100% + 7px);
@@ -2607,13 +2588,6 @@
   }
   .modal {
     width: min(94vw, 560px);
-  }
-  .marker-tooltip.camera-peek {
-    width: 176px;
-  }
-  .marker-tooltip.camera-peek img {
-    width: 176px;
-    height: 99px;
   }
 }
 @media (pointer: coarse) {
@@ -3422,4 +3396,32 @@
   font-size: 11px;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Turning an object, and aiming a camera. Both stand off in the world rather than on screen, so they
+   follow the thing they belong to through a pan or a zoom. */
+.rotate-handle,
+.coverage-handle {
+  /* The overlay layer is pointer-events: none so the map stays draggable through it; every handle
+     on it has to opt back in, as the move handle does. */
+  pointer-events: auto;
+  z-index: 8;
+  position: absolute;
+  width: 15px;
+  height: 15px;
+  margin: -8px 0 0 -8px;
+  padding: 0;
+  border-radius: 50%;
+  border: 2px solid var(--panel);
+  background: var(--accent);
+  box-shadow: var(--shadow-sm);
+  cursor: grab;
+}
+.rotate-handle:active,
+.coverage-handle:active {
+  cursor: grabbing;
+}
+.coverage-handle {
+  border-radius: 3px;
+  background: var(--warning);
 }
