@@ -6,6 +6,7 @@
 // means is the host's business, not the toolkit's.
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { LiftPanel, useLiftController } from './LiftPanel';
 import {
   ArrowLeft,
   ArrowRight,
@@ -61,6 +62,9 @@ function ViewerShell({
     ),
     [selected, setSelected] = useState<string | null>(null),
     [tab, setTab] = useState<'floors' | 'structure'>('floors');
+  // A host's own simulated feed. Real hosts subscribe to a StatusFeed; this one lets you drive the
+  // lifts by hand, which is the same data arriving by a different road.
+  const liftController = useLiftController(project);
   const [threeD, setThreeD] = useState(view?.threeD ?? true),
     [stack, setStack] = useState(view?.stack ?? false),
     [error, setError] = useState('');
@@ -223,6 +227,7 @@ function ViewerShell({
             <FloorViewer
               project={project}
               assets={assets}
+              statuses={liftController.statuses}
               basemap={basemap}
               floorId={floorId}
               onFloorChange={setFloorId}
@@ -239,6 +244,7 @@ function ViewerShell({
                 writeHash();
               }}
             />
+            <LiftPanel project={project} controller={liftController} onFloor={setFloorId} />
             <div className="canvas-top-left">
               <div className="view-switch">
                 <button className={!threeD ? 'active' : ''} onClick={() => setThreeD(false)}>

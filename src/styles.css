@@ -3425,3 +3425,86 @@
   border-radius: 3px;
   background: var(--warning);
 }
+
+/* The reference viewer's lift controls. Host chrome, like the floor sidebar: the library draws what
+   a reading says, and this is the host's way of producing one. */
+.lift-panel {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  z-index: 20;
+  width: 208px;
+  max-height: calc(100% - 28px);
+  overflow-y: auto;
+  padding: 12px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+}
+.lift-panel h3 {
+  margin: 0 0 10px;
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.lift-panel section + section {
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+.lift-panel header {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 7px;
+}
+.lift-panel header strong {
+  font-size: 13px;
+}
+.lift-panel header span {
+  font-size: 11px;
+  color: var(--ink-faint);
+  text-align: right;
+}
+.lift-landings {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.lift-landings button,
+.lift-doors {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 5px 8px;
+  border-radius: 7px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--ink-soft);
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+.lift-landings button:hover,
+.lift-doors:hover {
+  background: var(--surface-hover, rgba(120, 120, 150, 0.09));
+}
+.lift-landings button.active {
+  background: var(--accent-soft, rgba(98, 89, 232, 0.12));
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.lift-doors {
+  margin-top: 8px;
+  justify-content: center;
+  border-color: var(--line);
+}
+.lift-doors.active {
+  border-color: var(--accent);
+  color: var(--accent-ink);
+}

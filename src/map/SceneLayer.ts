@@ -63,6 +63,19 @@ const LIFT = 0.15,
   GROUND = 0.06;
 const wallBase = (floorId: string | null) => (floorId ? LIFT + SLAB : GROUND);
 
+/** A part of the scene that moves: its own geometry, outside the merged batch, animated toward a
+ *  target at a fixed speed. Everything else is welded into one buffer per material — which is what
+ *  makes a tall building cheap to draw and impossible to move a single piece of. */
+interface Rig {
+  id: string;
+  group: THREE.Group;
+  /** Where it is heading, in whatever unit the part measures itself in — metres of elevation for a
+   *  lift car, 0..1 open for a door leaf. */
+  target: number;
+  /** Units per second. A lift runs at about 1.5 m/s; a door takes about a second to swing. */
+  speed: number;
+  apply: (group: THREE.Group, value: number) => void;
+}
 export class SceneLayer implements CustomLayerInterface {
   id = 'kerros-3d';
   type = 'custom' as const;
@@ -96,6 +109,13 @@ export class SceneLayer implements CustomLayerInterface {
   private liftSignature = '';
   /** Per-floor stairwell cut-outs; cleared with the scene. */
   private voidCache = new Map<string, Ring[]>();
+  /** Moving parts, rebuilt with the scene each update — see `rig`. */
+  private rigs: Rig[] = [];
+  /** Where each moving part has got to, carried ACROSS rebuilds. The geometry is disposed with the
+   *  scene like everything else; this is not, or every lift car would jump back to the bottom of its
+   *  shaft on any edit, and every open door would slam. */
+  private rigState = new Map<string, number>();
+  private lastFrame = 0;
   private revision = 0;
   private depthScale = 1;
   private buried = false;
@@ -251,6 +271,55 @@ export class SceneLayer implements CustomLayerInterface {
     this.xyCache.set(key, result);
     return result;
   }
+  /** Build a standalone piece of geometry — same extrusion as `surface`, but returned as its own
+   *  group instead of welded into the batch, so something can move it. Its z is already presented,
+   *  so a rig that moves it must present its own target too. */
+  private part(rings: Point[][], base: number, height: number, color: string): THREE.Group {
+    const shape = new THREE.Shape(rings[0].map(p => new THREE.Vector2(...this.xy(p))));
+    shape.holes = rings.slice(1).map(r => new THREE.Path(r.map(p => new THREE.Vector2(...this.xy(p)))));
+    const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, steps: 1 });
+    geometry.translate(0, 0, base);
+    metricUVs(geometry);
+    const positions = geometry.getAttribute('position');
+    for (let i = 0; i < positions.count; i++) positions.setZ(i, this.present(positions.getZ(i)));
+    geometry.computeVertexNormals();
+    const mesh = new THREE.Mesh(geometry, this.materials.solid(color));
+    mesh.castShadow = true;
+    mesh.receiveShadow = true;
+    const group = new THREE.Group();
+    group.add(mesh);
+    return group;
+  }
+  /** Register a moving part. Called while the scene is being built; the geometry is fresh each time
+   *  and the position it has reached is not, so a car mid-ride keeps riding across an edit.
+   *
+   *  `settled` seeds the value the first time a part is ever seen, so opening a document does not
+   *  send every lift travelling up from the basement to wherever it actually is. */
+  private rig(id: string, group: THREE.Group, target: number, speed: number, apply: Rig['apply']) {
+    if (!this.rigState.has(id)) this.rigState.set(id, target);
+    apply(group, this.rigState.get(id)!);
+    this.scene.add(group);
+    this.rigs.push({ id, group, target, speed, apply });
+  }
+  /** Advance every moving part toward its target. Returns true while anything is still moving, which
+   *  is what keeps asking the map to repaint — MapLibre draws on demand, so without that a ride would
+   *  advance one frame per mouse move. */
+  private animate(seconds: number): boolean {
+    let moving = false;
+    for (const r of this.rigs) {
+      const at = this.rigState.get(r.id) ?? r.target;
+      if (Math.abs(at - r.target) < 1e-4) {
+        if (at !== r.target) this.rigState.set(r.id, r.target);
+        continue;
+      }
+      const step = r.speed * seconds;
+      const next = Math.abs(r.target - at) <= step ? r.target : at + Math.sign(r.target - at) * step;
+      this.rigState.set(r.id, next);
+      r.apply(r.group, next);
+      moving = true;
+    }
+    return moving;
+  }
   private present(z: number) {
     return this.stack && this.buried ? this.presentedElevation(z) : z;
   }
@@ -399,6 +468,8 @@ export class SceneLayer implements CustomLayerInterface {
       this.shaft(project, o, z, position, rotation);
     } else if (o.kind === 'elevator') {
       this.lift(project, o, z, position, rotation);
+    } else if (['door', 'gate'].includes(o.kind)) {
+      this.leaf(project, o, z, position, rotation);
     } else {
       this.surface(
         objectRings({ ...o, position, rotation }),
@@ -408,6 +479,54 @@ export class SceneLayer implements CustomLayerInterface {
         o.id,
       );
     }
+  }
+  /** A door as a leaf in a frame, standing open when the feed says it is.
+   *
+   *  In 3D a door had been a slab filling its whole opening — a door you could never walk through and
+   *  that looked identical whether it was open, closed or unmonitored. The plan has drawn the swing
+   *  for a long time; this is the same statement in three dimensions, hinged the same way, so the two
+   *  views agree about which side it opens from.
+   *
+   *  Unknown status means shut. The plan can draw the architectural swing symbol for "a door is here
+   *  and this is how it opens" because a symbol is allowed to be about the door rather than about its
+   *  state; a solid leaf in space is not, so it stays in the frame until something says otherwise. */
+  private leaf(project: ProjectDocument, o: SiteObject, z: number, position: Point, rotation: number) {
+    const barrier = project.barriers.find(b => b.id === o.barrierId);
+    const thickness = barrier?.thickness ?? 0.2;
+    const base = z + wallBase(o.floorId);
+    const height = Math.min(o.height, (barrier?.height ?? o.height) - 0.02);
+    const color = o.color ?? COLORS[o.kind] ?? '#bfcac7';
+    // The head above the opening, so the wall reads as continuous rather than as a slot to the
+    // ceiling — and so an open door leaves a doorway rather than a gap in the storey.
+    const over = (barrier?.height ?? height) - height;
+    if (over > 0.05)
+      this.surface(
+        [rectangle(position, o.width, thickness, rotation)],
+        base + height,
+        over,
+        barrier?.color ?? '#b9b6ac',
+        o.id,
+      );
+    // Hinged at the same edge the plan hinges it — features.ts swings from -width/2 about `rotation`.
+    const hinge = rotate([-o.width / 2, 0], rotation);
+    const pivot: Point = [position[0] + hinge[0], position[1] + hinge[1]];
+    // Built lying in the frame with its hinge at the group's origin, so rotating the group about z
+    // swings it exactly as the 2D symbol does.
+    const centre = rotate([o.width / 2, 0], rotation);
+    const panel = this.part(
+      [rectangle([pivot[0] + centre[0], pivot[1] + centre[1]], o.width - 0.04, Math.min(0.06, thickness), rotation)],
+      base + 0.01,
+      height,
+      color,
+    );
+    const at = this.xy(pivot);
+    for (const child of panel.children) child.position.set(-at[0], -at[1], 0);
+    panel.position.set(at[0], at[1], 0);
+    const status = this.statuses?.get(o.feedId ?? '');
+    // 72°, matching the plan: a leaf drawn flat against the wall reads as part of the wall.
+    this.rig(`${o.id}:leaf`, panel, status?.open ? 1 : 0, 1.4, (g, v) => {
+      g.rotation.z = -(72 * Math.PI * v) / 180;
+    });
   }
   /** An area's rings with the shafts that pass through its level cut out of them.
    *
@@ -634,9 +753,30 @@ export class SceneLayer implements CustomLayerInterface {
     // part: closed unless the feed says this car is standing here with its doors open.
     const reading = this.statuses?.get(o.feedId ?? '');
     const carFloor = reading?.carFloorId ?? null;
-    const doorsOpen = !!reading?.open && (!carFloor || carFloor === this.activeFloor);
+    // The car rides to the level the feed names, or waits at the bottom of its shaft — which is what
+    // an idle lift actually does. Its target is an ELEVATION, not a floor: the ride takes as long as
+    // the distance, so eight storeys is a longer journey than one.
+    const carAt = levels.find(f => f.id === carFloor) ?? levels[0];
+    const inset = 0.14,
+      carHeight = Math.min(2.3, (carAt.height ?? 3) - 0.4);
+    const car = this.part(
+      [rectangle(position, Math.max(0.4, o.width - inset * 2), Math.max(0.4, o.depth - inset * 2), rotation)],
+      0,
+      carHeight,
+      reading?.carFloorId ? '#dfe6e3' : '#cdd4d1',
+    );
+    // 1.5 m/s is an ordinary passenger lift. Interpolating in metres and mapping through present()
+    // keeps the ride honest under the stacked view's depth compression.
+    this.rig(`${o.id}:car`, car, rel(carAt) + 0.04, 1.5, (g, v) => {
+      g.position.z = this.present(v) - this.present(0);
+    });
     if (active && levels.some(f => f.id === active.id)) {
       const head = Math.min(2.3, (active.height ?? 3) - 0.35);
+      // Doors open only once the car is standing here. A feed that says "open" while the car is four
+      // floors away is describing something that cannot happen, and drawing it would be a lie about
+      // the building; the host sends `open` when the lift arrives.
+      const arrived = Math.abs((this.rigState.get(`${o.id}:car`) ?? rel(carAt)) - rel(active)) < 0.25;
+      const doorsOpen = !!reading?.open && arrived;
       // A level the shaft merely passes has no doors at all — it is not in `levels`, so this is
       // skipped there and the void is all you see. A car that opens on more than one face lists
       // them; the default is the front, which is what nearly every lift does.
@@ -647,30 +787,24 @@ export class SceneLayer implements CustomLayerInterface {
         const across = turn % 180 === 0 ? o.width : o.depth;
         const out = (turn % 180 === 0 ? o.depth : o.width) / 2 - 0.03;
         const leaf = across / 2 - 0.03;
-        const gap = doorsOpen ? across / 2 - 0.06 : 0;
         for (const sign of [-1, 1]) {
-          const at = rotate([sign * (leaf / 2 + gap / 2), out], spin);
-          this.surface(
-            [rectangle([position[0] + at[0], position[1] + at[1]], leaf, 0.07, spin)],
+          const shut = rotate([sign * (leaf / 2), out], spin);
+          const panel = this.part(
+            [rectangle([position[0] + shut[0], position[1] + shut[1]], leaf, 0.07, spin)],
             rel(active) + 0.02,
             head,
             '#98a3a6',
-            o.id,
           );
+          // Leaves part sideways, so the animated value is how far open (0..1) and the group slides
+          // along the face. A little over a second end to end, which is what a lift door takes.
+          const travel = rotate([sign * (across / 2 - 0.06), 0], spin);
+          this.rig(`${o.id}:door:${face}:${sign}`, panel, doorsOpen ? 1 : 0, 0.9, (g, v) => {
+            g.position.x = travel[0] * v;
+            g.position.y = -travel[1] * v;
+          });
         }
       }
     }
-    // The car itself. Where the feed puts it; failing that, resting at the lowest level it serves —
-    // which is where a lift with nothing to do actually waits.
-    const carAt = levels.find(f => f.id === carFloor) ?? levels[0];
-    const inset = 0.14;
-    this.surface(
-      [rectangle(position, Math.max(0.4, o.width - inset * 2), Math.max(0.4, o.depth - inset * 2), rotation)],
-      rel(carAt) + 0.04,
-      Math.min(2.3, (carAt.height ?? 3) - 0.4),
-      reading?.carFloorId ? '#dfe6e3' : '#cdd4d1',
-      o.id,
-    );
   }
   /** A spiral: wedge treads winding around a central pole.
    *
@@ -735,6 +869,8 @@ export class SceneLayer implements CustomLayerInterface {
     if (this.project !== project) this.xyCache.clear();
     this.voidCache.clear();
     this.disposeScene();
+    // The groups went with the scene; where their parts had got to did not.
+    this.rigs = [];
     this.project = project;
     this.stack = stack;
     this.activeFloor = floorId;
@@ -1346,6 +1482,14 @@ export class SceneLayer implements CustomLayerInterface {
   }
   render(_gl: WebGLRenderingContext | WebGL2RenderingContext, args: CustomRenderMethodInput) {
     if (!this.renderer) return;
+    const now = performance.now();
+    // Capped so a backgrounded tab does not resume by teleporting every car a hundred metres.
+    const elapsed = Math.min(0.1, this.lastFrame ? (now - this.lastFrame) / 1000 : 0);
+    this.lastFrame = now;
+    if (this.rigs.length && this.animate(elapsed)) {
+      this.renderer.shadowMap.needsUpdate = true;
+      this.map?.triggerRepaint();
+    }
     if (this.growth < 1) {
       this.growth = Math.min(1, (performance.now() - this.growthStart) / 550);
       this.scene.scale.z = 0.03 + 0.97 * (1 - (1 - this.growth) ** 3);
