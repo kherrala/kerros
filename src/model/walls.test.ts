@@ -2,8 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { addBarrier, holdAngle, snapPoint } from './geometry';
 import { axisDelta, axisOf, fitOpening, floorOutline, mainAxis, proposeWall, referenceAxis } from './walls';
 import { exteriorWalls } from '../map/exteriors';
-import { enclosedRegions, refitEnclosedRooms } from './spaces';
-import { barrierEnds, centroid, closeRing } from './geometry';
+import { enclosedRegion, enclosedRegions, refitEnclosedRooms } from './spaces';
+import { barrierEnds, centroid, closeRing, ringArea } from './geometry';
 import { createObject } from './factory';
 import { newProject } from './testFixtures';
 import type { Point, ProjectDocument, Ring } from './types';
@@ -322,6 +322,18 @@ describe('rooms follow the walls that enclose them', () => {
     divider.thickness = 1;
     expect(refitEnclosedRooms(p, 'floor-ground', before)).toBe(2);
     expect(Math.max(...west.rings![0].map(q => q[0]))).toBeLessThan(wasWide - 0.3);
+  });
+  it('reads the region under a point, and nothing outside the walls', () => {
+    const p = boxed();
+    const west = enclosedRegion(p, 'floor-ground', [2, 3]);
+    const east = enclosedRegion(p, 'floor-ground', [8, 3]);
+    expect(west && Math.abs(ringArea(west))).toBeGreaterThan(20);
+    expect(east && Math.abs(ringArea(east))).toBeGreaterThan(20);
+    // Two different rooms, not the same one twice.
+    expect(centroid(west!)[0]).toBeLessThan(centroid(east!)[0]);
+    // Outside the building encloses nothing, however near the wall the click lands.
+    expect(enclosedRegion(p, 'floor-ground', [-3, 3])).toBeNull();
+    expect(enclosedRegion(p, 'floor-ground', [5, 9])).toBeNull();
   });
   it('declines to re-fit when one region is claimed by two rooms', () => {
     // Removing the divider leaves ONE region where there were two, and both rooms would grow to

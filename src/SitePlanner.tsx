@@ -34,6 +34,7 @@ import {
   Rows2,
   Shapes,
   Scissors,
+  SquareDashedBottom,
   Search,
   Settings2,
   ShieldCheck,
@@ -72,6 +73,7 @@ import {
   objectPosition,
   openRing,
   pointInRing,
+  ringArea,
   rectangle,
   snapPoint,
   splitRoom,
@@ -79,7 +81,7 @@ import {
 } from './model/geometry';
 import { fitOpening, proposeWall, referenceAxis, type OpeningFit, type WallProposal } from './model/walls';
 import { divideSpaces, mergeSpaces, spacesRejoinedBy } from './model/inference';
-import { enclosedRegions, refitEnclosedRooms } from './model/spaces';
+import { enclosedRegion, enclosedRegions, refitEnclosedRooms } from './model/spaces';
 import { pruneOntology } from './model/ontology';
 import { importPlanEntities, type PlanImportReport } from './import/planImport';
 import { addNavEdge, addNavNode, chainVertical, findRoute } from './model/navigation';
@@ -556,6 +558,49 @@ export function SitePlanner({
           divideSpaces(p, floorId, offer.segment[0], offer.segment[1]);
         });
       setProposal(null);
+      return;
+    }
+    // Read a space off the walls that already surround the click, rather than asking someone to
+    // trace an outline the drawing has already stated. The click lands in exactly one enclosed
+    // region or in none, so there is nothing to aim at but the room itself.
+    if (tool === 'enclose') {
+      const ring = enclosedRegion(project, floorId, raw);
+      if (!ring) {
+        notify('Nothing encloses that point. The walls around it have a gap, or it is outside the building.');
+        return;
+      }
+      const existing = project.objects.find(
+        o => o.floorId === floorId && o.kind === 'room' && o.rings?.length && pointInRing(raw, o.rings[0]),
+      );
+      commit(p => {
+        if (existing) {
+          // Clicking inside a room that has drifted from its walls re-fits it instead of stacking a
+          // second room on top of the first. Same operation as a wall drag performs, asked for
+          // directly — and it keeps the room's name and bindings, which a delete-and-redraw loses.
+          const room = p.objects.find(o => o.id === existing.id)!;
+          room.rings = [closeRing(ring), ...(room.rings ?? []).slice(1)];
+          room.position = centroid(ring);
+          const xs = ring.map(q => q[0]),
+            ys = ring.map(q => q[1]);
+          room.width = Math.max(...xs) - Math.min(...xs);
+          room.depth = Math.max(...ys) - Math.min(...ys);
+          setSelected(room.id);
+          return;
+        }
+        const room = createObject('room', centroid(ring), floorId, 'Room');
+        room.rings = [closeRing(ring)];
+        const xs = ring.map(q => q[0]),
+          ys = ring.map(q => q[1]);
+        room.width = Math.max(...xs) - Math.min(...xs);
+        room.depth = Math.max(...ys) - Math.min(...ys);
+        p.objects.push(room);
+        setSelected(room.id);
+      });
+      notify(
+        existing
+          ? `“${existing.name}” re-fitted to the walls around it · ${Math.abs(ringArea(ring)).toFixed(1)} m²`
+          : `Space taken from the walls · ${Math.abs(ringArea(ring)).toFixed(1)} m²`,
+      );
       return;
     }
     const anchor = draft.at(-1);
@@ -1175,6 +1220,7 @@ export function SitePlanner({
           z: 'zone',
           m: 'measure',
           s: 'split',
+          e: 'enclose',
         };
         if (shortcut[e.key.toLowerCase()]) chooseTool(shortcut[e.key.toLowerCase()]);
       }
@@ -1925,21 +1971,23 @@ export function SitePlanner({
                           ? proposal
                             ? 'Click to build the wall shown · it squares to what it is nearest'
                             : 'Hover inside a space to be offered the wall it is missing'
-                          : tool === 'split'
-                            ? draft.length
-                              ? 'Now click the opposite wall to cut the room in two'
-                              : 'Click one wall of a room to start the cut'
-                            : tool === 'adopt'
-                              ? 'Click a building on the basemap to bring it into the project'
-                              : tool === 'measure' && draft.length === 2
-                                ? `${distance(draft[0], draft[1]).toFixed(2)} m`
-                                : DRAW_TOOLS.includes(tool)
-                                  ? draft.length
-                                    ? `${draft.length} point${draft.length > 1 ? 's' : ''} · ${snapLabel}`
-                                    : 'Click on the map to start'
-                                  : isOpening(tool as ObjectKind)
-                                    ? 'Click a supporting wall or fence'
-                                    : 'Click on the map to place'}{' '}
+                          : tool === 'enclose'
+                            ? 'Click inside a room the walls close around · click a space again to re-fit it'
+                            : tool === 'split'
+                              ? draft.length
+                                ? 'Now click the opposite wall to cut the room in two'
+                                : 'Click one wall of a room to start the cut'
+                              : tool === 'adopt'
+                                ? 'Click a building on the basemap to bring it into the project'
+                                : tool === 'measure' && draft.length === 2
+                                  ? `${distance(draft[0], draft[1]).toFixed(2)} m`
+                                  : DRAW_TOOLS.includes(tool)
+                                    ? draft.length
+                                      ? `${draft.length} point${draft.length > 1 ? 's' : ''} · ${snapLabel}`
+                                      : 'Click on the map to start'
+                                    : isOpening(tool as ObjectKind)
+                                      ? 'Click a supporting wall or fence'
+                                      : 'Click on the map to place'}{' '}
                     </span>
                     {draft.length > 0 && tool !== 'rectangle' && (
                       <button onClick={finish}>
@@ -1955,7 +2003,7 @@ export function SitePlanner({
                   <div className="tool-palette">
                     <div>
                       <h3>Draw your space</h3>
-                      {(['wall', 'fence', 'room', 'zone', 'rectangle', 'hole'] as Tool[]).map(t => (
+                      {(['wall', 'fence', 'room', 'enclose', 'zone', 'rectangle', 'hole'] as Tool[]).map(t => (
                         <button key={t} onClick={() => chooseTool(t)}>
                           <EntityIcon kind={t} />
                           {en.tools[t]}
@@ -1963,7 +2011,7 @@ export function SitePlanner({
                       ))}
                     </div>
                     <div>
-                      <h3>Access & security</h3>
+                      <h3>Openings &amp; devices</h3>
                       {(['door', 'window', 'gate', 'turnstile', 'reader', 'camera', 'alarm'] as Tool[]).map(t => (
                         <button key={t} onClick={() => chooseTool(t)}>
                           <EntityIcon kind={t} />
@@ -1985,7 +2033,7 @@ export function SitePlanner({
                       </button>
                     </div>
                     <div>
-                      <h3>Safety & building ops</h3>
+                      <h3>Sensors &amp; areas</h3>
                       {(['sensor', 'equipment', 'evacuation'] as Tool[]).map(t => (
                         <button key={t} onClick={() => chooseTool(t)}>
                           <EntityIcon kind={t} />
@@ -2006,6 +2054,7 @@ export function SitePlanner({
                       camera: 'C',
                       measure: 'M',
                       split: 'S',
+                      enclose: 'E',
                     };
                     const hint = (t: Tool) => (showKeys && KEYS[t] ? <kbd className="key-hint">{KEYS[t]}</kbd> : null);
                     return (
@@ -2049,6 +2098,15 @@ export function SitePlanner({
                         >
                           <Rows2 size={19} />
                           {hint('partition')}
+                        </button>
+                        <button
+                          className={tool === 'enclose' ? 'active' : ''}
+                          aria-label="Space from walls tool"
+                          title="Space from walls (E)"
+                          onClick={() => chooseTool('enclose')}
+                        >
+                          <SquareDashedBottom size={19} />
+                          {hint('enclose')}
                         </button>
                         <button
                           className={tool === 'split' ? 'active' : ''}

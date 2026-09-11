@@ -41,6 +41,7 @@ export const en = {
     measure: 'Measure',
     adopt: 'Adopt basemap building',
     split: 'Split room',
+    enclose: 'Space from walls',
     route: 'Route path',
     sensor: 'Sensor',
     alarm: 'Alarm point',

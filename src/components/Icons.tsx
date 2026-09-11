@@ -29,6 +29,7 @@ import {
   Siren,
   Square,
   SquareDashed,
+  SquareDashedBottom,
 } from 'lucide-react';
 import type { ObjectKind, SiteObject, Tool } from '../model/types';
 import { useKerrosTheme } from '../theme';
@@ -78,6 +79,7 @@ export function EntityIcon({
             storage: Package,
             zone: LandPlot,
             room: Grid2X2,
+            enclose: SquareDashedBottom,
             building: Building2,
             parcel: LandPlot,
             rectangle: Square,

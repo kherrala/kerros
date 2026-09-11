@@ -300,6 +300,7 @@ export type Tool =
   | 'zone'
   | 'room'
   | 'rectangle'
+  | 'enclose'
   | 'hole'
   | 'door'
   | 'window'
