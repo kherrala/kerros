@@ -2,6 +2,20 @@ import { defineConfig } from 'vitepress';
 import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+const applications = {
+  text: 'Application guides',
+  items: [
+    { text: 'Overview', link: '/applications/' },
+    { text: 'Facility monitoring', link: '/applications/facility-monitoring' },
+    { text: 'Access control', link: '/applications/access-control' },
+    { text: 'ONVIF integration', link: '/applications/onvif' },
+    { text: 'Visitor management', link: '/applications/visitor-management' },
+    { text: 'Space reservations', link: '/applications/space-reservations' },
+    { text: 'Construction sites', link: '/applications/construction-sites' },
+    { text: 'Indoor wayfinding', link: '/applications/wayfinding' },
+  ],
+};
+
 const academic = {
   text: 'Academic interest',
   items: [
@@ -31,6 +45,7 @@ export default defineConfig({
     nav: [
       { text: 'Guide', link: '/guide/getting-started' },
       { text: 'Reference', link: '/reference/schema' },
+      { text: 'Applications', link: '/applications/' },
       {
         text: 'Demos',
         items: [
@@ -64,8 +79,11 @@ export default defineConfig({
             { text: 'Source analysis & calibration', link: '/guide/ai-import-analysis' },
           ],
         },
+        applications,
         academic,
       ],
+      '/applications/': [applications],
+      '/examples': [applications],
       '/academic/': [academic],
       '/reference/': [
         {

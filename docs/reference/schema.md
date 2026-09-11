@@ -189,7 +189,8 @@ transaction that cannot produce an invalid result.
 
 ## Spaces, zones and portals
 
-The spatial ontology layered over the geometry — see the [guide](/guide/ontology) for the concepts.
+The spatial ontology layered over the geometry — see the [guide](/guide/ontology) for the concepts
+and [Application guides](/applications/) for integration examples.
 One module per concern in the source: space queries (`model/spaces.ts`), zone/portal semantics and
 authoring (`model/ontology.ts`), reading the plan (`model/inference.ts`), and the derived routing
 graph (`model/topology.ts`) — all exported flat from `@kerros/schema`.
@@ -213,6 +214,9 @@ graph (`model/topology.ts`) — all exported flat from `@kerros/schema`.
 
 ### Authoring zones and portal groups
 
+These helpers mutate their argument. Use them inside `transact(project, draft => ...)` or use the
+equivalent mutations, then persist only the successful result.
+
 - `addZone(project, name, spaceIds, purpose?)` / `removeZone` / `setZoneMembers` / `nestZone` —
   zone authoring; non-space ids are dropped, membership is a set, nesting refuses cycles.
 - `addPortalGroup(project, name, portalIds)` / `removePortalGroup` / `setPortalGroupMembers` — the
@@ -221,13 +225,16 @@ graph (`model/topology.ts`) — all exported flat from `@kerros/schema`.
 
 ### Reading the plan
 
+- `effectivePortals(project)` — stored portals plus current shared virtual-boundary connections,
+  respecting authored overrides and excluding stale inferred openings between connected spaces.
+- `sharedBoundaryPortals(project)` — open connections derived directly from shared virtual edges.
 - `inferPortals(project)` — read the portals a plan already describes, probing each door for the
   space on either side. Unresolvable openings are skipped, not guessed at.
 - `inferOpenBoundaries(project)` — the connections with **no door in them**: two spaces sharing an
   unwalled boundary long enough to walk through. Open-plan floors are made of these.
 - `refreshPortals(project)` — re-read both kinds from the plan. Hand-authored portals survive
   wholesale; `passage`/`attests`/`name`/`metadata` set on an inferred portal are carried onto its
-  replacement.
+  replacement when IDs match. Reconcile external bindings if geometry changes endpoint identities.
 - `divideSpaces` / `spacesDividedBy` — legacy independent-outline splitting. Connected spaces subdivide through the transaction’s boundary synchronization.
 - `spacesRejoinedBy(project, barrierId)` — the two spaces a wall was the only thing keeping apart.
 - `mergeSpaces(project, keepId, absorbedId)` — unite footprints after a confirmed merge; never

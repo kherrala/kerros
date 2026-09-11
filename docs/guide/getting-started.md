@@ -63,14 +63,6 @@ See [The editor](./editor) for adapters, modes, deep links and the status-panel 
 To run the reference applications, start with [the Docker development stack](./development): `make up` runs the apps, documentation and importer. The [MML vector maps](./mml-maps) and [Import features](./ai-import) guides link to the optional API-key setup.
 
 
-`@kerros/schema` is a pure, framework-free core — you can construct and route projects with no DOM at all (a server, a CLI, a mobile backend):
+`@kerros/schema` is a pure, framework-free core. The [indoor wayfinding guide](/applications/wayfinding#start-with-a-connected-plan) provides a complete example that builds shared space boundaries in a validated transaction and routes through an open passage, using only the public schema API.
 
-```ts
-import { emptyProject, createObject, geoOrigin, findRoute } from '@kerros/schema';
-
-const p = emptyProject(geoOrigin([24.94, 60.17]), 'Office');
-// …add floors, rooms, doors, a nav graph…
-const route = findRoute(p, fromId, toId);
-```
-
-No DOM, no React, no MapLibre — the core is a pure library, equally usable on a server or from a CLI. Continue with [Core concepts](./concepts).
+Continue with [Core concepts](./concepts) or choose a use case under [Application guides](/applications/).

@@ -12,23 +12,14 @@ interface StatusFeed {
 }
 ```
 
-Implement it against any telemetry source and map your domain onto `tone` + `label` (+ optional `metrics`, `details`):
+Implement it against any telemetry source and map your domain onto `tone`, `label` and optional
+`metrics` or `details`. Import `StatusFeed` and `StatusReading` from `@kerros/viewer/host` or
+`@kerros/editor/host`.
 
-```ts
-class OccupancyFeed implements StatusFeed {
-  subscribe(project, listener) {
-    const tick = () => listener(project.objects
-      .filter(o => o.feedId)
-      .map(o => ({ feedId: o.feedId!, tone: 'normal', label: 'Online', timestamp: Date.now(),
-                   metrics: { occupancy: read(o) } })));
-    tick();
-    const t = setInterval(tick, 3000);
-    return () => clearInterval(t);
-  }
-}
-```
-
-The library never needs to know whether that tone means occupancy, a door state, a reservation or a sensor reading — it renders what you give it.
+Each notification is a complete snapshot, replacing previous readings. Accumulate incremental
+backend events before publishing and release subscriptions when the host unmounts. The
+[facility-monitoring guide](/applications/facility-monitoring#publish-complete-snapshots) provides a
+typed, executable adapter for this contract.
 
 ## Carrying rich state with `details`
 
@@ -44,7 +35,8 @@ const { lock, contact } = status.details as MyDoorState;
 
 ## Categories & metadata
 
-Attach host-defined data to any object or barrier:
+Attach host-defined data to an object or barrier inside a transaction draft. For example, after
+finding the required draft object:
 
 ```ts
 object.category = 'meeting-room';                // a host subtype
@@ -72,3 +64,5 @@ Any MapLibre style works underneath the plan. Provide a `BasemapConfig`
 (editor) or the `basemap` prop (viewer). `neutralBasemap` is the offline default. Describe the
 provider's building and parcel layers in `vectorSchema` to enable adoption, cadastre and 3D city
 features. See [MML vector maps](./mml-maps) for a complete reference configuration and API-key setup.
+
+See [Application guides](/applications/) for access control, ONVIF, reservations, visitors and wayfinding.

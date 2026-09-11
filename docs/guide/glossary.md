@@ -14,9 +14,9 @@ industry vocabulary. Those are the ones worth a second opinion from someone work
 | Term | Suomeksi | Definition |
 | --- | --- | --- |
 | **Ontology** | ontologia *(vak.)* | The layer describing what a building *means* — which spaces group together, what connects to what — as distinct from the geometry describing what it looks like. Not a taxonomy of object types; that is `ObjectKind`. |
-| **Space** | tila *(vak.)* | Somewhere you can stand: a room, a corridor, a lobby, the inside of a lift car. Has a footprint and belongs to exactly one floor. **A space is a place; a zone is a list of places.** |
+| **Space** | tila *(vak.)* | Somewhere you can stand: a room, a corridor, a lobby, the inside of a lift car. Has a footprint and a floor reference; outdoor spaces use `floorId: null`. **A space is a place; a zone is a list of places.** |
 | **Zone** | vyöhyke *(vak.)* | A named *set* of spaces, with no geometry of its own. Because it is a list and not a shape it may span floors, skip buildings, and include spaces nowhere near each other. **Not a drawn area** — that is a space of kind `zone`, which is a different thing and an unfortunate collision. |
-| **Portal** | kulkuyhteys *(ehd.)* | A traversable connection between **exactly two** spaces. Usually a door, sometimes a gate or turnstile, sometimes an open boundary with nothing in it. **A portal is the connection; a door is the object filling it.** One door leaf can be referenced by more than one portal. |
+| **Portal** | kulkuyhteys *(ehd.)* | A connection between **exactly two** spaces; `passage` may make it traversable, one-way or sealed. Usually a door, sometimes a gate or turnstile, sometimes an open boundary with nothing in it. **A portal is the connection; a door is the object filling it.** One door leaf can be referenced by more than one portal. |
 | **Opening** | aukko *(vak.)* | The physical object — door, gate, turnstile, window — set into a barrier. **A window is an opening but never a portal**: you cannot walk through it. |
 | **Barrier** | rakenne *(ehd.)* | A linear obstruction running between two junctions — `kind: 'wall'` or `'fence'`. Walls are the fabric rooms are made of; fences enclose outdoor ground. Openings attach by kind: a door goes on a wall, a gate on a fence. |
 | **Wall vs fence** | seinä *(vak.)* / aita *(vak.)* | Both are barriers; the difference here is what drawing one *does*. Drawing a **wall** across a space divides it in two. Drawing a **fence** does not — a deliberate choice, not a fact about fences, because outdoor ground is normally one large space and splitting it at every fence line would surprise more often than help. If a fenced compound should be its own space, draw it as one. |
@@ -31,9 +31,9 @@ industry vocabulary. Those are the ones worth a second opinion from someone work
 | Term | Suomeksi | Definition |
 | --- | --- | --- |
 | **Passage** | kulkusuunta *(ehd.)* | Which way a portal may be crossed at all: both ways, one way, or sealed. A property of the portal, not of the policy — a fire exit is one-way whoever you are. |
-| **Attestation** (`attests`) | todennettavuus *(ehd.)* | How far a crossing can be *believed*. `confirmed` — a sensor saw it. `assumed` — inferred, nobody watched. `none` — the crossing is a **request, not an event** (a lift floor button: the passenger may get out anywhere). Anything counting people must ignore `none`. |
+| **Attestation** (`attests`) | todennettavuus *(ehd.)* | A static declaration of expected crossing evidence: `confirmed`, `assumed` or `none`. It is not an event. A contact opening or a lift request does not prove identity, headcount or arrival; the host must evaluate actual observations. |
 | **Perimeter portal** | rajakulkuyhteys *(ehd.)* | A portal with **one side inside a zone and one side outside**. These are the ways in, and the only portals worth attaching a zone-entry rule to. |
-| **Captive portal** | sisäinen kulkuyhteys *(ehd.)* | A portal with **both sides inside the same zone**. Crossing one does not change which zone you are in, so a rule placed here either does nothing or obstructs someone already entitled to be there. Nothing to do with the Wi-Fi login sense of "captive portal". |
+| **Captive portal** | sisäinen kulkuyhteys *(ehd.)* | A portal with **both sides inside the same zone**. Crossing one does not change membership of this zone, but may cross a nested zone’s perimeter and require a separate host rule. Nothing to do with the Wi-Fi login sense of "captive portal". |
 
 ## Purposes a zone may carry
 
@@ -52,11 +52,11 @@ reader.
 
 | Term | Suomeksi | Definition |
 | --- | --- | --- |
-| **Shaft / hoistway** | hissikuilu *(vak.)* | The vertical void a lift car travels in. In this model it is not an entity: a lift **is a zone** of its per-floor landing spaces. |
-| **Landing** | tasanne *(vak.)* | Where a lift or stair meets a floor. Ambiguous in ordinary use between the level and the lobby you stand in; here it is the lift-car space on that floor, and the way out of it is a portal. |
-| **Through car** | läpikuljettava hissikori *(ehd.)* | A lift car with doors on two sides, opening onto two different lobbies — often different tenants. Needs no special support: it is one car space with two portals. |
-| **Destination dispatch** | kohdekerrosohjaus *(ehd.)* | A lift bank where the floor is keyed at a kiosk and the group controller assigns a car afterwards. The access decision precedes the car assignment, so authorization keys to the landing's zone — **never to a car**. |
-| **`connects`** | sisäinen kulkeutuvuus *(ehd.)* | How a zone's own spaces reach each other. `all` — any landing to any (a lift ride is direct). `adjacent` — level by level (a stair). `up` / `down` — one-way, an escalator. |
+| **Shaft / hoistway** | hissikuilu *(vak.)* | The vertical volume served by an `elevator` object. Physical geometry and `servedFloorIds` describe the lift; a semantic zone can group its shaft or landing spaces. |
+| **Landing** | tasanne *(vak.)* | Where a lift or stair meets a floor. Connect it to the floor’s circulation in the navigation model; a single shaft object may serve several landings. |
+| **Through car** | läpikuljettava hissikori *(ehd.)* | A lift car with doors on two sides, opening onto two different lobbies — often different tenants. Use the elevator object’s `doorSides` for physical openings and portals for the separate lobby connections. |
+| **Destination dispatch** | kohdekerrosohjaus *(ehd.)* | A lift bank where the floor is keyed at a kiosk and the group controller assigns a car afterwards. The host coordinates destination authorization and car assignment; a zone alone does not implement dispatch. |
+| **`connects`** | sisäinen kulkeutuvuus *(ehd.)* | Cross-floor semantic connectivity among zone members: `all` links pairs, `adjacent` follows elevation order, `up` / `down` are directed. Physical elevator/stair objects are still needed for renderable transport. |
 
 ## Views and rendering
 
@@ -73,7 +73,7 @@ reader.
 | --- | --- | --- |
 | **Route graph** | reittiverkko *(ehd.)* | Nodes and edges used for routing. |
 | **Derived graph** | johdettu reittiverkko *(ehd.)* | The route graph computed from the plan — spaces are nodes, portals are edges, `connects` supplies the vertical ones — rather than drawn separately. A hand-kept graph is a second description of what connects to what, and two descriptions drift. |
-| **Spatial completeness** | tilallinen kattavuus *(ehd.)* | The property that every traversable region is drawn as a space. Without it a derived graph has nowhere to route through: undrawn corridors are not shortcuts, they are walls. |
+| **Spatial completeness** | tilallinen kattavuus *(ehd.)* | The property that traversable regions, including circulation, are represented by spaces. Missing regions and connections can leave destinations unreachable. |
 
 ## Words we deliberately do not use
 
@@ -82,3 +82,5 @@ reader.
 | **Area** | Too close to both "space" and "zone", and it means the *zone* sense in most building software while meaning the *space* sense in everyday speech. Say space or zone. |
 | **Room** | Fine in prose, but not a model term: a lift car and a corridor are spaces too. |
 | **Level** | Used loosely for floor in speech; the schema says `Floor`, so this glossary does too. |
+
+See [Application guides](/applications/) for these terms in monitoring, access control and wayfinding.

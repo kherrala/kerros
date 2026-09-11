@@ -37,3 +37,6 @@ The stylesheet is built on CSS custom properties (`--accent`, `--ink`, `--panel`
 `theme.mapStyle` recolours plan rendering per deployment: `room` / `wall` / `route` / `routeActive` base colours, `statusTones` for live status, and **`objectColor(object)`** — a callback receiving the full `SiteObject` (including `category` and `metadata`) that returns a colour or `undefined` to fall through. The basemap itself is separate (`BasemapConfig`), so any MapLibre style works underneath.
 
 A host can colour every space purely from its `category` via `objectColor`, and swap in its own door, gate or turnstile glyphs via `icons`, without the library knowing what those categories mean.
+
+The [facility-monitoring guide](/applications/facility-monitoring) shows how live readings reach the viewer;
+[access control](/applications/access-control) describes host-specific categories and bindings.
