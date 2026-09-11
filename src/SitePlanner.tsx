@@ -79,6 +79,7 @@ import {
 } from './model/geometry';
 import { fitOpening, proposeWall, referenceAxis, type OpeningFit, type WallProposal } from './model/walls';
 import { divideSpaces, mergeSpaces, spacesRejoinedBy } from './model/inference';
+import { enclosedRegions, refitEnclosedRooms } from './model/spaces';
 import { pruneOntology } from './model/ontology';
 import { importPlanEntities, type PlanImportReport } from './import/planImport';
 import { addNavEdge, addNavNode, chainVertical, findRoute } from './model/navigation';
@@ -317,6 +318,20 @@ export function SitePlanner({
     setHistory(current => commitHistory(current, result.project));
     return true;
   };
+  /** Commit a change that moves walls, and let the rooms those walls define follow them.
+   *
+   *  A room keeps its own outline — that is what lets a space exist where no wall does — so without
+   *  this, editing a wall and resizing the room beside it are two jobs, and the plan quietly drifts
+   *  out of agreement with itself. Snapshotting the enclosed regions either side of the change is
+   *  what tells the two apart: a room that was standing in one of them was being defined by the
+   *  walls and takes its new shape; a room that was drawn freehand is nobody's business but its
+   *  author's. Every mutation that moves, thickens, adds or removes a wall goes through here. */
+  const reshape = (change: (draft: ProjectDocument) => void): boolean =>
+    commit(p => {
+      const enclosed = enclosedRegions(p, floorId);
+      change(p);
+      refitEnclosedRooms(p, floorId, enclosed);
+    });
   useEffect(() => {
     if (!readOnly) onChangeRef.current?.(project);
   }, [project, readOnly]);
@@ -862,7 +877,7 @@ export function SitePlanner({
       });
       return;
     }
-    commit(p => {
+    reshape(p => {
       if (kind === 'junction') {
         const j = p.junctions.find(j => j.id === id)!;
         j.position = point;
@@ -982,7 +997,10 @@ export function SitePlanner({
       return;
     }
     if (
-      commit(p => {
+      // reshape, not commit: deleting a wall leaves the rooms it bounded the wrong shape. Where the
+      // deletion merges two rooms' regions into one the re-fit declines — that ambiguity is what the
+      // merge prompt above exists to settle.
+      reshape(p => {
         p.objects = p.objects.filter(o => o.id !== selected && o.barrierId !== selected);
         p.objects.forEach(o => {
           if (o.parentId === selected) o.parentId = undefined;
@@ -2220,7 +2238,8 @@ export function SitePlanner({
             }}
             onUpdateObject={updateObject}
             onUpdateBarrier={(id: string, patch: Partial<Barrier>) =>
-              commit(p => Object.assign(p.barriers.find(b => b.id === id)!, patch))
+              // Thickness is geometry: a wall that grows eats into the rooms on either side of it.
+              reshape(p => Object.assign(p.barriers.find(b => b.id === id)!, patch))
             }
             onUpdateDrawing={(id: string, patch: Partial<Drawing>) =>
               commit(p => Object.assign(p.drawings.find(d => d.id === id)!, patch))
@@ -2388,7 +2407,7 @@ export function SitePlanner({
               onClick={() => {
                 const wallId = merge.wallId;
                 setMerge(null);
-                commit(p => {
+                reshape(p => {
                   p.barriers = p.barriers.filter(b => b.id !== wallId);
                   p.junctions = p.junctions.filter(j => p.barriers.some(b => b.startId === j.id || b.endId === j.id));
                   pruneOntology(p);

@@ -56,7 +56,7 @@ export {
 export { derivedGraph } from '../model/topology';
 export { isArea, isDevice, isOpening, isSpace, uid, OBJECT_KINDS } from '../model/types';
 export { createObject, emptyProject } from '../model/factory';
-export { enclosedRegion, enclosedRegions } from '../model/spaces';
+export { enclosedRegion, enclosedRegions, refitEnclosedRooms } from '../model/spaces';
 export { coverageOf, DEFAULT_RANGE, DEFAULT_FOV } from '../model/coverage';
 export { copyProject, openingFloorId } from '../model/project';
 export {

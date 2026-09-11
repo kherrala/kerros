@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 import { addBarrier, holdAngle, snapPoint } from './geometry';
 import { axisDelta, axisOf, fitOpening, floorOutline, mainAxis, proposeWall, referenceAxis } from './walls';
 import { exteriorWalls } from '../map/exteriors';
+import { enclosedRegions, refitEnclosedRooms } from './spaces';
+import { barrierEnds, centroid, closeRing } from './geometry';
 import { createObject } from './factory';
 import { newProject } from './testFixtures';
 import type { Point, ProjectDocument, Ring } from './types';
@@ -241,5 +243,96 @@ describe('floorOutline on a floor with no zone', () => {
     const exterior = exteriorWalls(p);
     expect(exterior.has(p.barriers[0].id)).toBe(true);
     expect(exterior.has(p.barriers[1].id)).toBe(false);
+  });
+});
+
+// A room stores its own outline, which is what lets a space exist where no wall does. The cost used
+// to be that moving a wall left the room it bounded behind — two things to keep in step by hand.
+describe('rooms follow the walls that enclose them', () => {
+  const boxed = () => {
+    const p = newProject();
+    const f = 'floor-ground';
+    for (const [a, b] of [
+      [
+        [0, 0],
+        [10, 0],
+      ],
+      [
+        [10, 0],
+        [10, 6],
+      ],
+      [
+        [10, 6],
+        [0, 6],
+      ],
+      [
+        [0, 6],
+        [0, 0],
+      ],
+      [
+        [5, 0],
+        [5, 6],
+      ], // the divider we will slide
+    ] as [Point, Point][])
+      addBarrier(p, a, b, f, 'wall');
+    for (const ring of enclosedRegions(p, f)) {
+      const room = createObject('room', centroid(ring), f, 'Room');
+      room.rings = [closeRing(ring)];
+      room.width = 1;
+      room.depth = 1;
+      p.objects.push(room);
+    }
+    return p;
+  };
+  it('re-fits a room whose wall moved, and leaves a drawn one alone', () => {
+    const p = boxed();
+    expect(p.objects.filter(o => o.kind === 'room')).toHaveLength(2);
+    // A freehand area over the same floor, matching no enclosed region.
+    const drawn = createObject('zone', [2, 2], 'floor-ground', 'Drawn');
+    drawn.rings = [
+      [
+        [1, 1],
+        [3, 1],
+        [3, 3],
+        [1, 3],
+      ],
+    ];
+    p.objects.push(drawn);
+    const before = enclosedRegions(p, 'floor-ground');
+    const west = p.objects.find(o => o.kind === 'room' && centroid(o.rings![0])[0] < 5)!;
+    const wasWide = Math.max(...west.rings![0].map(q => q[0]));
+    // Slide the divider two metres east: both junctions move, so the rooms either side change size.
+    for (const j of p.junctions) if (Math.abs(j.position[0] - 5) < 0.01) j.position = [7, j.position[1]];
+    expect(refitEnclosedRooms(p, 'floor-ground', before)).toBe(2);
+    expect(Math.max(...west.rings![0].map(q => q[0]))).toBeGreaterThan(wasWide + 1.5);
+    // The freehand zone is untouched: it was never defined by a wall.
+    expect(drawn.rings![0]).toEqual([
+      [1, 1],
+      [3, 1],
+      [3, 3],
+      [1, 3],
+    ]);
+  });
+  it('re-fits when a wall thickens, which eats into the rooms beside it', () => {
+    const p = boxed();
+    const before = enclosedRegions(p, 'floor-ground');
+    const west = p.objects.find(o => o.kind === 'room' && centroid(o.rings![0])[0] < 5)!;
+    const wasWide = Math.max(...west.rings![0].map(q => q[0]));
+    const divider = p.barriers.find(b => barrierEnds(p, b).every(e => Math.abs(e[0] - 5) < 0.01))!;
+    divider.thickness = 1;
+    expect(refitEnclosedRooms(p, 'floor-ground', before)).toBe(2);
+    expect(Math.max(...west.rings![0].map(q => q[0]))).toBeLessThan(wasWide - 0.3);
+  });
+  it('declines to re-fit when one region is claimed by two rooms', () => {
+    // Removing the divider leaves ONE region where there were two, and both rooms would grow to
+    // fill it — two rooms drawn over each other. Refusing keeps the plan honest and leaves the
+    // question (merge them? keep both?) to whoever deleted the wall.
+    const p = boxed();
+    const before = enclosedRegions(p, 'floor-ground');
+    const shapes = p.objects.filter(o => o.kind === 'room').map(o => JSON.stringify(o.rings));
+    const divider = p.barriers.find(b => barrierEnds(p, b).every(e => Math.abs(e[0] - 5) < 0.01))!;
+    p.barriers = p.barriers.filter(b => b.id !== divider.id);
+    expect(refitEnclosedRooms(p, 'floor-ground', before)).toBe(0);
+    expect(p.objects.filter(o => o.kind === 'room').map(o => JSON.stringify(o.rings))).toEqual(shapes);
   });
 });
