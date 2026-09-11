@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "baseUrl": ".",
+    "paths": {
+      "@kerros/schema": [
+        "src/schema/index.ts"
+      ],
+      "@kerros/import": [
+        "src/import/index.ts"
+      ],
+      "@kerros/viewer": [
+        "src/viewer/index.ts"
+      ],
+      "@kerros/editor": [
+        "src/editor/index.ts"
+      ]
+    }
+  },
+  "include": [
+    "src",
+    "app"
+  ],
+  "exclude": [
+    "**/vite.config.ts"
+  ]
+}

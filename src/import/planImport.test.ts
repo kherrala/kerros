@@ -1,0 +1,119 @@
+import { describe, expect, it } from 'vitest';
+import { importPlanEntities, type PlanEntity } from './planImport';
+import { validateProject } from '../schema';
+import { newProject } from '../model/testFixtures';
+
+// A synthetic two-room house in the prefab-CAD idiom the importer understands: the envelope drawn
+// as silhouette + inner face (0.4 m apart), a partition as a face pair (0.1 m), a doorway gap in
+// each with a door symbol standing nearby, one window symbol cluster, and two room labels.
+const HOUSE: PlanEntity[] = [
+  // Envelope silhouette — continuous.
+  { type: 'LINE', layer: '12_ULKOPINTA', a: [0, 0], b: [10, 0] },
+  { type: 'LINE', layer: '12_ULKOPINTA', a: [10, 0], b: [10, 8] },
+  { type: 'LINE', layer: '12_ULKOPINTA', a: [10, 8], b: [0, 8] },
+  { type: 'LINE', layer: '12_ULKOPINTA', a: [0, 8], b: [0, 0] },
+  // Envelope inner face — broken by the 1 m entrance on the south side.
+  { type: 'LINE', layer: '13_SISÄPINTA', a: [0.4, 0.4], b: [4.5, 0.4] },
+  { type: 'LINE', layer: '13_SISÄPINTA', a: [5.5, 0.4], b: [9.6, 0.4] },
+  { type: 'LINE', layer: '13_SISÄPINTA', a: [9.6, 0.4], b: [9.6, 7.6] },
+  // North inner face breaks at the window opening, exactly as real drawings do.
+  { type: 'LINE', layer: '13_SISÄPINTA', a: [9.6, 7.6], b: [5.6, 7.6] },
+  { type: 'LINE', layer: '13_SISÄPINTA', a: [4.4, 7.6], b: [0.4, 7.6] },
+  { type: 'LINE', layer: '13_SISÄPINTA', a: [0.4, 7.6], b: [0.4, 0.4] },
+  // Partition at x = 6: both faces on the outline layer, with a 2 m doorway.
+  { type: 'LINE', layer: '196_SIS_EI-K_SEINÄ_ÄÄRIVII', a: [5.95, 0.4], b: [5.95, 3.1] },
+  { type: 'LINE', layer: '196_SIS_EI-K_SEINÄ_ÄÄRIVII', a: [5.95, 5.1], b: [5.95, 7.6] },
+  { type: 'LINE', layer: '196_SIS_EI-K_SEINÄ_ÄÄRIVII', a: [6.05, 0.4], b: [6.05, 3.1] },
+  { type: 'LINE', layer: '196_SIS_EI-K_SEINÄ_ÄÄRIVII', a: [6.05, 5.1], b: [6.05, 7.6] },
+  // Door symbols: a leaf near each doorway gap.
+  { type: 'LINE', layer: '27_OVET', a: [4.6, 0.6], b: [5.4, 0.6] },
+  { type: 'ARC', layer: '27_OVET', center: [6.2, 3.4], r: 0.8, start: 0, end: 90 },
+  // A window cluster on the north wall.
+  { type: 'LINE', layer: '26_IKKUNAT', a: [4.4, 7.7], b: [5.6, 7.7] },
+  { type: 'LINE', layer: '26_IKKUNAT', a: [4.4, 7.9], b: [5.6, 7.9] },
+  // Room labels — and one bare area figure that must be ignored.
+  { type: 'TEXT', layer: '55_HUONETUNNUKSET', at: [3, 4], text: 'OLOHUONE' },
+  { type: 'TEXT', layer: '55_HUONETUNNUKSET', at: [8, 4], text: 'MH' },
+  { type: 'TEXT', layer: '55_HUONETUNNUKSET', at: [3, 3.5], text: '20.5' },
+];
+
+describe('deterministic plan import', () => {
+  const imported = () => {
+    const p = newProject();
+    const report = importPlanEntities(p, structuredClone(HOUSE), { floorId: 'floor-ground' });
+    return { p, report };
+  };
+  it('builds the walls, rooms and openings the drawing describes', () => {
+    const { report } = imported();
+    expect(report.walls).toBe(5); // 4 envelope + 1 partition
+    expect(report.rooms).toBe(2);
+    expect(report.doors).toBe(2);
+    expect(report.windows).toBe(1);
+    expect(report.named).toBe(2);
+  });
+  it('produces a valid document — the import obeys every schema rule', () => {
+    const { p } = imported();
+    expect(() => validateProject(structuredClone(p))).not.toThrow();
+  });
+  it('names each room after the label standing in it, ignoring area figures', () => {
+    const { p } = imported();
+    const names = p.objects
+      .filter(o => o.kind === 'room')
+      .map(o => o.name)
+      .sort();
+    expect(names).toEqual(['MH', 'OLOHUONE']);
+  });
+  it('binds the openings to their walls', () => {
+    const { p } = imported();
+    const doors = p.objects.filter(o => o.kind === 'door');
+    const windows = p.objects.filter(o => o.kind === 'window');
+    expect(doors).toHaveLength(2);
+    expect(doors.every(d => d.barrierId && d.offset !== undefined)).toBe(true);
+    expect(windows).toHaveLength(1);
+    expect(windows[0].barrierId).toBeDefined();
+  });
+  it('reads the doorways back as portals, so the rooms are connected', () => {
+    const { p } = imported();
+    // refreshPortals ran inside the import; the partition doorway joins the two rooms.
+    const rooms = new Set(p.objects.filter(o => o.kind === 'room').map(o => o.id));
+    expect((p.portals ?? []).some(x => rooms.has(x.a) && rooms.has(x.b))).toBe(true);
+  });
+  it('retracts one end of a staggered junction instead of leaving sub-minimum wall debris', () => {
+    // Two partitions meet the central wall from opposite sides only 0.3 m apart — a staggered
+    // junction. An end landing on the wall's centreline welds a junction that splits it, so
+    // welding BOTH would leave a 0.3 m piece the document refuses; one end must retract to the
+    // wall's face instead.
+    const entities: PlanEntity[] = [
+      ...HOUSE,
+      { type: 'LINE', layer: '196_SIS_EI-K_SEINÄ_ÄÄRIVII', a: [0.4, 1.95], b: [5.95, 1.95] },
+      { type: 'LINE', layer: '196_SIS_EI-K_SEINÄ_ÄÄRIVII', a: [0.4, 2.05], b: [5.95, 2.05] },
+      { type: 'LINE', layer: '196_SIS_EI-K_SEINÄ_ÄÄRIVII', a: [6.05, 2.25], b: [9.6, 2.25] },
+      { type: 'LINE', layer: '196_SIS_EI-K_SEINÄ_ÄÄRIVII', a: [6.05, 2.35], b: [9.6, 2.35] },
+    ];
+    const p = newProject();
+    const report = importPlanEntities(p, structuredClone(entities), { floorId: 'floor-ground' });
+    expect(() => validateProject(structuredClone(p))).not.toThrow();
+    const at = (id: string) => p.junctions.find(j => j.id === id)!.position;
+    for (const b of p.barriers) {
+      const [a, z] = [at(b.startId), at(b.endId)];
+      expect(Math.hypot(z[0] - a[0], z[1] - a[1])).toBeGreaterThanOrEqual(0.5);
+    }
+    expect(report.rooms).toBe(4);
+    // The central wall was split by the surviving weld — its doorway still found a piece to sit in.
+    expect(report.doors).toBe(2);
+  });
+  it('turns a symbol-less partition gap into an open passage, not a sealed wall', () => {
+    const p = newProject();
+    // Strip the partition's door swing: the gap remains with nothing standing in it — a doorless
+    // opening. Sealing it with a continuous barrier would wall off two rooms the drawing says
+    // flow into each other; the barrier must split around it instead.
+    const entities = HOUSE.filter(e => !(e.layer === '27_OVET' && e.type === 'ARC'));
+    const report = importPlanEntities(p, structuredClone(entities), { floorId: 'floor-ground' });
+    expect(report.passages).toBe(1);
+    expect(report.doors).toBe(1); // the entrance keeps its leaf
+    expect(p.barriers.filter(b => b.name === 'Partition')).toHaveLength(2);
+    // The rooms connect through the open boundary, read back as a portal.
+    const rooms = new Set(p.objects.filter(o => o.kind === 'room').map(o => o.id));
+    expect((p.portals ?? []).some(x => rooms.has(x.a) && rooms.has(x.b))).toBe(true);
+  });
+});

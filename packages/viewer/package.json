@@ -1,0 +1,41 @@
+{
+  "name": "@kerros/viewer",
+  "version": "0.1.0",
+  "description": "Read-only live floor-plan viewer for Kerros projects: 2D/3D MapLibre + three rendering, device statuses, navigation routes and journeys.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kherrala/kerros.git",
+    "directory": "packages/viewer"
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/types/viewer/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/types/viewer/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles.css": "./dist/styles.css"
+  },
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.dts.json && cat ../../node_modules/maplibre-gl/dist/maplibre-gl.css ../../src/styles.css > dist/styles.css"
+  },
+  "sideEffects": [
+    "*.css"
+  ],
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "maplibre-gl": "^5.0.0",
+    "three": ">=0.170.0 <1.0.0"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "polygon-clipping": "^0.15.7"
+  }
+}

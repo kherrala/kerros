@@ -1,0 +1,27 @@
+{
+  "name": "@kerros/schema",
+  "version": "0.1.0",
+  "description": "Kerros floor-plan project schema: types, validation, portable import/export and indoor-navigation routing. Pure functions \u2014 no React, no rendering.",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kherrala/kerros.git",
+    "directory": "packages/schema"
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/types/schema/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/types/schema/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.dts.json"
+  }
+}

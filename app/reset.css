@@ -1,0 +1,18 @@
+/* Full-page reset for the reference app and standalone demos. The library itself scopes its resets
+   to `.kerros-root` so it never restyles a host page; a full-screen app owns the page and wants the
+   html/body/#root chain to fill the viewport with the theme background. */
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+body {
+  background: var(--bg);
+  color: var(--ink);
+  font: 14px / 1.45 var(--font);
+  -webkit-font-smoothing: antialiased;
+}

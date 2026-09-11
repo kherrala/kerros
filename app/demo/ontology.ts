@@ -1,0 +1,49 @@
+// Describe the demo buildings with the ontology as well as the geometry, so the reference apps have
+// something real to browse rather than an empty structure panel.
+//
+// Deliberately derived rather than hand-written: the vertical cores come from the landings already on
+// the plan, and the portals are read off the doors. If a demo grows a floor, this follows.
+import { inferOpenBoundaries, inferPortals } from '../../src/model/inference';
+import { uid, type ProjectDocument, type SiteObject, type Zone } from '../../src/model/types';
+
+/** An escalator runs one way; a stair does not. Read from the name, which is where the demo says so. */
+const direction = (name: string): 'adjacent' | 'up' | 'down' =>
+  /\bup\b/i.test(name) ? 'up' : /\bdown\b/i.test(name) ? 'down' : 'adjacent';
+/** Landings that share a kind, a name and a position are one shaft. */
+function cores(project: ProjectDocument): Zone[] {
+  const groups = new Map<string, SiteObject[]>();
+  for (const o of project.objects) {
+    if (o.kind !== 'elevator' && o.kind !== 'stairs') continue;
+    // Name AND place. A shaft is a vertical column standing somewhere, so two escalators at opposite
+    // ends of a building that happen to share a name are two shafts, not one — group them together
+    // and a route will walk you into the north escalator and out of the south one.
+    const key = `${o.kind}|${o.name}|${o.position[0].toFixed(1)},${o.position[1].toFixed(1)}`;
+    const group = groups.get(key);
+    if (group) group.push(o);
+    else groups.set(key, [o]);
+  }
+  const out: Zone[] = [];
+  for (const members of groups.values()) {
+    // A single landing is not a shaft; it connects to nothing above or below it.
+    if (members.length < 2) continue;
+    out.push({
+      id: uid(),
+      name: members[0].name,
+      spaceIds: members.map(m => m.id),
+      // A lift ride is direct; a stair passes every level on the way.
+      connects: members[0].kind === 'elevator' ? 'all' : direction(members[0].name),
+      purpose: 'circulation',
+    });
+  }
+  return out;
+}
+
+/** Attach zones and portals to a demo project. Safe to call on any of them. */
+export function attachOntology(project: ProjectDocument) {
+  project.zones = cores(project);
+  // Doors are the minority of a building's connections. A department store is mostly open plan, and
+  // a lift car meets its lobby with no door object between them — read those off the geometry too, or
+  // 86% of this building has no way in or out of it.
+  project.portals = [...inferPortals(project), ...inferOpenBoundaries(project)];
+  return project;
+}

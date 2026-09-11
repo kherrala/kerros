@@ -1,0 +1,356 @@
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { createRoot } from 'react-dom/client';
+import {
+  ArrowRight,
+  Building2,
+  CircleAlert,
+  Copy,
+  Eye,
+  Layers3,
+  Moon,
+  Plus,
+  Sun,
+  Trash2,
+  UploadCloud,
+  X,
+} from 'lucide-react';
+import { copyProject, type ProjectDocument, type ProjectSummary } from '@kerros/schema';
+import {
+  FloorEditor as SitePlanner,
+  SiteViewer,
+  KerrosThemeProvider,
+  useDarkMode,
+  importProject,
+  IndexedAssetRepository,
+  LocalProjectRepository,
+  type PlannerAdapters,
+} from '@kerros/editor';
+import { createSilo } from './demo/silo';
+import { createDemo, newProject } from './demo/demo';
+import { mmlBasemap } from './mmlBasemap';
+import { importProjections } from './importProjections';
+import { clearViewLink, parseViewLink, writeViewLink, type ViewLink } from './viewLink';
+import { en } from './strings';
+import 'maplibre-gl/dist/maplibre-gl.css';
+import '../src/styles.css';
+import './reset.css';
+
+const DEMOS = [
+  {
+    icon: Building2,
+    title: 'Stockmann Helsinki',
+    text: 'The real Stockmann department store, traced from its MML footprint: eight retail floors around a glass-roofed atrium, an escalator spine and enclosed lift and stair cores.',
+  },
+] as const;
+
+function Home() {
+  const [dark, toggleDark] = useDarkMode();
+  // No `status` adapter here: this reference app models premises, it does not monitor them. A host
+  // with live data supplies its own StatusFeed implementation (see the viewer/editor reference docs).
+  // The MML basemap (and its API key) are the host's concern: the env read lives here, not in the library editor.
+  const adapters = useMemo<PlannerAdapters>(
+    () => ({
+      projects: new LocalProjectRepository(),
+      assets: new IndexedAssetRepository(),
+      basemap: import.meta.env.VITE_MML_API_KEY ? mmlBasemap(import.meta.env.VITE_MML_API_KEY) : undefined,
+      importProjections,
+    }),
+    [],
+  );
+  const [open, setOpen] = useState<{ project: ProjectDocument; readOnly: boolean; view?: ViewLink } | null>(null);
+  const [saved, setSaved] = useState<ProjectSummary[]>([]);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
+  const [error, setError] = useState('');
+  const fileInput = useRef<HTMLInputElement>(null);
+  const refresh = () => {
+    adapters.projects
+      .list()
+      .then(setSaved)
+      .catch(() => setSaved([]));
+  };
+  // Demo generators evolve (and change ids): stale saved demo copies would otherwise shadow the
+  // new content via deep links and the picker forever. Purge outdated demo saves on startup.
+  useEffect(() => {
+    (async () => {
+      const current = new Set([createDemo().id, createSilo().id]);
+      for (const summary of await adapters.projects.list().catch(() => []))
+        if (summary.id.startsWith('demo-') && !current.has(summary.id))
+          await adapters.projects.delete(summary.id).catch(() => {});
+      refresh();
+    })();
+  }, [adapters.projects]);
+  // Deep links (#p=<id>&f=…&v=…&c=…) reopen a project straight into the exact linked view. Saved
+  // copies win; the built-in demo generators answer for their fixed ids on a fresh browser.
+  useEffect(() => {
+    const link = parseViewLink();
+    if (!link.project) return;
+    (async () => {
+      const saved = await adapters.projects.load(link.project!).catch(() => null);
+      const generators = [createDemo(), createSilo()];
+      // Old demo ids in bookmarks redirect to the current generation instead of dead-ending.
+      const family = (id: string) => id.replace(/-\d+$/, '');
+      const wanted = link.project!;
+      // A saved demo copy counts only when its id matches the CURRENT generation — an old id in
+      // the hash must never resurrect a stale save (the startup purge may not have run yet).
+      const staleDemo = wanted.startsWith('demo-') && !generators.some(g => g.id === wanted);
+      const demo =
+        (staleDemo ? undefined : saved) ??
+        generators.find(p => p.id === wanted) ??
+        (wanted.startsWith('demo-') ? generators.find(p => family(p.id) === family(wanted)) : undefined);
+      if (demo) setOpen({ project: demo, readOnly: false, view: link });
+      else setError('The linked project is not available in this browser.');
+    })();
+  }, [adapters.projects]);
+  // Reopening a demo resumes its saved copy so edits survive the trip back home.
+  async function openDemo(readOnly = false) {
+    const demo = createDemo();
+    const existing = await adapters.projects.load(demo.id).catch(() => null);
+    setOpen({ project: existing ?? demo, readOnly });
+  }
+  async function openSilo() {
+    const demo = createSilo();
+    const existing = await adapters.projects.load(demo.id).catch(() => null);
+    setOpen({ project: existing ?? demo, readOnly: false });
+  }
+  async function openSaved(id: string, readOnly = false) {
+    try {
+      const project = await adapters.projects.load(id);
+      if (!project) throw new Error('This project could not be loaded.');
+      setOpen({ project, readOnly });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+  async function openFile(file: File) {
+    try {
+      setOpen({ project: await importProject(await file.text(), adapters.assets), readOnly: false });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+  async function duplicate(id: string) {
+    try {
+      const source = await adapters.projects.load(id);
+      if (!source) throw new Error('This project could not be loaded.');
+      const project = copyProject(source);
+      await adapters.projects.save(project);
+      setOpen({ project, readOnly: false });
+    } catch (e) {
+      setError((e as Error).message);
+    }
+  }
+  const back = () => {
+    clearViewLink();
+    setOpen(null);
+    refresh();
+  };
+  // The host owns the URL: mirror the editor's view into a deep-link fragment as it changes.
+  if (open) {
+    const onViewChange = (v: ViewLink) =>
+      writeViewLink({ project: open.project.id, floor: v.floor, threeD: v.threeD, stack: v.stack, camera: v.camera });
+    const hostProps = {
+      adapters,
+      initialView: open.view,
+      onViewChange,
+      onBack: back,
+    } as const;
+    return open.readOnly ? (
+      <SiteViewer project={open.project} {...hostProps} />
+    ) : (
+      <SitePlanner project={open.project} {...hostProps} />
+    );
+  }
+  return (
+    <div className="home">
+      <header className="home-header">
+        <span className="brand">
+          <span className="brand-mark">
+            <Layers3 size={22} strokeWidth={2} />
+          </span>
+          <strong>{en.brand}</strong>
+          <span className="brand-divider" />
+          <span className="brand-product">{en.app}</span>
+        </span>
+        <span style={{ display: 'inline-flex', gap: 10, alignItems: 'center' }}>
+          <button
+            className="icon-button"
+            aria-label={dark ? 'Switch to light mode' : 'Switch to dark mode'}
+            onClick={toggleDark}
+          >
+            {dark ? <Sun size={18} /> : <Moon size={18} />}
+          </button>
+          <span className="avatar">KH</span>
+        </span>
+      </header>
+      <main className="home-main">
+        <section className="home-hero">
+          <span className="eyebrow">FLOOR &amp; SITE PLANNER</span>
+          <h1>
+            Model your premises.
+            <br />
+            In 2D and 3D.
+          </h1>
+          <p>
+            Draw multi-floor buildings over real map geometry, author their spaces, openings and routes, and read the
+            result back as a portable document — what you do with it is up to you.
+          </p>
+        </section>
+        <div className="home-grid">
+          <button className="home-card demo" onClick={() => void openSilo()}>
+            <span className="home-card-icon">
+              <Layers3 size={26} />
+            </span>
+            <strong>The Silo · Hakaniemi</strong>
+            <p>
+              A fictional hundred-level underground silo beneath Ympyrätalo — a great spiral staircase in the shaft,
+              landing bridges and ring rooms all the way down.
+            </p>
+            <span className="home-card-footer">
+              <span className="home-open">
+                Open
+                <ArrowRight size={15} />
+              </span>
+            </span>
+          </button>
+          {DEMOS.map(demo => (
+            <button key={demo.title} className="home-card demo" onClick={() => void openDemo()}>
+              <span className="home-card-icon">
+                <demo.icon size={26} />
+              </span>
+              <strong>{demo.title}</strong>
+              <p>{demo.text}</p>
+              <span className="home-card-footer">
+                <span className="home-open">
+                  Open
+                  <ArrowRight size={15} />
+                </span>
+              </span>
+            </button>
+          ))}
+          <button className="home-card ghost" onClick={() => setOpen({ project: newProject(), readOnly: false })}>
+            <span className="home-card-icon plain">
+              <Plus size={26} />
+            </span>
+            <strong>New blank site</strong>
+            <p>Start from an empty parcel in Helsinki and import your own footprints and drawings.</p>
+            <span className="home-card-footer">
+              <span className="home-open">
+                Create
+                <ArrowRight size={15} />
+              </span>
+            </span>
+          </button>
+          <button className="home-card ghost" onClick={() => fileInput.current?.click()}>
+            <span className="home-card-icon plain">
+              <UploadCloud size={26} />
+            </span>
+            <strong>Open a project file</strong>
+            <p>Import a portable Kerros JSON export, including its embedded reference drawings.</p>
+            <span className="home-card-footer">
+              <span className="home-open">
+                Browse
+                <ArrowRight size={15} />
+              </span>
+            </span>
+          </button>
+        </div>
+        <input
+          ref={fileInput}
+          type="file"
+          hidden
+          accept=".json"
+          onChange={e => {
+            const file = e.target.files?.[0];
+            if (file) void openFile(file);
+            e.target.value = '';
+          }}
+        />
+        {saved.length > 0 && (
+          <section className="home-saved">
+            <h2>Saved in this browser</h2>
+            {saved.map(p => (
+              <div className="home-row" key={p.id}>
+                <button className="home-row-main" onClick={() => openSaved(p.id)}>
+                  <span className="home-row-icon">
+                    <Building2 size={18} />
+                  </span>
+                  <span>
+                    {p.name}
+                    <small>
+                      Edited {new Date(p.updatedAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                    </small>
+                  </span>
+                </button>
+                <button className="button secondary small" onClick={() => openSaved(p.id, true)}>
+                  <Eye size={14} />
+                  Read-only
+                </button>
+                <button
+                  className="icon-button"
+                  aria-label={`Duplicate ${p.name}`}
+                  title="Duplicate project with cleared feed bindings"
+                  onClick={() => duplicate(p.id)}
+                >
+                  <Copy size={16} />
+                </button>
+                {confirmDelete === p.id ? (
+                  <button
+                    className="button danger small"
+                    onClick={() => {
+                      adapters.projects
+                        .delete(p.id)
+                        .then(refresh)
+                        .catch(() => setError('Could not delete the project.'));
+                      setConfirmDelete(null);
+                    }}
+                  >
+                    Really delete?
+                  </button>
+                ) : (
+                  <button
+                    className="icon-button"
+                    aria-label={`Delete ${p.name}`}
+                    title="Delete project"
+                    onClick={() => setConfirmDelete(p.id)}
+                  >
+                    <Trash2 size={16} />
+                  </button>
+                )}
+              </div>
+            ))}
+          </section>
+        )}
+        <p className="home-footnote">
+          Projects save automatically in this browser. Use Export inside the editor for a portable backup.
+        </p>
+      </main>
+      {error && (
+        <div className="toast" role="alert">
+          <CircleAlert size={18} />
+          <span>{error}</span>
+          <button aria-label="Dismiss" onClick={() => setError('')}>
+            <X size={16} />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Trackpad pinches arrive as ctrl+wheel (and Safari gesture events); stop them from zooming the
+// whole page when they land on panels or overlay symbols instead of the map canvas.
+document.addEventListener(
+  'wheel',
+  e => {
+    if (e.ctrlKey) e.preventDefault();
+  },
+  { passive: false },
+);
+for (const type of ['gesturestart', 'gesturechange', 'gestureend'])
+  document.addEventListener(type, e => e.preventDefault());
+
+createRoot(document.getElementById('root')!).render(
+  <KerrosThemeProvider>
+    <Home />
+  </KerrosThemeProvider>,
+);

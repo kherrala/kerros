@@ -1,0 +1,50 @@
+{
+  "name": "kerros",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite --host 127.0.0.1",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview --host 127.0.0.1",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "capture:media": "node scripts/capture-media.mjs",
+    "docs:dev": "vitepress dev docs",
+    "docs:build": "vitepress build docs",
+    "build:site": "vite build --base=./ && vitepress build docs && cp -R docs/.vitepress/dist/. dist/",
+    "build:lib": "npm run build --workspaces"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "maplibre-gl": "^5.6.0",
+    "pdfjs-dist": "^6.3.289",
+    "polygon-clipping": "^0.15.7",
+    "proj4": "^2.19.0",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "three": "^0.180.0"
+  },
+  "devDependencies": {
+    "@anthropic-ai/sdk": "^0.125.0",
+    "@biomejs/biome": "^2.5.12",
+    "@mapbox/vector-tile": "^3.0.0",
+    "@playwright/test": "^1.55.0",
+    "@types/geojson": "^7946.0.16",
+    "@types/node": "^22.20.2",
+    "@types/react": "^19.1.0",
+    "@types/react-dom": "^19.1.0",
+    "@types/three": "^0.180.0",
+    "@vitejs/plugin-react": "^4.7.0",
+    "pbf": "^5.1.2",
+    "typescript": "~5.8.3",
+    "vite": "^6.3.5",
+    "vitepress": "^1.6.4",
+    "vitest": "^3.2.4"
+  },
+  "workspaces": [
+    "packages/*"
+  ]
+}

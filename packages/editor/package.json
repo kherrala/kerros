@@ -1,0 +1,42 @@
+{
+  "name": "@kerros/editor",
+  "version": "0.1.0",
+  "description": "Full Kerros floor-plan authoring product: the editor plus adapters for browser persistence and drawing/footprint imports (PDF, image and vector).",
+  "license": "MIT",
+  "type": "module",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kherrala/kerros.git",
+    "directory": "packages/editor"
+  },
+  "module": "./dist/index.js",
+  "types": "./dist/types/editor/index.d.ts",
+  "files": [
+    "dist",
+    "LICENSE"
+  ],
+  "exports": {
+    ".": {
+      "types": "./dist/types/editor/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./styles.css": "./dist/styles.css"
+  },
+  "scripts": {
+    "build": "vite build && tsc -p tsconfig.dts.json && cat ../../node_modules/maplibre-gl/dist/maplibre-gl.css ../../src/styles.css > dist/styles.css"
+  },
+  "sideEffects": [
+    "*.css"
+  ],
+  "peerDependencies": {
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "maplibre-gl": "^5.0.0",
+    "three": ">=0.170.0 <1.0.0"
+  },
+  "dependencies": {
+    "lucide-react": "^0.468.0",
+    "polygon-clipping": "^0.15.7",
+    "pdfjs-dist": "^6.3.289"
+  }
+}
