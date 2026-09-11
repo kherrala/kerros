@@ -38,6 +38,7 @@ import { MaterialLibrary } from './materials';
 import { EXTERIOR_PRESETS } from '../model/materials';
 import type { MapStyleOptions } from '../theme';
 import { exteriorWalls } from './exteriors';
+import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hitEntity, metricUVs, SurfaceBatch } from './surfaces';
 import { excavationRings, floorIndex, MAX_CAGE_LEVELS, undergroundView } from './underground';
 import { UndergroundCage, undergroundPit } from './UndergroundContext';
@@ -147,6 +148,8 @@ export class SceneLayer implements CustomLayerInterface {
    *  scene like everything else; this is not, or every lift car would jump back to the bottom of its
    *  shaft on any edit, and every open door would slam. */
   private rigState = new Map<string, number>();
+  /** Whether the last animation frame moved anything that casts a shadow. */
+  private shadowsMoved = false;
   private lastFrame = 0;
   private revision = 0;
   private depthScale = 1;
@@ -307,16 +310,30 @@ export class SceneLayer implements CustomLayerInterface {
    *  group instead of welded into the batch, so something can move it. Its z is already presented,
    *  so a rig that moves it must present its own target too. */
   private part(rings: Point[][], base: number, height: number, color: string): THREE.Group {
-    const shape = new THREE.Shape(rings[0].map(p => new THREE.Vector2(...this.xy(p))));
-    shape.holes = rings.slice(1).map(r => new THREE.Path(r.map(p => new THREE.Vector2(...this.xy(p)))));
-    const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, steps: 1 });
-    geometry.translate(0, 0, base);
-    metricUVs(geometry);
-    const positions = geometry.getAttribute('position');
-    for (let i = 0; i < positions.count; i++) positions.setZ(i, this.present(positions.getZ(i)));
-    geometry.computeVertexNormals();
-    const mesh = new THREE.Mesh(geometry, this.materials.solid(color));
-    mesh.castShadow = true;
+    return this.parts([{ rings, base, height }], color);
+  }
+  /** Several extrusions welded into one moving part. An escalator's step band is twenty boxes that
+   *  travel together, and twenty meshes per flight — times a bank of four, times the flights in
+   *  view — is a draw call apiece for something that moves as one thing. Merged, it is one. */
+  private parts(
+    pieces: { rings: Point[][]; base: number; height: number }[],
+    color: string,
+    shadows = true,
+  ): THREE.Group {
+    const geometries = pieces.map(({ rings, base, height }) => {
+      const shape = new THREE.Shape(rings[0].map(p => new THREE.Vector2(...this.xy(p))));
+      shape.holes = rings.slice(1).map(r => new THREE.Path(r.map(p => new THREE.Vector2(...this.xy(p)))));
+      const geometry = new THREE.ExtrudeGeometry(shape, { depth: height, bevelEnabled: false, steps: 1 });
+      geometry.translate(0, 0, base);
+      metricUVs(geometry);
+      const positions = geometry.getAttribute('position');
+      for (let i = 0; i < positions.count; i++) positions.setZ(i, this.present(positions.getZ(i)));
+      geometry.computeVertexNormals();
+      return geometry.index ? geometry.toNonIndexed() : geometry;
+    });
+    const merged = geometries.length === 1 ? geometries[0] : mergeGeometries(geometries)!;
+    const mesh = new THREE.Mesh(merged, this.materials.solid(color));
+    mesh.castShadow = shadows;
     mesh.receiveShadow = true;
     const group = new THREE.Group();
     group.add(mesh);
@@ -338,6 +355,10 @@ export class SceneLayer implements CustomLayerInterface {
    *  advance one frame per mouse move. */
   private animate(seconds: number): boolean {
     let moving = false;
+    // A looping part never settles, so it must not drag the shadow map with it: re-rendering every
+    // caster in the building on every frame, forever, to follow an escalator step is the one cost
+    // that would make a permanent animation not worth having. Loops cast no shadow of their own.
+    this.shadowsMoved = false;
     for (const r of this.rigs) {
       const at = this.rigState.get(r.id) ?? r.target;
       if (r.loop) {
@@ -356,6 +377,7 @@ export class SceneLayer implements CustomLayerInterface {
       this.rigState.set(r.id, next);
       r.apply(r.group, next);
       moving = true;
+      this.shadowsMoved = true;
     }
     return moving;
   }
@@ -692,8 +714,21 @@ export class SceneLayer implements CustomLayerInterface {
       // metre of flat comb plate at each end; without them the deck spears into the floor.
       const pad = Math.min(1, run / 4);
       const deck = run - pad * 2;
+      // And the steps themselves. An escalator is a moving STAIR, and drawing its deck as one smooth
+      // ramp is what made a bank of them read as slides: nothing in the picture said you would be
+      // standing on the level. The step is the one fixed thing about the machine — 0.4 m of going,
+      // whatever the pitch — so the band is however many of those fit the incline, and the riser
+      // follows from the rise it has to climb. A drawing that gives the run too little length still
+      // shows the steep flight it describes, in steps, which is a more useful lie to catch.
+      const band = escalatorSteps(rise, deck);
+      const going = band[0].going,
+        riser = rise / band.length;
+      // The comb plates the band runs out of and into. The upper one is as deep as a riser rather
+      // than a fixed slab, because the step that has just left the top of a moving band has to go
+      // somewhere and under that plate is where: see the spare steps below.
+      const comb = Math.max(0.2, riser + 0.04);
       this.surface([rectangle(at(half - pad / 2), o.width, pad, rotation)], base, 0.2, color, o.id);
-      this.surface([rectangle(at(-half + pad / 2), o.width, pad, rotation)], base + rise, 0.2, color, o.id);
+      this.surface([rectangle(at(-half + pad / 2), o.width, pad, rotation)], base + rise, comb, color, o.id);
       // The truss the steps ride on: the old smooth deck, dropped clear of the step band so it reads
       // as the machine under the stair rather than as the surface you walk on.
       const body = { ...o, rings: [rectangle(at(0), o.width, deck, rotation)] } as SiteObject;
@@ -704,20 +739,56 @@ export class SceneLayer implements CustomLayerInterface {
         0.3,
         '#9aa5a1',
       );
-      // And the steps themselves. An escalator is a moving STAIR, and drawing its deck as one smooth
-      // ramp is what made a bank of them read as slides: nothing in the picture said you would be
-      // standing on the level. The step is the one fixed thing about the machine — 0.4 m of going,
-      // whatever the pitch — so the band is however many of those fit the incline, and the riser
-      // follows from the rise it has to climb. A drawing that gives the run too little length still
-      // shows the steep flight it describes, in steps, which is a more useful lie to catch.
-      for (const step of escalatorSteps(rise, deck)) {
-        const t = half - pad - step.at;
-        this.surface(
-          [rectangle(at(t), o.width - 0.12, step.going * 1.02, rotation)],
-          base + step.base,
-          STEP_RISE,
-          color,
-          o.id,
+      const tread = (step: { at: number; base: number }) => ({
+        rings: [rectangle(at(half - pad - step.at), o.width - 0.12, going * 1.02, rotation)],
+        base: base + step.base,
+        height: STEP_RISE,
+      });
+      // Standing on one storey there are at most two flights in view, so they can move. In the
+      // stacked view there are all of them, on every level of the building at once — dozens of bands
+      // asking for a repaint every frame to animate something a few pixels wide — so there the band
+      // is welded into the batch with everything else and simply stands still.
+      if (this.stack) {
+        for (const step of band) {
+          const piece = tread(step);
+          this.surface(piece.rings, piece.base, piece.height, color, o.id);
+        }
+      } else {
+        // The band travels exactly one step per cycle. Every step is identical and one pitch from
+        // the next, so a wrap back to the start puts each one exactly where its neighbour was and
+        // the stair never appears to stop.
+        //
+        // The ends are the whole difficulty. A rigid band gains a step at one end of its travel and
+        // loses one at the other, and a step that pops into being in open air is what a moving
+        // staircase must never look like. So it carries one spare below the foot — it starts the
+        // cycle under the lower comb plate and climbs out from beneath it, which is what a real
+        // escalator does anyway — and at the head the step that has climbed past the last visible
+        // one finishes its cycle inside the upper plate, which is why that plate is a riser deep
+        // rather than a slab: it is the head housing the band runs into. A descending band is the
+        // same picture upside down, so its spare waits in the head housing instead.
+        //
+        // Which way the machine runs is said the way the demo says it — in the name, which is also
+        // where the ontology reads it from. A flight that says nothing carries you up.
+        const way = /\bdown\b/i.test(o.name ?? '') ? -1 : 1;
+        const spare =
+          way > 0
+            ? { at: -going / 2, base: -STEP_RISE }
+            : { at: deck + going / 2, base: rise + riser - STEP_RISE };
+        const group = this.parts([spare, ...band].map(tread), color, false);
+        // One step's travel, in scene space, taken by projecting two plan points rather than by
+        // rebuilding the rotation here: `xy` is the only thing that knows which way plan north
+        // points on screen, and asking it twice is cheaper than being wrong about the frame.
+        const foot = this.xy(at(0)),
+          next = this.xy(at(-going * way));
+        const dz = this.present(base + riser * way) - this.present(base);
+        this.rig(
+          `${o.id}:steps:${Math.round(base * 100)}`,
+          group,
+          1,
+          // Half a metre a second along the incline is an ordinary escalator — a step a second.
+          0.5 / Math.hypot(going, riser),
+          (g, v) => g.position.set((next[0] - foot[0]) * v, (next[1] - foot[1]) * v, dz * v),
+          true,
         );
       }
       // Balustrades: a waist-high blade either side, following the same incline.
@@ -1604,7 +1675,7 @@ export class SceneLayer implements CustomLayerInterface {
     const elapsed = Math.min(0.1, this.lastFrame ? (now - this.lastFrame) / 1000 : 0);
     this.lastFrame = now;
     if (this.rigs.length && this.animate(elapsed)) {
-      this.renderer.shadowMap.needsUpdate = true;
+      if (this.shadowsMoved) this.renderer.shadowMap.needsUpdate = true;
       this.map?.triggerRepaint();
     }
     if (this.growth < 1) {
