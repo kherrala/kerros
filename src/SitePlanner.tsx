@@ -2168,6 +2168,7 @@ export function SitePlanner({
             onDuplicate={duplicateSelected}
             onDelete={requestDelete}
             onSelect={id => select(id, true)}
+            onFloor={changeFloor}
             onTraceFootprint={traceFootprint}
           />
         ) : null}

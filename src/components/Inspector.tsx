@@ -3,8 +3,10 @@ import {
   ArrowUpRight,
   Camera,
   Compass,
+  ArrowRight,
   ChevronRight,
   Copy,
+  Layers,
   Layers3,
   LockKeyhole,
   MoreHorizontal,
@@ -16,8 +18,9 @@ import {
 import type { Barrier, Drawing, Floor, Portal, ProjectDocument, SiteObject } from '../model/types';
 import type { StatusReading } from '../model/live';
 import type { StatusPanelContext } from '../model/host';
-import { isArea } from '../model/types';
+import { isArea, isSpace } from '../model/types';
 import { barrierEnds, distance, objectArea, objectPosition } from '../model/geometry';
+import { entryInto, zoneSpaces } from '../model/ontology';
 import { statusLabel, statusTone } from '../adapters/status';
 import { cameraPeek } from '../map/cameraPeek';
 import { EntityIcon } from './Icons';
@@ -49,8 +52,101 @@ interface Props {
   onDuplicate: () => void;
   onDelete: () => void;
   onSelect: (id: string) => void;
+  /** Open a floor — a lift's levels are the one relation that crosses them. */
+  onFloor: (id: string) => void;
   onTraceFootprint: (id: string) => void;
 }
+/** What a selected thing is joined to, and a way to go there.
+ *
+ *  The ontology is the half of the model with no shape — a portal is two ids, a zone is a list of
+ *  them, a lift is a set of floors it reaches. None of that is visible on the plan, so until now the
+ *  only way to read it was the structure panel or the JSON. Everything here is derived; nothing is
+ *  stored twice. */
+function Connections({
+  project,
+  object,
+  onSelect,
+  onFloor,
+}: {
+  project: ProjectDocument;
+  object: SiteObject;
+  onSelect: (id: string) => void;
+  onFloor: (id: string) => void;
+}) {
+  const name = (id: string) => project.objects.find(o => o.id === id)?.name ?? 'elsewhere';
+  const floorName = (id: string) => project.floors.find(f => f.id === id)?.name ?? id;
+  const rows: { key: string; icon: ReactNode; label: string; detail: string; go: () => void }[] = [];
+
+  // An opening: the two sides of the portal it carries, and which way each may be crossed.
+  const portal = (project.portals ?? []).find(x => x.openingId === object.id);
+  if (portal)
+    for (const side of [portal.a, portal.b]) {
+      const other = side === portal.a ? portal.b : portal.a;
+      const way = entryInto(portal, side);
+      rows.push({
+        key: `p-${side}`,
+        icon: <ArrowRight size={14} />,
+        label: name(side),
+        detail: way ? `enter from ${name(other)}` : `no way through from ${name(other)}`,
+        go: () => onSelect(side),
+      });
+    }
+
+  // A shaft: every level it reaches. This is the one relation that crosses floors, so it is also
+  // the one you most want a button for.
+  if (object.servedFloorIds?.length)
+    for (const fid of object.servedFloorIds) {
+      const f = project.floors.find(x => x.id === fid);
+      if (!f) continue;
+      rows.push({
+        key: `f-${fid}`,
+        icon: <Layers size={14} />,
+        label: floorName(fid),
+        detail: `${f.elevation.toFixed(1)} m`,
+        go: () => onFloor(fid),
+      });
+    }
+
+  // A space: every portal on it, named by what is on the other side.
+  if (isSpace(object.kind))
+    for (const p of project.portals ?? []) {
+      if (p.a !== object.id && p.b !== object.id) continue;
+      const other = p.a === object.id ? p.b : p.a;
+      const opening = p.openingId ? project.objects.find(o => o.id === p.openingId) : undefined;
+      rows.push({
+        key: `w-${p.id}`,
+        icon: <ArrowRight size={14} />,
+        label: name(other),
+        detail: opening ? (opening.name ?? opening.kind) : 'open boundary',
+        go: () => onSelect(p.openingId ?? other),
+      });
+    }
+
+  const zones = (project.zones ?? []).filter(z => zoneSpaces(project, z).includes(object.id));
+  if (!rows.length && !zones.length) return null;
+  return (
+    <section className="property-section">
+      <h3>Connections</h3>
+      {rows.map(r => (
+        <button className="object-row" key={r.key} onClick={r.go}>
+          {r.icon}
+          <span>
+            {r.label}
+            <small>{r.detail}</small>
+          </span>
+          <ChevronRight size={15} />
+        </button>
+      ))}
+      {zones.map(z => (
+        <p className="helper" key={z.id}>
+          In zone <strong>{z.name}</strong>
+          {z.purpose ? ` · ${z.purpose}` : ''}
+        </p>
+      ))}
+    </section>
+  );
+}
+
 export function Inspector(props: Props) {
   const { project, floorId, selected, statuses, monitoring, editing } = props;
   // The portal this opening carries, if the plan has one. Direction is the part a person decides:
@@ -393,7 +489,7 @@ export function Inspector(props: Props) {
                     <p className="helper">Watched objects use this camera for event footage.</p>
                   </>
                 )}
-                {['elevator', 'stairs'].includes(object.kind) && (
+                {editing && ['elevator', 'stairs'].includes(object.kind) && (
                   <>
                     <h3>Served floors</h3>
                     {project.floors.map(f => (
@@ -556,6 +652,9 @@ export function Inspector(props: Props) {
                   </>
                 )}
               </section>
+            )}
+            {object && (
+              <Connections project={project} object={object} onSelect={props.onSelect} onFloor={props.onFloor} />
             )}
             {monitoring && object?.feedId && props.renderStatusPanel?.({ object, status, editing, live: props.live })}
           </>
