@@ -64,6 +64,33 @@ const LIFT = 0.15,
   GROUND = 0.06;
 const wallBase = (floorId: string | null) => (floorId ? LIFT + SLAB : GROUND);
 
+/** An escalator step: 0.4 m of going and a 0.2 m face, the world over. These are properties of the
+ *  machine rather than of the drawing — a manufacturer's step is the same step in every building —
+ *  so they are fixed here while the pitch, which the plan really does decide, is not. */
+const STEP_GOING = 0.4,
+  STEP_RISE = 0.2;
+
+/** The steps of one escalator flight, bottom first.
+ *
+ *  `at` is how far up the run a step stands, measured in plan metres from the foot of the incline;
+ *  `base` is how far above the foot its underside sits. The going is 0.4 m stretched to fill the
+ *  incline exactly, so the band meets both comb plates instead of leaving a sliver at one end, and
+ *  the riser is whatever the rise divided by the count comes to — a flight the plan has drawn too
+ *  short shows as the steep stair it is instead of as a smooth ramp that hides the fact. */
+function escalatorSteps(rise: number, deck: number): { at: number; base: number; going: number }[] {
+  // Capped: a very long flight is read at a glance, not counted, and every step is a draw call's
+  // worth of geometry in a scene that may hold a bank of them on seventeen storeys.
+  const count = Math.max(2, Math.min(40, Math.round(deck / STEP_GOING)));
+  const going = deck / count;
+  return Array.from({ length: count }, (_, i) => ({
+    at: going * (i + 0.5),
+    // Tops land on the slope line, so the last step meets the upper comb plate rather than stopping
+    // a riser short of it.
+    base: (rise * (i + 1)) / count - STEP_RISE,
+    going,
+  }));
+}
+
 /** A part of the scene that moves: its own geometry, outside the merged batch, animated toward a
  *  target at a fixed speed. Everything else is welded into one buffer per material — which is what
  *  makes a tall building cheap to draw and impossible to move a single piece of. */
@@ -667,14 +694,32 @@ export class SceneLayer implements CustomLayerInterface {
       const deck = run - pad * 2;
       this.surface([rectangle(at(half - pad / 2), o.width, pad, rotation)], base, 0.2, color, o.id);
       this.surface([rectangle(at(-half + pad / 2), o.width, pad, rotation)], base + rise, 0.2, color, o.id);
+      // The truss the steps ride on: the old smooth deck, dropped clear of the step band so it reads
+      // as the machine under the stair rather than as the surface you walk on.
       const body = { ...o, rings: [rectangle(at(0), o.width, deck, rotation)] } as SiteObject;
       this.slopedSurface(
         body,
         { axis: [at(-half + pad), at(half - pad)], high: base + rise, low: base },
-        0,
-        0.22,
-        color,
+        -STEP_RISE,
+        0.3,
+        '#9aa5a1',
       );
+      // And the steps themselves. An escalator is a moving STAIR, and drawing its deck as one smooth
+      // ramp is what made a bank of them read as slides: nothing in the picture said you would be
+      // standing on the level. The step is the one fixed thing about the machine — 0.4 m of going,
+      // whatever the pitch — so the band is however many of those fit the incline, and the riser
+      // follows from the rise it has to climb. A drawing that gives the run too little length still
+      // shows the steep flight it describes, in steps, which is a more useful lie to catch.
+      for (const step of escalatorSteps(rise, deck)) {
+        const t = half - pad - step.at;
+        this.surface(
+          [rectangle(at(t), o.width - 0.12, step.going * 1.02, rotation)],
+          base + step.base,
+          STEP_RISE,
+          color,
+          o.id,
+        );
+      }
       // Balustrades: a waist-high blade either side, following the same incline.
       for (const sign of [-1, 1]) {
         const side = [sign * (o.width / 2 - 0.06), 0] as Point;
