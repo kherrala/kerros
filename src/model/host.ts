@@ -79,6 +79,9 @@ export interface ViewState {
   threeD?: boolean;
   stack?: boolean;
   camera?: CameraState;
+  /** Which surface to open on. Absent means the plan viewer — right for a link someone was sent,
+   *  wrong for a project the host just created or imported, where the point is to start drawing. */
+  mode?: PlannerMode;
 }
 /** The editor's three surfaces: pure plan viewer, authoring editor, live monitoring. */
 export type PlannerMode = 'view' | 'edit' | 'live';

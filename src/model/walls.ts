@@ -5,7 +5,8 @@
 // Everything here is in local metres, which `toLocal` has already rotated by the site origin's
 // bearing — so 0° is the site's own grid rather than true north, and a building laid out along its
 // street needs no reference angle at all beyond the default.
-import { OPENING_MIN_SEGMENT, barrierEnds, distance, openRing, segmentProjection } from './geometry';
+import polygonClipping from 'polygon-clipping';
+import { OPENING_MIN_SEGMENT, barrierEnds, closeRing, distance, openRing, segmentProjection } from './geometry';
 import type { Point, ProjectDocument, Ring } from './types';
 
 /** A segment's direction as an *axis* in [0, 180). A wall and the same wall drawn backwards describe
@@ -27,12 +28,41 @@ export const ALIGNED = 4;
 const ringEdges = (ring: Ring): [Point, Point][] =>
   ring.map((p, i) => [p, ring[(i + 1) % ring.length]] as [Point, Point]);
 
-/** The rings describing a floor's outline: its own top-level zones when it has them, else the site's
- *  building footprints. Shared with `exteriorWalls` so "the outline" means one thing across the app. */
+const outlines = new WeakMap<ProjectDocument, Map<string | null, Ring[]>>();
+
+/** The rings describing a floor's outline: its own top-level zones when it has them, else the union
+ *  of the rooms drawn on it, else the site's building footprints. Shared with `exteriorWalls` so
+ *  "the outline" means one thing across the app.
+ *
+ *  The room union is what a floor without a zone over it actually has. An imported plan is exactly
+ *  that — rooms traced off a drawing, no covering zone and no site footprint — and skipping straight
+ *  to the building objects returned nothing for it, so not one of its walls counted as exterior:
+ *  no exterior material, no facade preset, and nothing for a stacked view to draw a storey's edge
+ *  from. Cached per document, which is immutable between edits, because the union is not free. */
 export function floorOutline(project: ProjectDocument, floorId: string | null): Ring[] {
+  let cache = outlines.get(project);
+  if (!cache) outlines.set(project, (cache = new Map()));
+  const hit = cache.get(floorId);
+  if (hit) return hit;
   const zones = project.objects.filter(o => o.floorId === floorId && o.kind === 'zone' && !o.parentId && o.rings);
-  const source = zones.length ? zones : project.objects.filter(o => o.kind === 'building' && o.rings);
-  return source.flatMap(o => o.rings!.map(openRing));
+  let rings: Ring[] = zones.flatMap(o => o.rings!.map(openRing));
+  if (!rings.length) {
+    const rooms = project.objects.filter(o => o.floorId === floorId && o.kind === 'room' && o.rings?.length);
+    if (rooms.length) {
+      try {
+        const merged = polygonClipping.union(
+          ...(rooms.map(o => [closeRing(o.rings![0])]) as [Ring[], ...Ring[][]]),
+        ) as unknown as Ring[][];
+        rings = merged.map(pg => openRing(pg[0]));
+      } catch {
+        rings = []; // degenerate footprint: fall through to the site's own outline
+      }
+    }
+  }
+  if (!rings.length)
+    rings = project.objects.filter(o => o.kind === 'building' && o.rings).flatMap(o => o.rings!.map(openRing));
+  cache.set(floorId, rings);
+  return rings;
 }
 
 /** The axis a set of edges most runs along, weighted by length — edges within ALIGNED° of each other

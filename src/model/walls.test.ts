@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { addBarrier, holdAngle, snapPoint } from './geometry';
-import { axisDelta, axisOf, fitOpening, mainAxis, proposeWall, referenceAxis } from './walls';
+import { axisDelta, axisOf, fitOpening, floorOutline, mainAxis, proposeWall, referenceAxis } from './walls';
+import { exteriorWalls } from '../map/exteriors';
+import { createObject } from './factory';
 import { newProject } from './testFixtures';
 import type { Point, ProjectDocument, Ring } from './types';
 import { uid } from './types';
@@ -199,5 +201,45 @@ describe('fitting an opening', () => {
     const fit = fitOpening(p, 'floor-ground', 'door', [0.7, 5.1], 0.7, 1);
     expect(fit).not.toBeNull();
     expect(fit!.offset).toBeCloseTo(0.7, 5);
+  });
+});
+
+// A floor with rooms but no zone over them still has an outline. Imported plans are exactly that,
+// and before the union fell in, not one of their walls counted as exterior.
+describe('floorOutline on a floor with no zone', () => {
+  const roomFloor = () => {
+    const p = newProject();
+    for (const [name, x] of [
+      ['West', 0],
+      ['East', 4],
+    ] as [string, number][]) {
+      const room = createObject('room', [x + 2, 2], 'floor-ground', name);
+      room.rings = [
+        [
+          [x, 0],
+          [x + 4, 0],
+          [x + 4, 4],
+          [x, 4],
+        ],
+      ];
+      p.objects.push(room);
+    }
+    return p;
+  };
+  it('takes the union of the rooms, not the empty site footprint', () => {
+    const rings = floorOutline(roomFloor(), 'floor-ground');
+    expect(rings).toHaveLength(1);
+    const xs = rings[0].map(pt => pt[0]);
+    // The two rooms merge into one 8 x 4 outline; the shared edge at x=4 is gone.
+    expect(Math.min(...xs)).toBeCloseTo(0);
+    expect(Math.max(...xs)).toBeCloseTo(8);
+  });
+  it('makes the walls on that outline read as exterior', () => {
+    const p = roomFloor();
+    addBarrier(p, [0, 0], [8, 0], 'floor-ground', 'wall'); // along the outline
+    addBarrier(p, [4, 0.5], [4, 3.5], 'floor-ground', 'wall'); // the partition between the rooms
+    const exterior = exteriorWalls(p);
+    expect(exterior.has(p.barriers[0].id)).toBe(true);
+    expect(exterior.has(p.barriers[1].id)).toBe(false);
   });
 });

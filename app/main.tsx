@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ArrowRight,
@@ -57,7 +57,11 @@ function Home() {
     }),
     [],
   );
-  const [open, setOpen] = useState<{ project: ProjectDocument; readOnly: boolean; view?: ViewLink } | null>(null);
+  const [open, setOpen] = useState<{
+    project: ProjectDocument;
+    readOnly: boolean;
+    view?: ViewLink & { mode?: 'view' | 'edit' | 'live' };
+  } | null>(null);
   const [saved, setSaved] = useState<ProjectSummary[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -123,7 +127,12 @@ function Home() {
   }
   async function openFile(file: File) {
     try {
-      setOpen({ project: await importProject(await file.text(), adapters.assets), readOnly: false });
+      // Straight into the editor: you imported it to work on it, not to look at it.
+      setOpen({
+        project: await importProject(await file.text(), adapters.assets),
+        readOnly: false,
+        view: { mode: 'edit' },
+      });
     } catch (e) {
       setError((e as Error).message);
     }
@@ -139,6 +148,28 @@ function Home() {
       setError((e as Error).message);
     }
   }
+  // Drop a project file anywhere on the home screen. Nothing here knows about CAD plans — those
+  // land on a floor, so they belong to the editor's import dialog, which has its own dropzone.
+  const [dragging, setDragging] = useState(false);
+  const dropProps = {
+    onDragOver: (e: DragEvent) => {
+      if (!e.dataTransfer.types.includes('Files')) return;
+      e.preventDefault();
+      setDragging(true);
+    },
+    onDragLeave: (e: DragEvent) => {
+      // Only when the pointer leaves the shell, not on every child it crosses on the way.
+      if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setDragging(false);
+    },
+    onDrop: (e: DragEvent) => {
+      e.preventDefault();
+      setDragging(false);
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+      if (!file.name.toLowerCase().endsWith('.json')) return setError('Drop a Kerros project JSON.');
+      void openFile(file);
+    },
+  };
   const back = () => {
     clearViewLink();
     setOpen(null);
@@ -161,7 +192,7 @@ function Home() {
     );
   }
   return (
-    <div className="home">
+    <div className={`home ${dragging ? 'dropping' : ''}`} {...dropProps}>
       <header className="home-header">
         <span className="brand">
           <span className="brand-mark">
@@ -227,7 +258,10 @@ function Home() {
               </span>
             </button>
           ))}
-          <button className="home-card ghost" onClick={() => setOpen({ project: newProject(), readOnly: false })}>
+          <button
+            className="home-card ghost"
+            onClick={() => setOpen({ project: newProject(), readOnly: false, view: { mode: 'edit' } })}
+          >
             <span className="home-card-icon plain">
               <Plus size={26} />
             </span>
@@ -281,9 +315,13 @@ function Home() {
                     </small>
                   </span>
                 </button>
-                <button className="button secondary small" onClick={() => openSaved(p.id, true)}>
+                <button
+                  className="button secondary small"
+                  title="Open without editing tools"
+                  onClick={() => openSaved(p.id, true)}
+                >
                   <Eye size={14} />
-                  Read-only
+                  View
                 </button>
                 <button
                   className="icon-button"
@@ -321,7 +359,8 @@ function Home() {
           </section>
         )}
         <p className="home-footnote">
-          Projects save automatically in this browser. Use Export inside the editor for a portable backup.
+          Drop a project file anywhere on this page to open it. Projects save automatically in this browser; use Export
+          inside the editor for a portable backup.
         </p>
       </main>
       {error && (

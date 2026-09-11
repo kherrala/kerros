@@ -3235,3 +3235,16 @@
   font-size: 11.5px;
   white-space: nowrap;
 }
+
+/* A project file dropped anywhere on the home screen opens it — the whole page is the target, so
+   the whole page has to say so while a file is over it. */
+.home.dropping::after {
+  content: "";
+  position: fixed;
+  inset: 10px;
+  border: 2px dashed var(--accent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+  pointer-events: none;
+  z-index: 40;
+}

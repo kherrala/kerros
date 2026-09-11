@@ -163,10 +163,16 @@ export function SitePlanner({
   // authoring experience, 'live' overlays the host's status feed on the read-only plan. The last
   // exists only when the host supplied a StatusFeed — with no feed there is nothing to monitor.
   const monitoring = !!adapters.status;
-  const [mode, setMode] = useState<'view' | 'edit' | 'live'>(readOnly && monitoring ? 'live' : 'view');
+  const [mode, setMode] = useState<'view' | 'edit' | 'live'>(() => {
+    const wanted = initialView?.mode;
+    if (wanted === 'edit') return readOnly ? 'view' : 'edit';
+    if (wanted === 'live') return monitoring ? 'live' : 'view';
+    if (wanted === 'view') return 'view';
+    return readOnly && monitoring ? 'live' : 'view';
+  });
   const editing = mode === 'edit',
     live = mode === 'live';
-  const [threeD, setThreeD] = useState(initialView?.threeD ?? true),
+  const [threeD, setThreeD] = useState(initialView?.threeD ?? initialView?.mode !== 'edit'),
     [stack, setStack] = useState(initialView?.stack ?? false),
     [tool, setTool] = useState<Tool>('select'),
     [draft, setDraft] = useState<Point[]>([]),
@@ -197,7 +203,8 @@ export function SitePlanner({
     [fullscreen, setFullscreen] = useState(false),
     [showPlan, setShowPlan] = useState(true),
     [evening, setEvening] = useState(false),
-    [sidebarOpen, setSidebarOpen] = useState(false),
+    // Opening straight into the editor brings the editor's chrome with it, as enterEdit does.
+    [sidebarOpen, setSidebarOpen] = useState(initialView?.mode === 'edit' && !readOnly),
     [inspectorOpen, setInspectorOpen] = useState(false),
     [cityBuildings, setCityBuildings] = useState(true),
     [cadastre, setCadastre] = useState(true);
