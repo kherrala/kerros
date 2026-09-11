@@ -56,12 +56,14 @@ export {
 export { derivedGraph } from '../model/topology';
 export { isArea, isDevice, isOpening, isSpace, uid, OBJECT_KINDS } from '../model/types';
 export { createObject, emptyProject } from '../model/factory';
+export { coverageOf, DEFAULT_RANGE, DEFAULT_FOV } from '../model/coverage';
 export { copyProject, openingFloorId } from '../model/project';
 export {
   MIN_SEGMENT,
   OPENING_MIN_SEGMENT,
   geoOrigin,
   moveOrigin,
+  segmentsCross,
   toLngLat,
   toLocal,
   addBarrier,

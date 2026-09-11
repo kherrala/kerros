@@ -75,6 +75,15 @@ export const rectangle = (center: Point, width: number, depth: number, rotation 
       ] as Point[]
     ).map(p => add(center, rotate(p, rotation))),
   );
+/** Do the two open segments cross? Used for line of sight: a wall between two points blocks it.
+ *  Touching at an endpoint does not count — walls meet at shared junctions, and a sightline grazing
+ *  such a corner is not obstructed by it. */
+export function segmentsCross(a: Point, b: Point, c: Point, d: Point): boolean {
+  const side = (p: Point, q: Point, r: Point) => (q[0] - p[0]) * (r[1] - p[1]) - (q[1] - p[1]) * (r[0] - p[0]);
+  const [s1, s2, s3, s4] = [side(a, b, c), side(a, b, d), side(c, d, a), side(c, d, b)];
+  const EPS = 1e-9;
+  return ((s1 > EPS && s2 < -EPS) || (s1 < -EPS && s2 > EPS)) && ((s3 > EPS && s4 < -EPS) || (s3 < -EPS && s4 > EPS));
+}
 export function segmentProjection(p: Point, a: Point, b: Point) {
   const length = distance(a, b);
   const t = length

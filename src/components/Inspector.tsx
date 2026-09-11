@@ -8,6 +8,7 @@ import {
   ArrowRight,
   ArrowUp,
   ChevronRight,
+  Eye,
   Copy,
   Layers,
   Layers3,
@@ -21,9 +22,11 @@ import {
 import type { Barrier, Drawing, Floor, Portal, ProjectDocument, SiteObject } from '../model/types';
 import type { StatusReading } from '../model/live';
 import type { StatusPanelContext } from '../model/host';
-import { isArea, isSpace } from '../model/types';
+import { isArea, isOpening, isSpace } from '../model/types';
 import { barrierEnds, distance, moveOrigin, objectArea, objectPosition } from '../model/geometry';
 import { entryInto, zoneSpaces } from '../model/ontology';
+import { coverageOf } from '../model/coverage';
+import { spaceAt } from '../model/spaces';
 import { statusLabel, statusTone } from '../adapters/status';
 import { EntityIcon } from './Icons';
 import { Field, Toggle } from './controls';
@@ -78,6 +81,7 @@ function Connections({
   const name = (id: string) => project.objects.find(o => o.id === id)?.name ?? 'elsewhere';
   const floorName = (id: string) => project.floors.find(f => f.id === id)?.name ?? id;
   const rows: { key: string; icon: ReactNode; label: string; detail: string; go: () => void }[] = [];
+  const kindOf = (id: string) => project.objects.find(o => o.id === id)?.kind ?? '';
 
   // An opening: the two sides of the portal it carries, and which way each may be crossed.
   const portal = (project.portals ?? []).find(x => x.openingId === object.id);
@@ -91,6 +95,44 @@ function Connections({
         label: name(side),
         detail: way ? `enter from ${name(other)}` : `no way through from ${name(other)}`,
         go: () => onSelect(side),
+      });
+    }
+
+  // A doorway the plan has not joined into a portal still separates two places, and saying which
+  // is more use than an empty panel — it also shows WHY there is no portal, when one side turns out
+  // to be nowhere in particular.
+  if (!portal && isOpening(object.kind) && object.barrierId) {
+    const barrier = project.barriers.find(b => b.id === object.barrierId);
+    if (barrier) {
+      const [a, b] = barrierEnds(project, barrier);
+      const len = distance(a, b) || 1;
+      const nx = -(b[1] - a[1]) / len,
+        ny = (b[0] - a[0]) / len;
+      const step = barrier.thickness / 2 + 0.35;
+      for (const sign of [1, -1]) {
+        const probe: [number, number] = [object.position[0] + nx * step * sign, object.position[1] + ny * step * sign];
+        const space = spaceAt(project, object.floorId, probe);
+        rows.push({
+          key: `s-${sign}`,
+          icon: <ArrowRight size={14} />,
+          label: space?.name ?? 'Outside any space',
+          detail: space ? 'on this side of the doorway' : 'nothing drawn on this side',
+          go: () => space && onSelect(space.id),
+        });
+      }
+    }
+  }
+
+  // What a camera can see. Derived from its own cone and the walls in the way, so it follows the
+  // camera when it is turned or moved rather than going stale.
+  if (object.kind === 'camera')
+    for (const id of coverageOf(project, object)) {
+      rows.push({
+        key: `c-${id}`,
+        icon: <Eye size={14} />,
+        label: name(id),
+        detail: `in view · ${kindOf(id)}`,
+        go: () => onSelect(id),
       });
     }
 
@@ -124,6 +166,17 @@ function Connections({
       });
     }
 
+  // The other direction: which cameras have this in frame.
+  for (const cam of project.objects)
+    if (cam.kind === 'camera' && cam.floorId === object.floorId && cam.id !== object.id)
+      if (coverageOf(project, cam).includes(object.id))
+        rows.push({
+          key: `v-${cam.id}`,
+          icon: <Eye size={14} />,
+          label: cam.name,
+          detail: 'has this in view',
+          go: () => onSelect(cam.id),
+        });
   const zones = (project.zones ?? []).filter(z => zoneSpaces(project, z).includes(object.id));
   if (!rows.length && !zones.length) return null;
   return (
