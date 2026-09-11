@@ -14,6 +14,7 @@ import type { BasemapConfig } from '../model/host';
 import {
   add,
   barrierEnds,
+  segmentProjection,
   closeRing,
   drawingCorners,
   objectArea,
@@ -1479,6 +1480,77 @@ export function MapCanvas(props: MapCanvasProps) {
             const movedEnd = (movedStart ? other.startId : other.endId) === b.startId ? a2 : c2;
             lines.push([anchor, movedEnd]);
           }
+        }
+      } else if (kind === 'opening') {
+        // Where the leaf will land: the drop projected onto its wall and clamped so the opening
+        // stays wholly on the segment — the same arithmetic the commit does, so the ghost is not a
+        // near-miss of the result.
+        const opening = p.project.objects.find(o => o.id === id);
+        const barrier = p.project.barriers.find(b => b.id === opening?.barrierId);
+        if (opening && barrier) {
+          const [a, b] = barrierEnds(p.project, barrier);
+          const hit = segmentProjection(local, a, b);
+          const half = opening.width / 2;
+          if (hit.length >= opening.width) {
+            const offset = Math.max(half, Math.min(hit.length - half, hit.t * hit.length));
+            const ux = (b[0] - a[0]) / hit.length,
+              uy = (b[1] - a[1]) / hit.length;
+            const at: Point = [a[0] + ux * offset, a[1] + uy * offset];
+            lines.push([
+              [at[0] - ux * half, at[1] - uy * half],
+              [at[0] + ux * half, at[1] + uy * half],
+            ]);
+            // A tick across the wall, so a leaf being slid is legible against the wall it slides on.
+            const t = barrier.thickness;
+            lines.push([
+              [at[0] + uy * t, at[1] - ux * t],
+              [at[0] - uy * t, at[1] + ux * t],
+            ]);
+          }
+        }
+      } else if (kind === 'rotate') {
+        const o = p.project.objects.find(x => x.id === id);
+        if (o) {
+          const degrees = Math.atan2(local[1] - o.position[1], local[0] - o.position[0]);
+          lines.push([o.position, local]);
+          // An object with a footprint shows that footprint turned; one without — a camera, a
+          // marker — is legible from the arm alone.
+          if (o.rings?.[0]) {
+            const cos = Math.cos(degrees - ((o.rotation ?? 0) * Math.PI) / 180),
+              sin = Math.sin(degrees - ((o.rotation ?? 0) * Math.PI) / 180);
+            lines.push(
+              closeRing(
+                o.rings[0].map(pt => {
+                  const dx = pt[0] - o.position[0],
+                    dy = pt[1] - o.position[1];
+                  return [o.position[0] + dx * cos - dy * sin, o.position[1] + dx * sin + dy * cos] as Point;
+                }),
+              ),
+            );
+          }
+        }
+      } else if (kind === 'coverage') {
+        // The cone as the release will leave it: reach from the handle's distance, spread from its
+        // bearing either side of the object's facing.
+        const o = p.project.objects.find(x => x.id === id);
+        if (o) {
+          const dx = local[0] - o.position[0],
+            dy = local[1] - o.position[1];
+          const range = Math.max(1, Math.min(120, Math.hypot(dx, dy)));
+          const bearing = (Math.atan2(dy, dx) * 180) / Math.PI;
+          const half = Math.min(
+            175,
+            Math.max(5, Math.abs(((((bearing - (o.rotation ?? 0)) % 360) + 540) % 360) - 180)),
+          );
+          const facing = ((o.rotation ?? 0) * Math.PI) / 180;
+          const arc: Point[] = [o.position];
+          const steps = 24;
+          for (let k = 0; k <= steps; k++) {
+            const th = facing + ((-half + (2 * half * k) / steps) * Math.PI) / 180;
+            arc.push([o.position[0] + Math.cos(th) * range, o.position[1] + Math.sin(th) * range]);
+          }
+          arc.push(o.position);
+          lines.push(arc);
         }
       } else if (kind === 'node') {
         const node = p.project.navNodes?.find(n => n.id === id);
