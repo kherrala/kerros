@@ -19,8 +19,9 @@ import {
   rotate,
   toLngLat,
 } from '../model/geometry';
-import { pointInRing } from '../model/geometry';
-import { COLORS, objectRings, wallPieces } from './features';
+import { distance, pointInRing } from '../model/geometry';
+import { floorOutline } from '../model/walls';
+import { COLORS, objectRings, type WallPiece, wallPieces } from './features';
 import {
   type Flight,
   flights,
@@ -432,7 +433,7 @@ export class SceneLayer implements CustomLayerInterface {
       const base = z + wallBase(o.floorId) + 0.85,
         rim = Math.min(0.08, height / 3, o.width / 3);
       const depth = Math.max(0.16, (barrier?.thickness ?? 0.2) + 0.035);
-      const frame = this.materials.metal('#666d68');
+      const frame = this.materials.metal('#b4b9ba');
       const lit = [...o.id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % 5 < 2;
       const glass = this.materials.glass(this.evening, lit);
       const side = (
@@ -495,7 +496,10 @@ export class SceneLayer implements CustomLayerInterface {
     const thickness = barrier?.thickness ?? 0.2;
     const base = z + wallBase(o.floorId);
     const height = Math.min(o.height, (barrier?.height ?? o.height) - 0.02);
-    const color = o.color ?? COLORS[o.kind] ?? '#bfcac7';
+    // NOT the plan's door colour. That indigo is a symbol — it marks a door on a drawing, where it
+    // has to stand out from the walls around it. Extruded into a solid leaf it is a purple slab in
+    // a room, which is the one thing a door never looks like. A door is a door-coloured object.
+    const color = o.color ?? '#c8b295';
     // The head above the opening, so the wall reads as continuous rather than as a slot to the
     // ceiling — and so an open door leaves a doorway rather than a gap in the storey.
     const over = (barrier?.height ?? height) - height;
@@ -527,6 +531,37 @@ export class SceneLayer implements CustomLayerInterface {
     this.rig(`${o.id}:leaf`, panel, status?.open ? 1 : 0, 1.4, (g, v) => {
       g.rotation.z = -(72 * Math.PI * v) / 180;
     });
+  }
+  /** A thin skin lying on the inside face of an exterior wall.
+   *
+   *  Which face is the inside is not a property of the wall — it is a question about the building
+   *  around it — so it is answered the only way it can be: step off the wall each way and see which
+   *  side lands within the floor's footprint. A wall with no footprint to be inside of (an outbuilding
+   *  wall, a fence read as exterior) gets no lining, which is right. */
+  private lining(project: ProjectDocument, piece: WallPiece, floorId: string | null): Ring | null {
+    const outline = floorOutline(project, piece.floorId ?? floorId);
+    if (!outline.length) return null;
+    const ring = openRing(piece.ring);
+    if (ring.length !== 4) return null;
+    // A wall piece is a rectangle: one pair of sides is its length, the other its thickness.
+    const e1 = distance(ring[0], ring[1]),
+      e2 = distance(ring[1], ring[2]);
+    const [along, thickness] = e1 >= e2 ? [[ring[0], ring[1]] as const, e2] : [[ring[1], ring[2]] as const, e1];
+    const len = distance(along[0], along[1]);
+    if (len < 0.05 || thickness < 0.03) return null;
+    const angle = (Math.atan2(along[1][1] - along[0][1], along[1][0] - along[0][0]) * 180) / Math.PI;
+    const nx = -(along[1][1] - along[0][1]) / len,
+      ny = (along[1][0] - along[0][0]) / len;
+    const mid: Point = [ring.reduce((t, q) => t + q[0], 0) / 4, ring.reduce((t, q) => t + q[1], 0) / 4];
+    const skin = Math.min(0.05, thickness / 3);
+    for (const sign of [1, -1]) {
+      const probe: Point = [mid[0] + nx * sign * (thickness / 2 + 0.3), mid[1] + ny * sign * (thickness / 2 + 0.3)];
+      if (!outline.some(r => pointInRing(probe, r))) continue;
+      // Sitting just proud of the wall's own face, or the two fight for the same pixels.
+      const out = thickness / 2 - skin / 2 + 0.003;
+      return closeRing(rectangle([mid[0] + nx * sign * out, mid[1] + ny * sign * out], len, skin, angle));
+    }
+    return null;
   }
   /** An area's rings with the shafts that pass through its level cut out of them.
    *
@@ -895,7 +930,12 @@ export class SceneLayer implements CustomLayerInterface {
                 : EXTERIOR_PRESETS.limestone
             : {
                 material: b.material ?? (b.kind === 'wall' ? ('plaster' as const) : undefined),
-                color: b.color ?? COLORS[b.kind],
+                // An interior wall is plastered, and plaster is near-white. COLORS.wall is the grey
+                // a wall is DRAWN in — a stroke on a plan has to read against a pale floor, so it is
+                // mid-grey by necessity — and standing that grey up as a surface, shaded and with
+                // contact shadow at its foot, made every partition read as bare concrete. A fence
+                // keeps its drawn colour: it has no plaster and is not a room's wall.
+                color: b.color ?? (b.kind === 'wall' ? '#e8e6e1' : COLORS[b.kind]),
               },
         ];
       }),
@@ -1149,6 +1189,24 @@ export class SceneLayer implements CustomLayerInterface {
         // over a door, say — has no junction to darken and would just get a dirty smear.
         p.base < 0.01,
       );
+      // The inside of an outside wall is a room's wall, and rooms are plastered. A facade's stone or
+      // brick is its OUTER face; wrapping it round the solid put masonry inside every room, so a
+      // house read as a ruin with no interior finish anywhere. A thin skin on the inner face fixes
+      // it for what it costs: one surface per exterior piece, only where the wall faces a floor.
+      if (exterior.has(p.id) && !wallGhost && finish.material && finish.material !== 'plaster') {
+        const lining = this.lining(project, p, floorId);
+        if (lining)
+          this.surface(
+            [lining],
+            p.base + wallBase(p.floorId) + (stack ? 0 : relative(p.floorId)),
+            p.height - p.base,
+            '#eceae5',
+            p.id,
+            'plaster',
+            false,
+            p.base < 0.01,
+          );
+      }
     }
     // Roofs cover their building in the site view and stacked view; cutaways expose the interior.
     if (!buried && (stack || floorId === null))

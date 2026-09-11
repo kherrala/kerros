@@ -51,13 +51,18 @@ export function surfaceTextures(kind: SurfaceFinish) {
       // near WHITE: the texture multiplies the authored room colour, so any headroom it keeps for
       // itself darkens every interior. At the earlier 0.91 ± 0.065 swing a whole storey read as
       // weathered concrete and the room colour-coding disappeared into the blotches.
-      const mottle = kind === 'plaster' ? 0.025 : 0.13;
+      // Masonry used to swing 13% either side of its own colour, which on a whole facade reads as
+      // weathering rather than as material — a wall that looks rained on rather than built. Half
+      // that keeps the grain legible up close without dirtying the elevation.
+      const mottle = kind === 'plaster' ? 0.025 : 0.065;
       let tone = (kind === 'plaster' ? 0.985 : 0.91) + (weather - 0.5) * mottle + (grain - 0.5) * 0.045;
       let relief = 0.55 + (grain - 0.5) * (kind === 'plaster' ? 0.08 : 0.15),
         roughness = 0.88;
       if (kind === 'brick' || kind === 'stone' || kind === 'tile' || kind === 'paving') {
-        const rows = kind === 'brick' ? 8 : 4;
-        const columns = kind === 'stone' ? 2 : 4;
+        // Finer courses. Two stones across a tile made every block the size of a window, which is
+        // what gave a wall its cyclopean, dated look; real ashlar runs far smaller than its openings.
+        const rows = kind === 'brick' ? 8 : 6;
+        const columns = kind === 'stone' ? 4 : 4;
         const row = Math.floor(v * rows);
         const stagger = kind === 'tile' ? 0 : (row % 2) * 0.5;
         const cell = u * columns + stagger;
@@ -68,8 +73,10 @@ export function surfaceTextures(kind: SurfaceFinish) {
         const edge = Math.min(Math.min(fu, 1 - fu) / gapU, Math.min(fv, 1 - fv) / gapV);
         const face = smooth(Math.min(1, edge));
         const variation = hash(Math.floor(cell) % columns, row) - 0.5;
-        tone *= 1 + variation * (kind === 'brick' ? 0.24 : 0.12);
-        tone = tone * face + (kind === 'brick' ? 0.67 : 0.64) * (1 - face);
+        tone *= 1 + variation * (kind === 'brick' ? 0.12 : 0.06);
+        // Mortar sat a third darker than the stone, so every joint drew a hard black line and the
+        // wall read as a grid before it read as a surface. Mortar is paler than brick in life.
+        tone = tone * face + (kind === 'brick' ? 0.86 : 0.88) * (1 - face);
         relief = 0.18 + face * (0.56 + (grain - 0.5) * (kind === 'tile' ? 0.015 : 0.12));
         roughness = kind === 'tile' ? 0.35 + weather * 0.16 + (1 - face) * 0.4 : 0.84 + grain * 0.12;
       } else if (kind === 'oak' || kind === 'timber') {

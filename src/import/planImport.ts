@@ -351,12 +351,16 @@ function emitStairs(
     }
     const centre: Point = [(Math.max(...xs) + Math.min(...xs)) / 2, (Math.max(...ys) + Math.min(...ys)) / 2];
     const stair = createObject('stairs', centre, floorId, 'Stairs');
-    // The treads lie ACROSS the run, so the flight climbs along the shorter side of their block —
-    // which is what makes a stair read as a stair rather than as a plate the size of its landing.
-    const acrossX = width >= depth;
-    stair.width = acrossX ? width : depth;
-    stair.depth = acrossX ? depth : width;
-    stair.rotation = acrossX ? 0 : 90;
+    // A flight is longer the way you walk it than it is wide — treads are shallow and you need a lot
+    // of them — so the run lies along the LONGER side of the block the treads fill. Reading it off
+    // the tread lines instead does not work on the stair most buildings have: a switchback draws as
+    // many lines across the flights as along the stringers between them, and counting them just
+    // picks whichever the drawing happened to have more of.
+    const alongY = depth >= width;
+    stair.width = alongY ? width : depth;
+    stair.depth = alongY ? depth : width;
+    // The renderer runs a flight along the object's own depth axis, which points along -y unturned.
+    stair.rotation = alongY ? 0 : 90;
     stair.servedFloorIds = floorId ? [floorId] : [];
     draft.objects.push(stair);
     report.stairs++;

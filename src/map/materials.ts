@@ -109,14 +109,24 @@ export class MaterialLibrary {
     const key = `glass:${evening}:${lit}`;
     if (!this.materials.has(key)) {
       const material = new THREE.MeshPhysicalMaterial({
-        color: evening ? '#53616b' : '#829b9e',
-        roughness: 0.16,
-        metalness: 0.28,
+        // Daylight glazing was a muted grey-green that went nearly black against a bright wall —
+        // the colour of old float glass in a photograph, not of a window you are looking at. A pale
+        // sky tint with less metal in it reads as glass with daylight behind it.
+        color: evening ? '#5b6a75' : '#b9d2dc',
+        roughness: 0.1,
+        metalness: 0.12,
         clearcoat: 1,
-        clearcoatRoughness: 0.08,
-        envMapIntensity: 1.7,
+        clearcoatRoughness: 0.05,
+        envMapIntensity: 2.1,
         emissive: '#ffc780',
         emissiveIntensity: evening && lit ? 0.65 : 0,
+        // Glass you can see through. It was opaque, so a window was a coloured panel in a wall and
+        // a room stayed a sealed box however many openings it had; the light in the plan came only
+        // from the missing ceiling. Kept well short of invisible — a pane has to read as a pane at
+        // a distance, and a fully clear one leaves nothing but its frame.
+        transparent: true,
+        opacity: evening && lit ? 0.92 : 0.42,
+        depthWrite: false,
         side: THREE.DoubleSide,
       });
       material.userData.shared = true;
