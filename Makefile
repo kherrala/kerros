@@ -6,7 +6,7 @@ PORT     ?= 5173
 DOCS_PORT ?= 5174
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev docs test watch e2e check format format-check types build preview site lib media clean clean-all plan-stats plan-extract plan-apply plan-agent
+.PHONY: help install dev docs test watch e2e check format format-check types build preview serve site lib media clean clean-all plan-stats plan-extract plan-apply plan-agent
 
 help: ## List the available tasks
 	@echo "Kerros — make <task>"
@@ -31,8 +31,14 @@ dev: ## Run the reference apps — hub, editor and viewer (prints the URLs)
 docs: ## Run the VitePress manual
 	$(NPM) run docs:dev -- --port $(DOCS_PORT) --strictPort
 
-preview: build ## Serve the production build locally
+preview: build ## Build the reference apps and serve them from dist/
 	$(NPM) run preview -- --port $(PORT) --strictPort
+
+serve: ## Serve whatever is already in dist/ — what to use after `make site`
+	@test -f dist/index.html || { echo "dist/ has no index.html — run 'make site' (or 'make build') first"; exit 2; }
+	@echo "  http://127.0.0.1:$(PORT)/"
+	@echo
+	npx vite preview --outDir dist --host 127.0.0.1 --port $(PORT) --strictPort
 
 # ——— Checking things
 
@@ -61,7 +67,7 @@ check: format-check types test ## Formatting, types and tests — run this befor
 build: ## Type-check and build the reference apps
 	$(NPM) run build
 
-site: ## Build the full published site (apps + manual) into dist/
+site: ## Build the full published site (apps + manual) into dist/ — serve it with `make serve`
 	$(NPM) run build:site
 
 lib: ## Build the publishable packages

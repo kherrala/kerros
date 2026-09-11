@@ -1,11 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { addBarrier, holdAngle, snapPoint } from './geometry';
+import { addBarrier, holdAngle, removeBarrier, snapPoint } from './geometry';
 import { axisDelta, axisOf, fitOpening, floorOutline, mainAxis, proposeWall, referenceAxis } from './walls';
 import { exteriorWalls } from '../map/exteriors';
 import { enclosedRegion, enclosedRegions, refitEnclosedRooms } from './spaces';
 import { barrierEnds, centroid, closeRing, ringArea } from './geometry';
 import { createObject } from './factory';
 import { newProject } from './testFixtures';
+import { validateProject } from './validate';
 import type { Point, ProjectDocument, Ring } from './types';
 import { uid } from './types';
 
@@ -335,6 +336,36 @@ describe('rooms follow the walls that enclose them', () => {
     expect(enclosedRegion(p, 'floor-ground', [-3, 3])).toBeNull();
     expect(enclosedRegion(p, 'floor-ground', [5, 9])).toBeNull();
   });
+  it('picks the island, not the room it stands in', () => {
+    // A walled enclosure inside a room — a sauna, a WC, a lift core — is contained by the region
+    // around it, so both answer to a click inside the island. The island is what was clicked.
+    const p = boxed();
+    p.barriers = p.barriers.filter(b => !barrierEnds(p, b).every(e => Math.abs(e[0] - 5) < 0.01));
+    for (const [a, b] of [
+      [
+        [2, 2],
+        [4, 2],
+      ],
+      [
+        [4, 2],
+        [4, 4],
+      ],
+      [
+        [4, 4],
+        [2, 4],
+      ],
+      [
+        [2, 4],
+        [2, 2],
+      ],
+    ] as [Point, Point][])
+      addBarrier(p, a, b, 'floor-ground', 'wall');
+    const inside = enclosedRegion(p, 'floor-ground', [3, 3]);
+    const around = enclosedRegion(p, 'floor-ground', [8, 3]);
+    expect(inside).not.toBeNull();
+    expect(Math.abs(ringArea(inside!))).toBeLessThan(6); // the island, not the 60 m² floor
+    expect(Math.abs(ringArea(around!))).toBeGreaterThan(20);
+  });
   it('declines to re-fit when one region is claimed by two rooms', () => {
     // Removing the divider leaves ONE region where there were two, and both rooms would grow to
     // fill it — two rooms drawn over each other. Refusing keeps the plan honest and leaves the
@@ -346,5 +377,48 @@ describe('rooms follow the walls that enclose them', () => {
     p.barriers = p.barriers.filter(b => b.id !== divider.id);
     expect(refitEnclosedRooms(p, 'floor-ground', before)).toBe(0);
     expect(p.objects.filter(o => o.kind === 'room').map(o => JSON.stringify(o.rings))).toEqual(shapes);
+  });
+});
+
+describe('removing a wall takes its openings with it', () => {
+  it('leaves no opening pointing at a wall that is gone', () => {
+    const p = newProject();
+    const f = 'floor-ground';
+    for (const [a, b] of [
+      [
+        [0, 0],
+        [10, 0],
+      ],
+      [
+        [10, 0],
+        [10, 6],
+      ],
+      [
+        [10, 6],
+        [0, 6],
+      ],
+      [
+        [0, 6],
+        [0, 0],
+      ],
+      [
+        [5, 0],
+        [5, 6],
+      ],
+    ] as [Point, Point][])
+      addBarrier(p, a, b, f, 'wall');
+    const divider = p.barriers.find(b => barrierEnds(p, b).every(e => Math.abs(e[0] - 5) < 0.01))!;
+    const door = createObject('door', [5, 3], f, 'Door');
+    door.barrierId = divider.id;
+    door.offset = 3;
+    door.width = 0.9;
+    p.objects.push(door);
+    expect(() => validateProject(p)).not.toThrow();
+    removeBarrier(p, divider.id);
+    // The door went with its wall. Left behind, it points at nothing and the document refuses the
+    // whole edit — which is how deleting a wall to join two rooms came to do nothing at all.
+    expect(p.objects.some(o => o.id === door.id)).toBe(false);
+    expect(p.barriers.some(b => b.id === divider.id)).toBe(false);
+    expect(() => validateProject(p)).not.toThrow();
   });
 });

@@ -68,6 +68,7 @@ import {
   closeRing,
   distance,
   duplicateFloor,
+  removeBarrier,
   removeFloor,
   objectArea,
   objectPosition,
@@ -572,7 +573,7 @@ export function SitePlanner({
       const existing = project.objects.find(
         o => o.floorId === floorId && o.kind === 'room' && o.rings?.length && pointInRing(raw, o.rings[0]),
       );
-      commit(p => {
+      const done = commit(p => {
         if (existing) {
           // Clicking inside a room that has drifted from its walls re-fits it instead of stacking a
           // second room on top of the first. Same operation as a wall drag performs, asked for
@@ -596,11 +597,14 @@ export function SitePlanner({
         p.objects.push(room);
         setSelected(room.id);
       });
-      notify(
-        existing
-          ? `“${existing.name}” re-fitted to the walls around it · ${Math.abs(ringArea(ring)).toFixed(1)} m²`
-          : `Space taken from the walls · ${Math.abs(ringArea(ring)).toFixed(1)} m²`,
-      );
+      // Only when it took. A rejected commit has already said why, and a second toast claiming
+      // success on top of it would contradict the first.
+      if (done)
+        notify(
+          existing
+            ? `“${existing.name}” re-fitted to the walls around it · ${Math.abs(ringArea(ring)).toFixed(1)} m²`
+            : `Space taken from the walls · ${Math.abs(ringArea(ring)).toFixed(1)} m²`,
+        );
       return;
     }
     const anchor = draft.at(-1);
@@ -2466,8 +2470,7 @@ export function SitePlanner({
                 const wallId = merge.wallId;
                 setMerge(null);
                 reshape(p => {
-                  p.barriers = p.barriers.filter(b => b.id !== wallId);
-                  p.junctions = p.junctions.filter(j => p.barriers.some(b => b.startId === j.id || b.endId === j.id));
+                  removeBarrier(p, wallId);
                   pruneOntology(p);
                 });
                 select(null);
@@ -2486,9 +2489,9 @@ export function SitePlanner({
                   const wallId = merge.wallId;
                   setMerge(null);
                   commit(p => {
-                    p.barriers = p.barriers.filter(b => b.id !== wallId);
-                    p.junctions = p.junctions.filter(j => p.barriers.some(b => b.startId === j.id || b.endId === j.id));
+                    removeBarrier(p, wallId);
                     mergeSpaces(p, keep.id, absorbed.id);
+                    pruneOntology(p);
                   });
                   select(null);
                 }}

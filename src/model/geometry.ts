@@ -269,6 +269,32 @@ export function joinAt(project: ProjectDocument, point: Point, floorId: string |
   }
   return id;
 }
+/** Take a wall out of the document, with everything that only existed because it was there.
+ *
+ *  A wall is never alone: doors and windows hang in it, junctions exist to hold its ends, and route
+ *  nodes may be bound to those openings. Removing the barrier alone leaves each of those pointing at
+ *  something that is gone, and the document refuses the whole edit — so the delete appears to do
+ *  nothing at all, which is worse than either outcome. Everything that removes a wall goes through
+ *  here so that cannot happen in one place and not another.
+ *
+ *  A junction survives if any other wall still ends there; the ontology is pruned by the caller,
+ *  which knows whether spaces are also being merged. */
+export function removeBarrier(project: ProjectDocument, barrierId: string) {
+  const openings = new Set(project.objects.filter(o => o.barrierId === barrierId).map(o => o.id));
+  project.objects = project.objects.filter(o => !openings.has(o.id));
+  for (const o of project.objects) if (o.parentId && openings.has(o.parentId)) o.parentId = undefined;
+  project.barriers = project.barriers.filter(b => b.id !== barrierId);
+  project.junctions = project.junctions.filter(j => project.barriers.some(b => b.startId === j.id || b.endId === j.id));
+  if (project.navNodes?.length) {
+    const alive = new Set(project.objects.map(o => o.id));
+    project.navNodes = project.navNodes.filter(n => n.objectId === undefined || alive.has(n.objectId));
+    const nodes = new Set(project.navNodes.map(n => n.id));
+    project.navEdges = (project.navEdges ?? []).filter(
+      e => nodes.has(e.aId) && nodes.has(e.bId) && (e.objectId === undefined || alive.has(e.objectId)),
+    );
+  }
+}
+
 export function addBarrier(
   project: ProjectDocument,
   a: Point,

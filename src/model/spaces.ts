@@ -30,11 +30,21 @@ import { isSpace, type Point, type ProjectDocument, type Ring, type SiteObject }
  *  one another. Returns null when the point is not enclosed — outside the building, or inside a
  *  boundary with a gap in it, where the region reaches the edge of the extent. */
 export function enclosedRegion(project: ProjectDocument, floorId: string | null, point: Point): Ring | null {
-  for (const ring of enclosedRegions(project, floorId)) if (pointInRing(point, ring)) return ring;
-  return null;
+  // The SMALLEST region containing the point, as spaceAt picks the smallest space: a walled island
+  // — a sauna in a bathroom, a WC off a hall, a lift core in a lobby — sits inside the region around
+  // it, and both contain a click in the island. The island is the one that was clicked.
+  let best: Ring | null = null;
+  for (const ring of enclosedRegions(project, floorId))
+    if (pointInRing(point, ring) && (!best || Math.abs(ringArea(ring)) < Math.abs(ringArea(best)))) best = ring;
+  return best;
 }
 
 /** Every enclosed region on a floor, largest first.
+ *
+ *  Outer rings only: a region with a walled island inside it comes back with the island filled in,
+ *  so its area overstates the floor you could stand on by the island's footprint. Carrying the holes
+ *  through as further rings is the complete answer and changes this signature; until then the island
+ *  is its own region in the list, and enclosedRegion returns it for a click inside it.
  *
  *  The same difference as `enclosedRegion`, read whole rather than probed: one subtraction gives all
  *  the rooms the walls describe. Regions touching the extent are open to the outside and dropped,
