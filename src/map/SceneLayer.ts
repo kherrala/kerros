@@ -1,14 +1,24 @@
 import * as THREE from 'three';
+import polygonClipping from 'polygon-clipping';
 import {
   MercatorCoordinate,
   type CustomLayerInterface,
   type Map as MapLibreMap,
   type CustomRenderMethodInput,
 } from 'maplibre-gl';
-import type { Floor, MaterialKind, Point, ProjectDocument, SiteObject, Slope } from '../model/types';
+import type { Floor, MaterialKind, Point, ProjectDocument, Ring, SiteObject, Slope } from '../model/types';
 import type { Route } from '../model/navigation';
 import { legStepIndices } from './route';
-import { objectArea, objectPosition, objectRotation, openRing, rectangle, rotate, toLngLat } from '../model/geometry';
+import {
+  closeRing,
+  objectArea,
+  objectPosition,
+  objectRotation,
+  openRing,
+  rectangle,
+  rotate,
+  toLngLat,
+} from '../model/geometry';
 import { COLORS, objectRings, wallPieces } from './features';
 import { makeFixture, makeRoof } from './architecture';
 import { MaterialLibrary } from './materials';
@@ -56,6 +66,8 @@ export class SceneLayer implements CustomLayerInterface {
   private unit = 1;
   private project?: ProjectDocument;
   private stack = false;
+  /** Per-storey ghost strength, shared out across however many levels the stack layers up. */
+  private ghostAlpha = 0.17;
   private activeFloor: string | null = null;
   private hovered: string | null = null;
   private rebase = 0;
@@ -269,7 +281,7 @@ export class SceneLayer implements CustomLayerInterface {
     const surfaceMaterial =
       override ??
       (ghost
-        ? this.materials.ghost(color)
+        ? this.materials.ghost(color, this.ghostAlpha)
         : material
           ? this.materials.get(material, color)
           : this.materials.solid(color));
@@ -468,6 +480,15 @@ export class SceneLayer implements CustomLayerInterface {
     const outlineOnly = new Set(
       structureOverview ? view.levels.filter(f => f.elevation > activeF!.elevation).map(f => f.id) : [],
     );
+    // Storeys UNDER the one in focus are drawn as a shell: exterior walls and one slab, nothing
+    // inside. Looking down a stack you cannot see a lower storey's partitions through its own
+    // ceiling anyway, so building them is geometry nobody sees — and on a tall building it is most
+    // of the scene. The shell still says where the storey is and how far it reaches.
+    const shellBelow = new Set(
+      stack && activeF
+        ? view.levels.filter(f => f.buildingId === activeF.buildingId && f.elevation < activeF.elevation).map(f => f.id)
+        : [],
+    );
     this.center = MercatorCoordinate.fromLngLat(toLngLat([0, 0], project.origin));
     this.unit = this.center.meterInMercatorCoordinateUnits();
     this.transform
@@ -509,6 +530,13 @@ export class SceneLayer implements CustomLayerInterface {
     // A level is below grade if its own floor sits under 0 — used to keep buried levels out of the
     // above-ground views (see the visibility rules below).
     const belowGrade = (fid: string | null) => !!fid && (floors.get(fid)?.elevation ?? 0) < 0;
+    // Is there anything under the level in focus, in its own building? Only then does its plate have
+    // to be see-through — on a ground floor or a single-storey site it stays solid.
+    const levelsBelowActive =
+      !!activeF && view.levels.some(f => f.buildingId === activeF.buildingId && f.elevation < activeF.elevation);
+    // Ghosts do not sort, so each layer multiplies into the next: the strength that lets a house's
+    // two storeys read through one another turns a tower into a solid block. Share one budget out.
+    this.ghostAlpha = Math.max(0.17, Math.min(0.38, 1 / Math.max(1, view.levels.length)));
     // An entresol is a partial level — a gallery ringing a void — so on its own it is a thin loop
     // floating over nothing. The storey it overlooks is what gives it something to be above, and in
     // 2D the plan has always drawn that; 3D showed the loop alone. Carry the level below with it.
@@ -537,6 +565,7 @@ export class SceneLayer implements CustomLayerInterface {
       // tower — hangs over the surrounding streets with no ground around it.
       if (!buried && belowGrade(o.floorId)) continue;
       if (o.floorId && outlineOnly.has(o.floorId)) continue;
+      if (o.floorId && shellBelow.has(o.floorId)) continue;
       if (structureOverview && o.floorId !== floorId && o.kind !== 'zone') continue;
       const z = stack ? (floors.get(o.floorId ?? '')?.elevation ?? 0) : relative(o.floorId);
       const indoorFinish = o.floorId !== null && (o.kind === 'room' || o.kind === 'zone');
@@ -549,6 +578,10 @@ export class SceneLayer implements CustomLayerInterface {
       // there is nothing to see through to.
       const activeLevel = floorId !== null && o.floorId === floorId;
       const ghosted = !!(stack && floorId !== null && o.floorId && o.floorId !== floorId);
+      // Looking down a stack, the active storey's plate is a lid over everything beneath it: pick the
+      // top floor and the ones below vanish, however faithfully they are drawn. Only its own plate
+      // has to give — its walls stay solid, so the level still reads as the one in focus.
+      const lidsOverBelow = stack && activeLevel && levelsBelowActive;
       const color =
         this.mapStyle.objectColor?.(o) ??
         (activeLevel
@@ -606,6 +639,8 @@ export class SceneLayer implements CustomLayerInterface {
           // whole storey reads as paper.
           ghosted ? undefined : (o.material ?? (indoorFinish ? 'plaster' : undefined)),
           ghosted,
+          false,
+          lidsOverBelow && indoorFinish ? this.materials.plate(color) : undefined,
         );
       } else if (['stairs', 'elevator', 'turnstile', 'door', 'gate', 'window'].includes(o.kind)) {
         if (!ghosted) this.opening(project, o, z);
@@ -621,6 +656,24 @@ export class SceneLayer implements CustomLayerInterface {
         );
       }
     }
+    // One slab per shell storey — the ceiling you look down onto — unioned from its areas so a
+    // wing or a bay is included and the interior divisions are not. One surface, one union, per
+    // storey: the whole point of the shell is that it costs a fraction of the real floor.
+    for (const fid of shellBelow) {
+      const areas = (index.objects.get(fid) ?? []).filter(
+        o => o.rings?.length && (o.kind === 'room' || o.kind === 'zone'),
+      );
+      if (!areas.length) continue;
+      const polygons = areas.map(o => [closeRing(o.rings![0])] as Ring[]);
+      let merged: Ring[][];
+      try {
+        merged = polygonClipping.union(polygons[0], ...polygons.slice(1)) as unknown as Ring[][];
+      } catch {
+        continue; // degenerate footprint: no slab is better than a wrong one
+      }
+      const z = floors.get(fid)?.elevation ?? 0;
+      for (const pg of merged) this.surface(pg, z + LIFT + SLAB, SLAB, '#e5e4df', `shell:${fid}`, undefined, true);
+    }
     // The level below brings its walls too, or its rooms read as floating colour.
     const allPieces = [...wallPieces(project, floorId, stack), ...(under ? wallPieces(project, under.id, false) : [])];
     for (const p of allPieces) {
@@ -628,6 +681,7 @@ export class SceneLayer implements CustomLayerInterface {
         continue;
       if (!buried && belowGrade(p.floorId)) continue;
       if (p.floorId && outlineOnly.has(p.floorId)) continue;
+      if (p.floorId && shellBelow.has(p.floorId) && !exterior.has(p.id)) continue;
       if (structureOverview && p.floorId !== floorId && !exterior.has(p.id)) continue;
       const finish = finishes.get(p.id)!;
       // Every wall but the active floor's turns translucent in the stacked view — including the

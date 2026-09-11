@@ -17,6 +17,26 @@ export class MaterialLibrary {
     }
     return this.materials.get(key)!;
   }
+  /** The active storey's own plate, when the stack has storeys under it. Opaque enough to read as
+   *  the floor you are standing on, sheer enough that the levels beneath show through it — without
+   *  this the plate is a lid and "All floors" shows one. depthWrite stays on: the plate must still
+   *  occlude its own walls' hidden faces, and the ghosts below carry depthWrite off already, so they
+   *  blend rather than fight it. */
+  plate(color: string, roughness = 0.72) {
+    const key = `plate:${color}:${roughness}`;
+    if (!this.materials.has(key)) {
+      const material = new THREE.MeshStandardMaterial({
+        color,
+        roughness,
+        side: THREE.DoubleSide,
+        transparent: true,
+        opacity: 0.55,
+      });
+      material.userData.shared = true;
+      this.materials.set(key, material);
+    }
+    return this.materials.get(key)!;
+  }
   /** A vertex-coloured twin of an existing material, so geometry can carry baked shading without
    *  doubling the palette. Cached per source material: everything drawn with the twin must supply a
    *  colour attribute, since a merge needs matching attributes across all its geometries. */
@@ -31,8 +51,8 @@ export class MaterialLibrary {
     return this.materials.get(key)!;
   }
   /** Translucent variant for de-emphasised floors in the stacked view. */
-  ghost(color: string) {
-    const key = `ghost:${color}`;
+  ghost(color: string, opacity = 0.17) {
+    const key = `ghost:${color}:${opacity}`;
     if (!this.materials.has(key)) {
       // A ghost tinted with its own colour is invisible: interiors are pale, backgrounds are pale,
       // and pale-on-pale at low opacity measures 1.0:1 against the map — the building disappears.
@@ -42,16 +62,17 @@ export class MaterialLibrary {
       // the same grey cannot show you that the storeys differ. Multiplying preserves the hue and
       // chroma relationships the floor palette was built to carry.
       //
-      // Opacity stays low, because a ghost is never seen alone: seventeen storeys layer seventeen of
-      // them with depthWrite off and nothing sorting back-to-front, and anything stronger compounds
-      // into an opaque mass.
+      // Opacity is shared out across the stack, because a ghost is never seen alone: seventeen
+      // storeys layer seventeen of them with depthWrite off and nothing sorting back-to-front, so a
+      // value that reads well on a house compounds into an opaque mass on a tower. The caller scales
+      // it by how many levels are actually stacked.
       const tint = new THREE.Color(color).multiplyScalar(0.42);
       const material = new THREE.MeshStandardMaterial({
         color: tint,
         roughness: 0.9,
         side: THREE.DoubleSide,
         transparent: true,
-        opacity: 0.17,
+        opacity,
         depthWrite: false,
       });
       material.userData.shared = true;
