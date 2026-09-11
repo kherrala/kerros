@@ -249,3 +249,35 @@ describe('an oblique doorway the Manhattan pass cannot see', () => {
     expect(obliques(p)).toHaveLength(0);
   });
 });
+
+describe('windows are read from their jambs', () => {
+  // A bank of three casements as Vertex draws them: a small block at each jamb, the glass between
+  // left empty, and a 100 mm mullion between neighbours. The gap INSIDE a window is seven times the
+  // gap between two of them, so no clustering by gap size can tell them apart — and clustering by a
+  // gap wide enough to separate the windows splits each one down its own middle instead.
+  const bank: PlanEntity[] = [
+    ...HOUSE.filter(e => e.layer !== '26_IKKUNAT'),
+    ...[
+      [2.0, 2.05, 2.75, 2.8],
+      [2.9, 2.95, 3.65, 3.7],
+      [3.8, 3.85, 4.55, 4.6],
+    ].flatMap(([a, b, c, d]) => [
+      { type: 'LINE' as const, layer: '26_IKKUNAT', a: [a, 7.7] as Point, b: [b, 7.7] as Point },
+      { type: 'LINE' as const, layer: '26_IKKUNAT', a: [c, 7.7] as Point, b: [d, 7.7] as Point },
+      // The sill, spanning the whole opening — the stroke whose sampling used to fill the glass in.
+      { type: 'LINE' as const, layer: '26_IKKUNAT', a: [a, 7.85] as Point, b: [d, 7.85] as Point },
+    ]),
+  ];
+  it('reads three windows where three are drawn, not one and not none', () => {
+    const p = newProject();
+    const report = importPlanEntities(p, structuredClone(bank), { floorId: 'floor-ground' });
+    expect(report.windows).toBe(3);
+    const widths = p.objects
+      .filter(o => o.kind === 'window')
+      .map(o => o.width)
+      .sort();
+    // Each is its own opening, about 0.8 m — not one 2.6 m hole, and not nothing at all.
+    for (const w of widths) expect(w).toBeGreaterThan(0.6);
+    for (const w of widths) expect(w).toBeLessThan(1);
+  });
+});

@@ -79,6 +79,23 @@ export function mergeRuns(segments: FaceSegment[], bridge: number, openingGaps?:
 
 /** Every point a layer's geometry touches, sampled densely along strokes and arcs — the raw
  *  material for "is there a door/window symbol standing in this opening?" scoring. */
+/** A symbol's own vertices, unsampled.
+ *
+ *  symbolPoints walks every stroke at 20 cm so a door swing reads as a cloud standing in its
+ *  opening, which is what finding a door needs. It is the wrong picture of a window: a window is
+ *  drawn as a block at each jamb with the glass between them left empty, and the sampling fills that
+ *  emptiness in at 20 cm intervals — so the one feature that says where a window begins and ends is
+ *  the one thing sampling destroys. Where the shape of the symbol is the information, read the
+ *  vertices. */
+export function symbolVertices(entities: PlanEntity[], layer: RegExp): Point[] {
+  const pts: Point[] = [];
+  for (const e of entities) {
+    if (!layer.test(e.layer)) continue;
+    for (const p of [e.a, e.b, e.at, e.center]) if (p) pts.push(p);
+    for (const p of e.points ?? []) pts.push(p);
+  }
+  return pts;
+}
 export function symbolPoints(entities: PlanEntity[], layer: RegExp): Point[] {
   const pts: Point[] = [];
   const sample = (a: Point, b: Point) => {

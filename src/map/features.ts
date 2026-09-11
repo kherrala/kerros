@@ -86,24 +86,61 @@ export function wallPieces(project: ProjectDocument, floorId: string | null, sta
       meeting.set(id, list);
     }
   }
-  /** How far past the junction this wall must run to close the corner.
+  /** How far past the junction this wall must run, positive to close a corner and negative to stop
+   *  short of one.
    *
    *  Walls meet on their centrelines, so two perpendicular walls each stop half a thickness short of
    *  the outside face and the corner shows a square notch — a butt join. Running on by the
-   *  NEIGHBOUR's half-thickness squares it off: at an L the missing corner is filled exactly, and at
-   *  a T the stem reaches the through-wall's far face, where the through wall's own body covers it.
-   *  Collinear neighbours are skipped — a wall continuing straight on already abuts. */
+   *  NEIGHBOUR's half-thickness squares it off, which is exactly right at an L.
+   *
+   *  At a T it is exactly wrong. The stem then reaches the through-wall's FAR face, and where the
+   *  through wall is the building's envelope that face is the outside of the building: every
+   *  partition landed a cap coplanar with the facade, which is the stripe of z-fighting you could
+   *  see down the outside of an imported house. A stem has no corner to close — the through wall
+   *  already covers the junction — so it stops just inside the near face, where its cap is buried in
+   *  the wall it dies into and cannot be seen from either side.
+   *
+   *  Collinear neighbours are skipped: a wall continuing straight on already abuts. A wall that
+   *  itself continues through the junction is not a stem and keeps the corner behaviour, so a
+   *  crossing is still filled. */
   const overrun = (barrier: Barrier, junctionId: string, self: number): number => {
-    let most = 0;
-    for (const other of meeting.get(junctionId) ?? []) {
-      if (other === barrier || other.floorId !== barrier.floorId) continue;
+    const axis = (other: Barrier) => {
       const oa = junctions.get(other.startId),
         ob = junctions.get(other.endId);
-      if (!oa || !ob) continue;
+      if (!oa || !ob) return null;
       const otherAngle = (Math.atan2(ob[1] - oa[1], ob[0] - oa[0]) * 180) / Math.PI;
-      // Axis difference in [0, 90]: 0 is a straight continuation, 90 a square corner.
-      const delta = Math.abs(((((otherAngle - self) % 180) + 180) % 180) - 90);
-      if (delta > 86) continue; // effectively collinear — nothing to close
+      // Difference in [0, 90]: 90 is a straight continuation, 0 a square corner.
+      return Math.abs(((((otherAngle - self) % 180) + 180) % 180) - 90);
+    };
+    const others = (meeting.get(junctionId) ?? []).filter(o => o !== barrier && o.floorId === barrier.floorId);
+    const crossing = others.filter(o => {
+      const d = axis(o);
+      return d !== null && d <= 86;
+    });
+    // Do we run on through this junction, or does it end here?
+    const weContinue = others.some(o => {
+      const d = axis(o);
+      return d !== null && d > 86;
+    });
+    // Does something else run on through it? Two perpendicular neighbours in line with each other is
+    // a wall passing by, which is what makes this a T rather than a corner.
+    const theyContinue = crossing.some(o =>
+      crossing.some(q => {
+        if (q === o) return false;
+        const a1 = axis(o),
+          a2 = axis(q);
+        return a1 !== null && a2 !== null && Math.abs(a1 - a2) < 4;
+      }),
+    );
+    if (!weContinue && theyContinue) {
+      // Back to just inside the through wall's near face. The 20 mm keeps the cap buried rather than
+      // flush, which is the difference between hidden and fighting for the same pixels.
+      const thickest = Math.max(...crossing.map(o => o.thickness));
+      return -Math.max(0, thickest / 2 - 0.02);
+    }
+    let most = 0;
+    for (const other of crossing) {
+      const delta = axis(other)!;
       most = Math.max(most, other.thickness / 2 / Math.max(Math.cos((delta * Math.PI) / 180), 0.35));
     }
     return most;

@@ -36,7 +36,7 @@ import {
   resolvePartitionGap,
   type ResolvedOpening,
 } from './openings';
-import { faceSegments, mergeRuns, symbolPoints } from './runs';
+import { faceSegments, mergeRuns, symbolPoints, symbolVertices } from './runs';
 import { addGap, along, closeCorners, pairWalls, snapEnds, type Wall } from './walls';
 
 /** Import a floor's worth of plan entities into `draft`. Call inside a transaction. */
@@ -52,7 +52,9 @@ export function importPlanEntities(
   const regional = planRegion(entities, layers.interiorFace);
   const { envelope, partitions } = reconstructWalls(regional, layers, report);
   const doorPts = symbolPoints(regional, layers.doors);
-  const windowPts = symbolPoints(regional, layers.windows);
+  // Vertices, not samples: a window is read from where its jambs are, and sampling fills the glass
+  // between them. A door is read from the cloud its swing makes, and wants the samples.
+  const windowPts = symbolVertices(regional, layers.windows);
   // Envelope openings come from symbol clusters; partition openings from the paired face gaps.
   const openings = new Map<Wall, ResolvedOpening[]>(
     envelope.map(w => [w, resolveEnvelopeOpenings(w, doorPts, windowPts)]),

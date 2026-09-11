@@ -61,16 +61,41 @@ export function resolveEnvelopeOpenings(w: Wall, doorPts: Point[], windowPts: Po
       width: Math.min(3, Math.max(0.8, hi - lo + 0.15)),
     }),
   );
-  const windows = clusters(inBand(windowPts, w, w.lo, w.hi), 0.35, 4, 0.35)
-    .map(
-      ([lo, hi]): ResolvedOpening => ({
-        kind: 'window',
-        centre: (lo + hi) / 2,
-        width: Math.min(3, Math.max(0.4, hi - lo + 0.1)),
-      }),
-    )
-    .filter(win => !doors.some(d => Math.abs(d.centre - win.centre) < (d.width + win.width) / 2 + 0.1));
+  const windows = windowsFromJambs(inBand(windowPts, w, w.lo, w.hi)).filter(
+    win => !doors.some(d => Math.abs(d.centre - win.centre) < (d.width + win.width) / 2 + 0.1),
+  );
   return [...doors, ...windows];
+}
+
+/** Read windows off their jambs.
+ *
+ *  A window symbol is not one blob of geometry: it is a dense little block at each jamb with the
+ *  glass between them drawn as nothing at all. So the biggest gap in a window is INSIDE it — around
+ *  0.7 m for an ordinary casement — while the gap between two windows in a bank is the mullion, a
+ *  tenth of a metre. Clustering by gap size therefore cannot work and did not: splitting on anything
+ *  wide enough to separate two windows split every window down its own middle, and the halves were
+ *  then too short to count as openings and were dropped. A three-window bank imported as no windows
+ *  at all.
+ *
+ *  Reading it as the drawing draws it: cluster tightly to find the jambs, then take each consecutive
+ *  PAIR of jambs a plausible pane apart as one window. A gap too narrow to be glass is the mullion
+ *  between two windows, and the walk simply steps over it to start the next pair. */
+function windowsFromJambs(alongs: number[]): ResolvedOpening[] {
+  // 80 mm: wider than the few centimetres a jamb block spans, narrower than any mullion.
+  const jambs = clusters(alongs, 0.08, 1, 0);
+  const out: ResolvedOpening[] = [];
+  for (let i = 0; i + 1 < jambs.length; ) {
+    const glass = jambs[i + 1][0] - jambs[i][1];
+    // A pane: too narrow and this is a mullion between two windows, too wide and the two jambs
+    // belong to different openings with a stretch of blank wall between them.
+    if (glass >= 0.25 && glass <= 3) {
+      const lo = jambs[i][0],
+        hi = jambs[i + 1][1];
+      out.push({ kind: 'window', centre: (lo + hi) / 2, width: Math.max(0.4, hi - lo) });
+      i += 2;
+    } else i += 1;
+  }
+  return out;
 }
 
 /** Partition gaps: the gap is the opening; symbols say the kind, and no symbol means a passage. */
