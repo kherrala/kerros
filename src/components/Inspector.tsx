@@ -981,7 +981,7 @@ export function Inspector(props: Props) {
           </button>
         </div>
       )}
-      {!editing && (
+      {!editing && monitoring && (
         <div className="viewer-note">
           <Unplug size={14} />
           Read-only status feed

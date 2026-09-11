@@ -1341,11 +1341,15 @@ export function SitePlanner({
             <div className="sidebar-scroll">
               {activeTab === 'structure' ? (
                 <>
-                  {editing && (
+                  {!readOnly && (
                     <button
                       className="anchor-entry"
                       title="Where the plan is pinned and which way it faces"
                       onClick={() => {
+                        // Reachable from the plan viewer too — landing there after reopening a
+                        // project and finding no way to square it onto its plot is the whole
+                        // complaint. Adjusting the anchor is an edit, so take the editor with you.
+                        if (!editing) enterEdit();
                         select(null);
                         setInspectorOpen(true);
                       }}
