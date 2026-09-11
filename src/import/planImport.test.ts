@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { importPlanEntities, type PlanEntity } from './planImport';
-import { validateProject } from '../schema';
+import { validateProject, type Point } from '../schema';
 import { newProject } from '../model/testFixtures';
 
 // A synthetic two-room house in the prefab-CAD idiom the importer understands: the envelope drawn
@@ -123,5 +123,48 @@ describe('deterministic plan import', () => {
     // The rooms connect through the open boundary, read back as a portal.
     const rooms = new Set(p.objects.filter(o => o.kind === 'room').map(o => o.id));
     expect((p.portals ?? []).some(x => rooms.has(x.a) && rooms.has(x.b))).toBe(true);
+  });
+});
+
+// Some offices draw a wall as four lines — sheathing, both sides of the stud frame, inner lining —
+// rather than two. Nearest-partner pairing then reads two thin walls standing inside each other.
+describe('walls drawn with more than two face lines', () => {
+  // A 6 x 4 m box whose every wall is drawn as FOUR parallel lines 0.30 m apart: the outer pair on
+  // the exterior-face layer, the inner pair on the interior-face one. Nearest-partner pairing reads
+  // that as two 0.25 m walls standing inside each other.
+  const line = (layer: string, x1: number, y1: number, x2: number, y2: number) => ({
+    type: 'LINE' as const,
+    layer,
+    a: [x1, y1] as Point,
+    b: [x2, y2] as Point,
+  });
+  const OUT = '12_ULKOPINTA',
+    IN = '13_SISAPINTA';
+  const FOUR_LINE: PlanEntity[] = [
+    line(OUT, 0, 0, 6, 0),
+    line(OUT, 0, 0.05, 6, 0.05),
+    line(IN, 0, 0.25, 6, 0.25),
+    line(IN, 0, 0.3, 6, 0.3),
+    line(OUT, 0, 4, 6, 4),
+    line(OUT, 0, 3.95, 6, 3.95),
+    line(IN, 0, 3.75, 6, 3.75),
+    line(IN, 0, 3.7, 6, 3.7),
+    line(OUT, 0, 0, 0, 4),
+    line(OUT, 0.05, 0, 0.05, 4),
+    line(IN, 0.25, 0, 0.25, 4),
+    line(IN, 0.3, 0, 0.3, 4),
+    line(OUT, 6, 0, 6, 4),
+    line(OUT, 5.95, 0, 5.95, 4),
+    line(IN, 5.75, 0, 5.75, 4),
+    line(IN, 5.7, 0, 5.7, 4),
+    { type: 'TEXT', layer: '55_HUONETUNNUKSET', at: [3, 2], text: 'VAR' },
+  ];
+  it('reads one wall per side, spanning the outermost faces', () => {
+    const p = newProject();
+    const report = importPlanEntities(p, structuredClone(FOUR_LINE), { floorId: 'floor-ground' });
+    expect(report.walls).toBe(4);
+    // 0 -> 0.30 is the full wall, not the 0.20 m between the inner pair.
+    expect(p.barriers.every(b => Math.abs(b.thickness - 0.3) < 0.02)).toBe(true);
+    expect(() => validateProject(structuredClone(p))).not.toThrow();
   });
 });

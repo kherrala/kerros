@@ -61,7 +61,41 @@ export function pairWalls(
       gaps: gaps.map(g => [...g] as [number, number]),
     });
   }
-  return walls;
+  return mergeSolids(walls);
+}
+
+/** Collapse walls whose bodies occupy the same space into one spanning the outermost faces.
+ *
+ *  Pairing consumes each run once and takes the nearest partner, which is right when a wall is drawn
+ *  as exactly two face lines. Some offices draw four — sheathing, both sides of the stud frame, and
+ *  the inner lining — and those pair up as two thin walls standing inside each other. Two walls
+ *  cannot occupy the same volume, so where the bodies overlap the drawing meant one wall, and its
+ *  faces are the outermost lines. On a two-line drawing no two walls overlap and this does nothing. */
+function mergeSolids(walls: Wall[]): Wall[] {
+  const out: Wall[] = [];
+  for (const w of walls) {
+    const host = out.find(
+      o =>
+        o.axis === w.axis &&
+        // Bodies intersect across the wall, not merely run near each other.
+        Math.abs(o.c - w.c) < (o.thickness + w.thickness) / 2 - 1e-6 &&
+        // …and they cover the same stretch along it.
+        Math.min(o.hi, w.hi) - Math.max(o.lo, w.lo) > 0,
+    );
+    if (!host) {
+      out.push(w);
+      continue;
+    }
+    const lo = Math.min(host.c - host.thickness / 2, w.c - w.thickness / 2);
+    const hi = Math.max(host.c + host.thickness / 2, w.c + w.thickness / 2);
+    host.c = (lo + hi) / 2;
+    host.thickness = Math.round((hi - lo) * 1000) / 1000;
+    host.lo = Math.min(host.lo, w.lo);
+    host.hi = Math.max(host.hi, w.hi);
+    // An opening is only an opening where both readings agree it is one.
+    host.gaps = host.gaps.filter(g => w.gaps.some(h => Math.max(g[0], h[0]) < Math.min(g[1], h[1])));
+  }
+  return out;
 }
 
 export const wallEnds = (w: Wall): [Point, Point] =>

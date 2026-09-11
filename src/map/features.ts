@@ -1,5 +1,5 @@
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
-import type { MaterialKind, Point, ProjectDocument, Ring, SiteObject } from '../model/types';
+import type { Barrier, MaterialKind, Point, ProjectDocument, Ring, SiteObject } from '../model/types';
 import type { StatusReading } from '../model/live';
 import { statusTone } from '../adapters/status';
 import { undergroundView } from './underground';
@@ -71,6 +71,37 @@ export function wallPieces(project: ProjectDocument, floorId: string | null, sta
       items.push(o);
       attached.set(o.barrierId, items);
     }
+  // Which barriers meet at each junction — a corner needs to know how thick its neighbour is.
+  const meeting = new Map<string, Barrier[]>();
+  for (const b of project.barriers) {
+    for (const id of [b.startId, b.endId]) {
+      const list = meeting.get(id) ?? [];
+      list.push(b);
+      meeting.set(id, list);
+    }
+  }
+  /** How far past the junction this wall must run to close the corner.
+   *
+   *  Walls meet on their centrelines, so two perpendicular walls each stop half a thickness short of
+   *  the outside face and the corner shows a square notch — a butt join. Running on by the
+   *  NEIGHBOUR's half-thickness squares it off: at an L the missing corner is filled exactly, and at
+   *  a T the stem reaches the through-wall's far face, where the through wall's own body covers it.
+   *  Collinear neighbours are skipped — a wall continuing straight on already abuts. */
+  const overrun = (barrier: Barrier, junctionId: string, self: number): number => {
+    let most = 0;
+    for (const other of meeting.get(junctionId) ?? []) {
+      if (other === barrier || other.floorId !== barrier.floorId) continue;
+      const oa = junctions.get(other.startId),
+        ob = junctions.get(other.endId);
+      if (!oa || !ob) continue;
+      const otherAngle = (Math.atan2(ob[1] - oa[1], ob[0] - oa[0]) * 180) / Math.PI;
+      // Axis difference in [0, 90]: 0 is a straight continuation, 90 a square corner.
+      const delta = Math.abs(((((otherAngle - self) % 180) + 180) % 180) - 90);
+      if (delta > 86) continue; // effectively collinear — nothing to close
+      most = Math.max(most, other.thickness / 2 / Math.max(Math.cos((delta * Math.PI) / 180), 0.35));
+    }
+    return most;
+  };
   for (const barrier of project.barriers.filter(b => stack || visibleOnFloor(b, floorId))) {
     const a = junctions.get(barrier.startId),
       b = junctions.get(barrier.endId);
@@ -78,6 +109,8 @@ export function wallPieces(project: ProjectDocument, floorId: string | null, sta
     const length = distance(a, b);
     if (length < 0.01) continue;
     const angle = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
+    const head = overrun(barrier, barrier.startId, angle),
+      tail = overrun(barrier, barrier.endId, angle);
     const elevation = stack ? (elevations.get(barrier.floorId ?? '') ?? 0) : 0;
     const openings = (attached.get(barrier.id) ?? []).sort((a, b) => (a.offset ?? 0) - (b.offset ?? 0));
     const piece = (start: number, end: number, base: number, height: number) => {
@@ -93,7 +126,9 @@ export function wallPieces(project: ProjectDocument, floorId: string | null, sta
         material: barrier.material,
       });
     };
-    let cursor = 0;
+    // The solid runs from -head to length + tail; openings keep their measured position along the
+    // wall, so only the first and last solid pieces take the overrun.
+    let cursor = -head;
     for (const opening of openings) {
       const start = Math.max(0, (opening.offset ?? 0) - opening.width / 2),
         end = Math.min(length, (opening.offset ?? 0) + opening.width / 2);
@@ -104,7 +139,7 @@ export function wallPieces(project: ProjectDocument, floorId: string | null, sta
       } else piece(start, end, Math.min(opening.height, barrier.height), barrier.height);
       cursor = end;
     }
-    piece(cursor, length, 0, barrier.height);
+    piece(cursor, length + tail, 0, barrier.height);
   }
   return pieces;
 }
