@@ -213,6 +213,10 @@ export function SitePlanner({
     // Opening straight into the editor brings the editor's chrome with it, as enterEdit does.
     [sidebarOpen, setSidebarOpen] = useState(initialView?.mode === 'edit' && !readOnly),
     [inspectorOpen, setInspectorOpen] = useState(false),
+    // A soil section explains a basement, and a single cellar does not need explaining: the floor
+    // selector already says how far down it is, and the block is bigger than the house. Below two
+    // storeys of depth it is scenery in the way; below twenty it is the whole story.
+    [excavation, setExcavation] = useState(() => project.floors.filter(f => f.elevation < 0).length > 1),
     [cityBuildings, setCityBuildings] = useState(true),
     [cadastre, setCadastre] = useState(true);
   const [importOpen, setImportOpen] = useState(false),
@@ -1773,6 +1777,7 @@ export function SitePlanner({
               showPlan={showPlan}
               evening={evening}
               dark={dark}
+              excavation={excavation}
               cityBuildings={cityBuildings}
               cadastre={cadastre}
               basemap={basemap}
@@ -1965,6 +1970,12 @@ export function SitePlanner({
                   description="Dusk sky and garden lamps in 3D"
                   value={evening}
                   onChange={() => setEvening(!evening)}
+                />
+                <Toggle
+                  label="Ground section"
+                  description="Cut the earth away around below-grade floors"
+                  value={excavation}
+                  onChange={() => setExcavation(!excavation)}
                 />
                 <Toggle
                   label="3D city buildings"

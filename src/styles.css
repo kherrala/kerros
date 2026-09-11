@@ -1226,24 +1226,33 @@
   text-align: center;
   font-size: 11.5px;
   font-weight: 600;
-  color: #454a66;
+  /* Darker than it looks like it needs to be on paper. A room label in 3D stands over a floor that
+     is pale, shaded, part in shadow and crossed by furniture and walls — not the flat plate the 2D
+     plan gives it — so the ink has to carry against the darkest of that, not the average. */
+  color: #23273c;
   /* A hard 1 px outline, not a glow. A blurred halo spreads the label's own colour into the ring
      around it and the text stops having edges — at 11.5 px that reads as out of focus. Four offsets
      at zero blur trace the glyph exactly and leave it crisp. */
-  --label-halo: rgba(255, 255, 255, 0.92);
+  --label-halo: #ffffff;
+  /* Eight offsets, not four: at the corners a four-way outline leaves the glyph touching whatever is
+     behind it, which over a shaded 3D floor is where the letters start to dissolve. */
   text-shadow:
     1px 0 0 var(--label-halo),
     -1px 0 0 var(--label-halo),
     0 1px 0 var(--label-halo),
     0 -1px 0 var(--label-halo),
-    0 1px 2px rgba(255, 255, 255, 0.65);
+    1px 1px 0 var(--label-halo),
+    -1px 1px 0 var(--label-halo),
+    1px -1px 0 var(--label-halo),
+    -1px -1px 0 var(--label-halo),
+    0 1px 3px rgba(255, 255, 255, 0.8);
   white-space: nowrap;
 }
 .space-label small {
   display: block;
   font-size: 10px;
   font-weight: 500;
-  color: #868aa0;
+  color: #4d5266;
 }
 .space-label.outdoor {
   font-size: 12px;

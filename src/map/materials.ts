@@ -126,7 +126,10 @@ export class MaterialLibrary {
         // a distance, and a fully clear one leaves nothing but its frame.
         transparent: true,
         opacity: evening && lit ? 0.92 : 0.42,
-        depthWrite: false,
+        // Still writes depth. Without it a pane occludes nothing, which is invisible on a house and
+        // catastrophic on a tower: a hundred glazed storeys all show through one another and the
+        // building becomes a haze with no floor you can pick out.
+        depthWrite: true,
         side: THREE.DoubleSide,
       });
       material.userData.shared = true;

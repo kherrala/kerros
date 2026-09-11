@@ -108,14 +108,19 @@ export class UndergroundCage extends THREE.Group {
 // gets its own colour, blended over a short transition so the face reads geological rather than CAD.
 // Depths are metres below grade; the last entry runs to the bottom of the shaft.
 const PROFILE: { until: number; color: THREE.Color }[] = [
-  { until: -1.4, color: new THREE.Color('#4a453d') }, // made ground / pavement sub-base
-  { until: -4.5, color: new THREE.Color('#98794c') }, // sand & gravel
-  { until: -11, color: new THREE.Color('#3f6a7d') }, // Litorina clay, the blue-grey one
-  { until: -18, color: new THREE.Color('#6f6250') }, // glacial till / moraine
-  { until: Number.NEGATIVE_INFINITY, color: new THREE.Color('#6b6068') }, // granite bedrock
+  // Muted on purpose. These were the real colours of a Helsinki bore log — amber sand over Litorina
+  // clay over till — and side by side at full chroma they read as a geology poster rather than as
+  // ground: a band of teal and a band of yellow, competing with the building standing in them. Same
+  // sequence, same order, a fraction of the saturation, so depth still reads as layers and the eye
+  // stays on the plan.
+  { until: -1.4, color: new THREE.Color('#6d6863') }, // made ground / pavement sub-base
+  { until: -4.5, color: new THREE.Color('#968c7d') }, // sand & gravel
+  { until: -11, color: new THREE.Color('#7d8891') }, // Litorina clay, the blue-grey one
+  { until: -18, color: new THREE.Color('#877f75') }, // glacial till / moraine
+  { until: Number.NEGATIVE_INFINITY, color: new THREE.Color('#79767b') }, // granite bedrock
 ];
 const BLEND = 1.1; // metres of gradation between layers
-const SLAB_LINE = new THREE.Color('#8d8579');
+const SLAB_LINE = new THREE.Color('#b7b2a9');
 // Deterministic value noise — soil is mottled, and strata are horizontal, so it varies faster with
 // depth than across the face. No assets and no dependency; the same point always shades the same.
 const hash = (x: number, y: number, z: number) => {

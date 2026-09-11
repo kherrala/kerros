@@ -1,7 +1,7 @@
 import type { MaterialKind } from './types';
 
 export const EXTERIOR_PRESETS = {
-  limestone: { name: 'Limestone', material: 'stone', color: '#dedad2' },
+  limestone: { name: 'Limestone', material: 'stone', color: '#e2e4e6' },
   brick: { name: 'Warm brick', material: 'brick', color: '#9b705b' },
   darkBrick: { name: 'Dark brick', material: 'brick', color: '#7a4636' },
   plaster: { name: 'Ivory render', material: 'plaster', color: '#e0ddd4' },

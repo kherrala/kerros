@@ -75,6 +75,9 @@ interface Rig {
   target: number;
   /** Units per second. A lift runs at about 1.5 m/s; a door takes about a second to swing. */
   speed: number;
+  /** Runs forever, wrapping at the target rather than stopping there — an escalator's steps, which
+   *  are identical and one pitch apart, so a wrap is invisible and the stair never stops moving. */
+  loop?: boolean;
   apply: (group: THREE.Group, value: number) => void;
 }
 export class SceneLayer implements CustomLayerInterface {
@@ -105,6 +108,7 @@ export class SceneLayer implements CustomLayerInterface {
   private selected: string | null = null;
   private evening = false;
   private statuses: Map<string, StatusReading> | null = null;
+  private excavation = false;
   /** Only the part of the feed the scene is built from — where the cars are and whether doors stand
    *  open. A tone changing from normal to alarm recolours a marker and must not rebuild the scene. */
   private liftSignature = '';
@@ -296,11 +300,11 @@ export class SceneLayer implements CustomLayerInterface {
    *
    *  `settled` seeds the value the first time a part is ever seen, so opening a document does not
    *  send every lift travelling up from the basement to wherever it actually is. */
-  private rig(id: string, group: THREE.Group, target: number, speed: number, apply: Rig['apply']) {
-    if (!this.rigState.has(id)) this.rigState.set(id, target);
+  private rig(id: string, group: THREE.Group, target: number, speed: number, apply: Rig['apply'], loop = false) {
+    if (!this.rigState.has(id)) this.rigState.set(id, loop ? 0 : target);
     apply(group, this.rigState.get(id)!);
     this.scene.add(group);
-    this.rigs.push({ id, group, target, speed, apply });
+    this.rigs.push({ id, group, target, speed, apply, loop });
   }
   /** Advance every moving part toward its target. Returns true while anything is still moving, which
    *  is what keeps asking the map to repaint — MapLibre draws on demand, so without that a ride would
@@ -309,6 +313,13 @@ export class SceneLayer implements CustomLayerInterface {
     let moving = false;
     for (const r of this.rigs) {
       const at = this.rigState.get(r.id) ?? r.target;
+      if (r.loop) {
+        const next = (at + r.speed * seconds) % r.target;
+        this.rigState.set(r.id, next);
+        r.apply(r.group, next);
+        moving = true;
+        continue;
+      }
       if (Math.abs(at - r.target) < 1e-4) {
         if (at !== r.target) this.rigState.set(r.id, r.target);
         continue;
@@ -499,7 +510,7 @@ export class SceneLayer implements CustomLayerInterface {
     // NOT the plan's door colour. That indigo is a symbol — it marks a door on a drawing, where it
     // has to stand out from the walls around it. Extruded into a solid leaf it is a purple slab in
     // a room, which is the one thing a door never looks like. A door is a door-coloured object.
-    const color = o.color ?? '#c8b295';
+    const color = o.color ?? '#cbb79f';
     // The head above the opening, so the wall reads as continuous rather than as a slot to the
     // ceiling — and so an open door leaves a doorway rather than a gap in the storey.
     const over = (barrier?.height ?? height) - height;
@@ -878,6 +889,7 @@ export class SceneLayer implements CustomLayerInterface {
     selected: string | null,
     evening = false,
     statuses: Map<string, StatusReading> | null = null,
+    excavation = false,
   ) {
     const liftSignature = statuses
       ? [...statuses.values()]
@@ -893,6 +905,7 @@ export class SceneLayer implements CustomLayerInterface {
       this.activeFloor === floorId &&
       this.evening === evening &&
       this.liftSignature === liftSignature &&
+      this.excavation === excavation &&
       this.scene.children.length
     ) {
       if (this.selected !== selected) {
@@ -912,6 +925,7 @@ export class SceneLayer implements CustomLayerInterface {
     this.selected = selected;
     this.evening = evening;
     this.liftSignature = liftSignature;
+    this.excavation = excavation;
     this.revision++;
     const exterior = exteriorWalls(project);
     const index = floorIndex(project),
@@ -935,7 +949,7 @@ export class SceneLayer implements CustomLayerInterface {
                 // mid-grey by necessity — and standing that grey up as a surface, shaded and with
                 // contact shadow at its foot, made every partition read as bare concrete. A fence
                 // keeps its drawn colour: it has no plaster and is not a room's wall.
-                color: b.color ?? (b.kind === 'wall' ? '#e8e6e1' : COLORS[b.kind]),
+                color: b.color ?? (b.kind === 'wall' ? '#eef0f3' : COLORS[b.kind]),
               },
         ];
       }),
@@ -1247,7 +1261,7 @@ export class SceneLayer implements CustomLayerInterface {
     // Excavate around the whole below-grade complex (all deck plates plus any ramps reaching the
     // surface), not just the active floor's plate — otherwise a garage or driveway that extends past
     // the tower footprint hangs in open air with no soil around it.
-    if (buried) {
+    if (buried && excavation) {
       const outline = index.outlines.get(activeF?.id ?? view.levels[0]?.id ?? '');
       const excavation = excavationRings(project, view.levels);
       const rings = excavation.length ? excavation : outline?.rings?.[0] ? [openRing(outline.rings[0])] : [];

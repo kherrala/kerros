@@ -65,6 +65,8 @@ export interface MapCanvasProps {
   basemap?: BasemapConfig;
   assets: AssetRepository;
   statuses: Map<string, StatusReading>;
+  /** Draw the soil section around below-grade floors. */
+  excavation?: boolean;
   focusId?: string | null;
   alignment?: { image: Point[]; map: Point[] };
   /** Exact camera to restore (deep links); suppresses the automatic fit and 3D tilt-in on load. */
@@ -954,7 +956,7 @@ export function MapCanvas(props: MapCanvasProps) {
         scene.current.animateIn();
       }
       scene.current?.setMapStyle(mapStyleRef.current);
-      scene.current?.update(p.project, p.floorId, p.stack, p.selected, p.evening, p.statuses);
+      scene.current?.update(p.project, p.floorId, p.stack, p.selected, p.evening, p.statuses, p.excavation ?? false);
       scene.current?.setRoute(p.route ?? null, p.activeStep ?? null);
     } else if (m.getLayer('kerros-3d')) {
       m.removeLayer('kerros-3d');
