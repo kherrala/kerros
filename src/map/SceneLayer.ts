@@ -78,17 +78,23 @@ const STEP_GOING = 0.4,
  *  incline exactly, so the band meets both comb plates instead of leaving a sliver at one end, and
  *  the riser is whatever the rise divided by the count comes to — a flight the plan has drawn too
  *  short shows as the steep stair it is instead of as a smooth ramp that hides the fact. */
-function escalatorSteps(rise: number, deck: number): { at: number; base: number; going: number }[] {
+function escalatorSteps(rise: number, deck: number): { at: number; base: number; going: number; face: number }[] {
   // Capped: a very long flight is read at a glance, not counted, and every step is a draw call's
   // worth of geometry in a scene that may hold a bank of them on seventeen storeys.
   const count = Math.max(2, Math.min(40, Math.round(deck / STEP_GOING)));
   const going = deck / count;
+  // An escalator's risers are closed — a cleated face runs from one tread down to the next — so the
+  // face has to be at least as deep as the pitch it is set at. Drawn at the machine's own 0.2 m on
+  // an incline steeper than the machine's own, the band opened into a gap under every nose and read
+  // as an outdoor fire stair.
+  const face = Math.max(STEP_RISE, rise / count);
   return Array.from({ length: count }, (_, i) => ({
     at: going * (i + 0.5),
     // Tops land on the slope line, so the last step meets the upper comb plate rather than stopping
     // a riser short of it.
-    base: (rise * (i + 1)) / count - STEP_RISE,
+    base: (rise * (i + 1)) / count - face,
     going,
+    face,
   }));
 }
 
@@ -722,6 +728,7 @@ export class SceneLayer implements CustomLayerInterface {
       // shows the steep flight it describes, in steps, which is a more useful lie to catch.
       const band = escalatorSteps(rise, deck);
       const going = band[0].going,
+        face = band[0].face,
         riser = rise / band.length;
       // The comb plates the band runs out of and into. The upper one is as deep as a riser rather
       // than a fixed slab, because the step that has just left the top of a moving band has to go
@@ -735,14 +742,14 @@ export class SceneLayer implements CustomLayerInterface {
       this.slopedSurface(
         body,
         { axis: [at(-half + pad), at(half - pad)], high: base + rise, low: base },
-        -STEP_RISE,
+        -face,
         0.3,
         '#9aa5a1',
       );
       const tread = (step: { at: number; base: number }) => ({
         rings: [rectangle(at(half - pad - step.at), o.width - 0.12, going * 1.02, rotation)],
         base: base + step.base,
-        height: STEP_RISE,
+        height: face,
       });
       // Standing on one storey there are at most two flights in view, so they can move. In the
       // stacked view there are all of them, on every level of the building at once — dozens of bands
@@ -770,8 +777,7 @@ export class SceneLayer implements CustomLayerInterface {
         // Which way the machine runs is said the way the demo says it — in the name, which is also
         // where the ontology reads it from. A flight that says nothing carries you up.
         const way = /\bdown\b/i.test(o.name ?? '') ? -1 : 1;
-        const spare =
-          way > 0 ? { at: -going / 2, base: -STEP_RISE } : { at: deck + going / 2, base: rise + riser - STEP_RISE };
+        const spare = way > 0 ? { at: -going / 2, base: -face } : { at: deck + going / 2, base: rise + riser - face };
         const group = this.parts([spare, ...band].map(tread), color, false);
         // One step's travel, in scene space, taken by projecting two plan points rather than by
         // rebuilding the rotation here: `xy` is the only thing that knows which way plan north
