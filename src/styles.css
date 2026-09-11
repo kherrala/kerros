@@ -3516,3 +3516,16 @@
   border-color: var(--accent);
   color: var(--accent-ink);
 }
+
+/* Offered above the route tool's instruction bar when a plan has no graph of its own. */
+.adopt-graph {
+  position: absolute;
+  bottom: 152px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 21;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  white-space: nowrap;
+}

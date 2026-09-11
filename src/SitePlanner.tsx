@@ -84,6 +84,7 @@ import { fitOpening, proposeWall, referenceAxis, type OpeningFit, type WallPropo
 import { divideSpaces, mergeSpaces, spacesRejoinedBy } from './model/inference';
 import { enclosedRegion, enclosedRegions, refitEnclosedRooms } from './model/spaces';
 import { pruneOntology } from './model/ontology';
+import { derivedGraph } from './model/topology';
 import { importPlanEntities, type PlanImportReport } from './import/planImport';
 import { addNavEdge, addNavNode, chainVertical, findRoute } from './model/navigation';
 import { createObject } from './model/factory';
@@ -966,6 +967,25 @@ export function SitePlanner({
         o.position = centroid(o.rings![0]);
       }
     });
+  }
+  /** Write the derived graph into the document, so it can be edited.
+   *
+   *  A plan with no authored graph still routes: navNodes() falls back to the dual of spaces and
+   *  portals, recomputed from the geometry, and that is usually the right thing to leave alone —
+   *  a stored graph is a second description of what connects to what, and two descriptions drift.
+   *  What you cannot do with a derived graph is change it. Adopting it freezes the current one into
+   *  the document as a starting point; from then on it is yours, and it stops following the plan. */
+  function adoptDerivedGraph() {
+    const { nodes, edges } = derivedGraph(project);
+    if (
+      commit(p => {
+        p.navNodes = nodes.map(n => ({ ...n }));
+        p.navEdges = edges.map(e => ({ ...e }));
+      })
+    )
+      notify(
+        `Adopted ${nodes.length} node${nodes.length === 1 ? '' : 's'} and ${edges.length} edges · the graph no longer follows the plan.`,
+      );
   }
   function duplicateSelected() {
     if (!selected) return;
@@ -1972,6 +1992,12 @@ export function SitePlanner({
             )}
             {editing && !threeD && !alignment && (
               <div className="drawing-dock-wrap">
+                {tool === 'route' && !project.navNodes && (
+                  <button className="button secondary adopt-graph" onClick={adoptDerivedGraph}>
+                    <Waypoints size={14} />
+                    Adopt inferred graph
+                  </button>
+                )}
                 {tool !== 'select' && tool !== 'pan' && (
                   <div className="tool-instruction">
                     <span className="tool-instruction-dot" />
@@ -1980,7 +2006,9 @@ export function SitePlanner({
                       {tool === 'route'
                         ? routeAnchor
                           ? 'Click to chain the next route node · Esc ends the chain'
-                          : 'Click to place route nodes · lifts, stairs, doors and POIs link automatically'
+                          : project.navNodes
+                            ? 'Click to place route nodes · lifts, stairs, doors and POIs link automatically'
+                            : 'Showing the graph the plan implies — spaces joined by their portals. Adopt it to edit it.'
                         : tool === 'partition'
                           ? proposal
                             ? 'Click to build the wall shown · it squares to what it is nearest'

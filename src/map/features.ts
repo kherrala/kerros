@@ -4,6 +4,7 @@ import type { StatusReading } from '../model/live';
 import { statusTone } from '../adapters/status';
 import { undergroundView } from './underground';
 import { isVertical, reaches } from '../model/vertical';
+import { derivedGraph } from '../model/topology';
 import type { MapStyleOptions } from '../theme';
 import {
   add,
@@ -310,8 +311,14 @@ export function navGraphFeatures(
   selected: string | null,
 ): FeatureCollection {
   const features: Feature[] = [];
-  const nodes = project.navNodes ?? [],
-    edges = project.navEdges ?? [],
+  // The same graph routing uses. A document that has never had a route authored on it has no stored
+  // nodes at all, and routing quietly falls back to the one derived from spaces and portals — so the
+  // graph was there and working and simply could not be seen, which is the worst of both: you cannot
+  // tell a plan that routes from one that does not. Drawn either way, and marked which it is.
+  const derived = !project.navNodes;
+  const graph = derived ? derivedGraph(project) : { nodes: project.navNodes ?? [], edges: project.navEdges ?? [] };
+  const nodes = graph.nodes,
+    edges = graph.edges,
     byId = new Map(nodes.map(n => [n.id, n]));
   for (const e of edges) {
     const a = byId.get(e.aId),
@@ -321,6 +328,7 @@ export function navGraphFeatures(
     features.push({
       type: 'Feature',
       properties: {
+        derived,
         id: e.id,
         kind: e.kind,
         vertical: e.kind === 'stairs' || e.kind === 'elevator',
@@ -339,7 +347,13 @@ export function navGraphFeatures(
     if (visibleOnFloor(n, floorId))
       features.push({
         type: 'Feature',
-        properties: { id: n.id, bound: !!n.objectId, vertical: verticalNodes.has(n.id), selected: n.id === selected },
+        properties: {
+          derived,
+          id: n.id,
+          bound: !!n.objectId,
+          vertical: verticalNodes.has(n.id),
+          selected: n.id === selected,
+        },
         geometry: { type: 'Point', coordinates: toLngLat(n.position, project.origin) },
       });
   return { type: 'FeatureCollection', features };

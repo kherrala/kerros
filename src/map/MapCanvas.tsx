@@ -606,8 +606,10 @@ export function MapCanvas(props: MapCanvasProps) {
             '#8d85dc',
           ],
           'line-width': 1.4,
-          'line-dasharray': [2, 2],
-          'line-opacity': 0.85,
+          // A derived graph is drawn fainter and in longer dashes: it is what the plan implies, not
+          // what anyone drew, and the difference matters the moment you start editing it.
+          'line-dasharray': ['case', ['==', ['get', 'derived'], true], ['literal', [4, 3]], ['literal', [2, 2]]],
+          'line-opacity': ['case', ['==', ['get', 'derived'], true], 0.5, 0.85],
         },
       });
       m.addLayer({
@@ -629,6 +631,7 @@ export function MapCanvas(props: MapCanvasProps) {
           ],
           'circle-stroke-width': 1.2,
           'circle-stroke-color': '#ffffff',
+          'circle-opacity': ['case', ['==', ['get', 'derived'], true], 0.55, 1],
         },
       });
       // 2D route: casing + accent line + direction chevrons on the current floor, dashed ghost for
