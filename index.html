@@ -1,0 +1,262 @@
+<!doctype html>
+<!--
+  Dev hub. Vite serves the repo root, and the two reference apps are separate entrypoints
+  (app.html, viewer.html) — without this, `/` is a 404 and you have to know the filenames.
+  Deliberately self-contained: no bundler imports, no framework, so it costs nothing to serve and
+  works before `npm install`. The published site replaces this with the docs home (see build:site).
+-->
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#f7f7fa" />
+    <meta name="description" content="Kerros — model and visualize multi-floor premises in 2D and 3D." />
+    <title>Kerros · Development</title>
+    <style>
+      :root {
+        --bg: #f7f7fa;
+        --panel: #ffffff;
+        --ink: #191b33;
+        --ink-soft: #4e5169;
+        --ink-faint: #8a8da3;
+        --line: #e6e7ef;
+        --accent: #6259e8;
+        --accent-ink: #4a43c4;
+        --shadow-sm: 0 1px 2px rgba(24, 30, 27, 0.06);
+        --shadow-md: 0 4px 16px rgba(24, 30, 27, 0.09);
+        --radius: 12px;
+        --radius-lg: 16px;
+        --font:
+          "Avenir Next", "Segoe UI Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+          "Helvetica Neue", sans-serif;
+        --mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
+      }
+      /* Mirrors the app's own toggle: useDarkMode() writes kerros:dark and sets .dark on <html>,
+         so opening the editor in dark mode and coming back here keeps the same appearance. */
+      html.dark {
+        --bg: #14161f;
+        --panel: #1c1f2b;
+        --ink: #e8eaf2;
+        --ink-soft: #a7abbd;
+        --ink-faint: #767b8f;
+        --line: #2c3040;
+        --accent: #7d75f2;
+        --accent-ink: #9d97f5;
+        --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.3);
+        --shadow-md: 0 4px 16px rgba(0, 0, 0, 0.4);
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px / 1.5 var(--font);
+        -webkit-font-smoothing: antialiased;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        padding: clamp(24px, 8vh, 88px) 24px 48px;
+      }
+      main {
+        width: 100%;
+        max-width: 760px;
+      }
+      .brand {
+        display: inline-flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 36px;
+      }
+      .brand-mark {
+        width: 38px;
+        height: 38px;
+        border-radius: 11px;
+        display: grid;
+        place-items: center;
+        color: #fff;
+        background: linear-gradient(135deg, var(--accent) 0%, #3b37a8 100%);
+        box-shadow: var(--shadow-sm);
+      }
+      .brand strong {
+        font-size: 19px;
+        letter-spacing: -0.01em;
+      }
+      .brand span {
+        color: var(--ink-faint);
+        font-size: 13px;
+        border-left: 1px solid var(--line);
+        padding-left: 10px;
+        margin-left: 2px;
+      }
+      h1 {
+        font-size: clamp(28px, 5vw, 38px);
+        line-height: 1.15;
+        letter-spacing: -0.02em;
+        margin: 0 0 10px;
+      }
+      .lede {
+        color: var(--ink-soft);
+        margin: 0 0 32px;
+        max-width: 56ch;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+        gap: 16px;
+      }
+      a.card {
+        display: block;
+        padding: 22px;
+        border-radius: var(--radius-lg);
+        border: 1px solid var(--line);
+        background: var(--panel);
+        box-shadow: var(--shadow-sm);
+        text-decoration: none;
+        color: inherit;
+        transition:
+          transform 0.15s ease,
+          box-shadow 0.15s ease,
+          border-color 0.15s ease;
+      }
+      a.card:hover {
+        transform: translateY(-2px);
+        box-shadow: var(--shadow-md);
+        border-color: var(--accent);
+      }
+      a.card strong {
+        display: block;
+        font-size: 17px;
+        margin-bottom: 6px;
+      }
+      a.card p {
+        margin: 0 0 14px;
+        color: var(--ink-soft);
+        font-size: 14px;
+      }
+      a.card code {
+        font: 12px/1 var(--mono);
+        color: var(--ink-faint);
+      }
+      .arrow {
+        color: var(--accent-ink);
+        font-weight: 600;
+        font-size: 14px;
+      }
+      section.more {
+        margin-top: 34px;
+        padding-top: 26px;
+        border-top: 1px solid var(--line);
+      }
+      h2 {
+        font-size: 13px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--ink-faint);
+        margin: 0 0 14px;
+      }
+      dl {
+        margin: 0;
+        display: grid;
+        grid-template-columns: max-content 1fr;
+        gap: 9px 18px;
+        align-items: baseline;
+      }
+      dt code {
+        font: 12.5px/1.5 var(--mono);
+        background: var(--bg);
+        border: 1px solid var(--line);
+        border-radius: 6px;
+        padding: 2px 7px;
+        white-space: nowrap;
+      }
+      dd {
+        margin: 0;
+        color: var(--ink-soft);
+        font-size: 14px;
+      }
+      footer {
+        margin-top: 30px;
+        color: var(--ink-faint);
+        font-size: 13px;
+      }
+      footer code {
+        font-family: var(--mono);
+        font-size: 12.5px;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <span class="brand">
+        <span class="brand-mark">
+          <svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+               stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z" />
+            <path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65" />
+            <path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65" />
+          </svg>
+        </span>
+        <strong>kerros</strong>
+        <span>Development</span>
+      </span>
+
+      <h1>Two reference apps, one library.</h1>
+      <p class="lede">
+        Both hosts consume <code>@kerros/*</code> by package name, aliased to the source in
+        <code>src/</code>, so they exercise the same contract a third-party host would.
+      </p>
+
+      <div class="grid">
+        <a class="card" href="/app.html">
+          <strong>Plan editor</strong>
+          <p>
+            The full authoring surface — draw walls and zones, place openings, import footprints and
+            CAD plans, author routes, switch to 3D.
+          </p>
+          <span class="arrow">Open &rarr;</span> &nbsp; <code>app/main.tsx</code>
+        </a>
+        <a class="card" href="/viewer.html">
+          <strong>Plan viewer</strong>
+          <p>
+            A read-only host around <code>FloorViewer</code>, on <code>@kerros/viewer</code> alone.
+            Shares the editor's browser-persisted projects.
+          </p>
+          <span class="arrow">Open &rarr;</span> &nbsp; <code>app/viewer.tsx</code>
+        </a>
+      </div>
+
+      <section class="more">
+        <h2>Everything else</h2>
+        <dl>
+          <dt><code>make</code></dt>
+          <dd>List every task with a one-line description.</dd>
+          <dt><code>make docs</code></dt>
+          <dd>The VitePress manual — guide, ontology, API reference.</dd>
+          <dt><code>make test</code></dt>
+          <dd>Unit tests over the model layer.</dd>
+          <dt><code>make check</code></dt>
+          <dd>Formatting, types and tests — what to run before committing.</dd>
+        </dl>
+      </section>
+
+      <footer>
+        The MML basemap needs <code>VITE_MML_API_KEY</code> in <code>.env.local</code>; without one the
+        editor falls back to a self-contained plan background.
+      </footer>
+    </main>
+    <script>
+      // Match whatever the app was last set to, then fall back to the OS preference.
+      try {
+        const saved = localStorage.getItem('kerros:dark');
+        const dark = saved === null ? matchMedia('(prefers-color-scheme: dark)').matches : saved === '1';
+        document.documentElement.classList.toggle('dark', dark);
+        document.querySelector('meta[name=theme-color]').content = dark ? '#14161f' : '#f7f7fa';
+      } catch {
+        /* private mode, storage blocked — the light palette is a fine default */
+      }
+    </script>
+  </body>
+</html>

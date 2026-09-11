@@ -51,6 +51,14 @@ describe('deterministic plan import', () => {
     expect(report.windows).toBe(1);
     expect(report.named).toBe(2);
   });
+  it('stands its walls at the height of the storey it imports onto', () => {
+    const p = newProject();
+    // A basement is the case that shows: 3.5 m walls on a 2.6 m storey rise above ground level.
+    p.floors = [{ id: 'floor-ground', buildingId: p.buildings[0].id, name: 'Cellar', elevation: -2.6, height: 2.6 }];
+    importPlanEntities(p, structuredClone(HOUSE), { floorId: 'floor-ground' });
+    expect(p.barriers.length).toBeGreaterThan(0);
+    expect(p.barriers.every(b => b.height === 2.6)).toBe(true);
+  });
   it('produces a valid document — the import obeys every schema rule', () => {
     const { p } = imported();
     expect(() => validateProject(structuredClone(p))).not.toThrow();

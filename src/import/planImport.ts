@@ -145,6 +145,12 @@ function emitBarriers(
       const barrier = draft.barriers.at(-1)!;
       barrier.thickness = Math.max(0.05, w.thickness);
       barrier.name = envelope.includes(w) ? 'Exterior wall' : 'Partition';
+      // A plan is flat: the drawing says nothing about how tall its walls are, so take the storey
+      // the plan is being imported onto. Leaving addBarrier's generic default would stand 3.5 m
+      // walls on a 2.6 m floor — they punch through the storey above, and on a basement they rise
+      // out of the ground.
+      const storey = draft.floors.find(f => f.id === floorId)?.height;
+      if (storey) barrier.height = storey;
       report.walls++;
     }
     report.passages += (passages.get(w) ?? []).length;
