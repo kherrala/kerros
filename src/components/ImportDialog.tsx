@@ -6,6 +6,8 @@ import { uid } from '../model/types';
 import { blobDataUrl, importProject } from '../adapters/persistence';
 import { importFootprints } from '../model/imports';
 import type { PlanEntity } from '../import/planImport';
+import type { PlanLayerMap } from '../import/types';
+import { detectLayers, layerPattern, LAYER_ROLES, type LayerDetection, type LayerRole } from '../import/detect';
 import { Modal } from './controls';
 
 export interface PreparedDrawing {
@@ -14,6 +16,128 @@ export interface PreparedDrawing {
   width: number;
   height: number;
 }
+const ROLE_LABELS: Record<LayerRole, string> = {
+  exteriorFace: 'Outer wall face',
+  interiorFace: 'Inner wall face',
+  partitionFaces: 'Partition faces',
+  doors: 'Doors',
+  windows: 'Windows',
+  labels: 'Room labels',
+};
+/** What a layer looks like, for the line under a role's name. */
+const described = (detection: LayerDetection, layer: string) => {
+  const r = detection.layers.find(x => x.layer === layer);
+  if (!r) return layer;
+  return `${r.entities} entities · ${Object.keys(r.types).join(' ')}${r.width > 0 ? ` · ${r.width.toFixed(1)}×${r.height.toFixed(1)} m` : ''}`;
+};
+const PROFILES_KEY = 'kerros:layer-profiles';
+type Profiles = Record<string, Partial<Record<LayerRole, string>>>;
+const readProfiles = (): Profiles => {
+  try {
+    return JSON.parse(localStorage.getItem(PROFILES_KEY) ?? '{}') as Profiles;
+  } catch {
+    return {}; // storage blocked or corrupt — an unsaved mapping still imports fine
+  }
+};
+
+/** The layer census, with the role each layer was read as and a way to correct it.
+ *
+ *  Detection is good at doors, windows, labels and partitions and can be wrong about which pair of
+ *  lines is the wall — and on a drawing that has no separate face layers at all it finds no pair and
+ *  says so. Either way the drawing is right here to be looked at, so the fix is a dropdown rather
+ *  than a failed import and a puzzled reread of the manual. */
+function LayerPicker({
+  detection,
+  roles,
+  onRole,
+}: {
+  detection: LayerDetection;
+  roles: Partial<Record<LayerRole, string>>;
+  onRole: (role: LayerRole, layer: string | null) => void;
+}) {
+  const [open, setOpen] = useState(detection.missing.length > 0);
+  const [profiles, setProfiles] = useState<Profiles>(readProfiles);
+  const [profileName, setProfileName] = useState('');
+  const save = () => {
+    const name = profileName.trim();
+    if (!name) return;
+    const next = { ...profiles, [name]: roles };
+    setProfiles(next);
+    try {
+      localStorage.setItem(PROFILES_KEY, JSON.stringify(next));
+    } catch {
+      /* nothing to do: the mapping still applies to this import */
+    }
+    setProfileName('');
+  };
+  const apply = (name: string) => {
+    for (const role of LAYER_ROLES) onRole(role, profiles[name]?.[role] ?? null);
+  };
+  const missing = LAYER_ROLES.filter(r => !roles[r]);
+  return (
+    <section className="layer-picker">
+      <button className="layer-picker-head" onClick={() => setOpen(!open)}>
+        <span>
+          <strong>{detection.layers.length} layers</strong>
+          {missing.length ? (
+            <small className="warn">{missing.map(r => ROLE_LABELS[r]).join(', ')} not found</small>
+          ) : (
+            <small>every role matched a layer</small>
+          )}
+        </span>
+        <ArrowRight size={15} style={{ transform: open ? 'rotate(90deg)' : 'none' }} />
+      </button>
+      {open && (
+        <>
+          <p className="helper">
+            Read from the geometry, not the layer names — a door swing is an arc whatever the layer is called. Correct
+            anything it got wrong. One layer may hold both wall faces, which is how some offices draw them; pick it for
+            both.
+          </p>
+          <div className="layer-rows">
+            {LAYER_ROLES.map(role => (
+              <div className={`layer-row ${roles[role] ? 'assigned' : 'unset'}`} key={role}>
+                <span className="layer-name">
+                  {ROLE_LABELS[role]}
+                  <small>{roles[role] ? described(detection, roles[role]!) : 'not found'}</small>
+                </span>
+                <select
+                  aria-label={ROLE_LABELS[role]}
+                  value={roles[role] ?? ''}
+                  onChange={e => onRole(role, e.target.value || null)}
+                >
+                  <option value="">—</option>
+                  {detection.layers.map(r => (
+                    <option key={r.layer} value={r.layer}>
+                      {r.layer}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            ))}
+          </div>
+          <div className="layer-profiles">
+            <input
+              aria-label="Profile name"
+              placeholder="Save as… (e.g. the office's name)"
+              value={profileName}
+              onChange={e => setProfileName(e.target.value)}
+            />
+            <button className="button secondary small" onClick={save} disabled={!profileName.trim()}>
+              Save
+            </button>
+            {Object.keys(profiles).map(name => (
+              <button className="button secondary small" key={name} onClick={() => apply(name)}>
+                {name}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+    </section>
+  );
+}
+
 export function ImportDialog({
   project,
   floorId,
@@ -35,7 +159,7 @@ export function ImportDialog({
   onDrawing: (drawing: PreparedDrawing) => void | Promise<void>;
   /** CAD plan entities (metres, extracted host-side — see scripts/plan-import). The handler builds
    *  walls, rooms and openings on the chosen floor through the editor's transactional commit. */
-  onPlan?: (entities: PlanEntity[], floorId: string | null) => void;
+  onPlan?: (entities: PlanEntity[], floorId: string | null, layers?: PlanLayerMap) => void;
   /** Turn the site to a new bearing (degrees clockwise from north) before the plan is applied. */
   onOrigin?: (bearing: number) => void;
   importProjections?: ImportProjection[];
@@ -50,6 +174,33 @@ export function ImportDialog({
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   const input = useRef<HTMLInputElement>(null);
+  // The layer census, read as soon as a CAD file is chosen — the roles are what the import turns on,
+  // so they have to be reviewable before it runs, not explained afterwards by a bad result.
+  const [detection, setDetection] = useState<LayerDetection | null>(null);
+  const [roles, setRoles] = useState<Partial<Record<LayerRole, string>>>({});
+  useEffect(() => {
+    if (kind !== 'plan' || !file) return setDetection(null);
+    let live = true;
+    void (async () => {
+      try {
+        const parsed: unknown = JSON.parse(await file.text());
+        const list = Array.isArray(parsed) ? parsed : ((parsed as { entities?: PlanEntity[] }).entities ?? []);
+        if (!live || !Array.isArray(list)) return;
+        const found = detectLayers(list as PlanEntity[]);
+        setDetection(found);
+        setRoles(
+          Object.fromEntries(found.layers.filter(r => r.role).map(r => [r.role!, r.layer])) as Partial<
+            Record<LayerRole, string>
+          >,
+        );
+      } catch {
+        if (live) setDetection(null); // not plan-entity JSON; proceed() will say so properly
+      }
+    })();
+    return () => {
+      live = false;
+    };
+  }, [file, kind]);
   async function proceed() {
     if (!file) return;
     setBusy(true);
@@ -66,7 +217,14 @@ export function ImportDialog({
         // so the walls are built into a frame already facing the right way.
         const heading = Number(bearing);
         if (Number.isFinite(heading) && heading !== (project.origin[2] ?? 0)) onOrigin?.(heading);
-        onPlan?.(entities as PlanEntity[], planFloor);
+        const named = Object.entries(roles).filter(([, layer]) => layer);
+        const layers = named.length
+          ? ({
+              ...detection?.suggested,
+              ...Object.fromEntries(named.map(([role, layer]) => [role, layerPattern(layer!)])),
+            } as PlanLayerMap)
+          : detection?.suggested;
+        onPlan?.(entities as PlanEntity[], planFloor, layers);
       } else if (kind === 'footprint')
         onFootprints(
           importFootprints(JSON.parse(await file.text()), project, type, importProjections[crsIndex - 1]?.toLngLat),
@@ -187,6 +345,20 @@ export function ImportDialog({
             Walls, rooms, doors and windows will be built on the chosen floor — repeat per floor for a multi-storey
             building. Produce the JSON from a DWG with <code>scripts/plan-import/extract.mjs --expand --units m</code>.
           </p>
+          {detection && (
+            <LayerPicker
+              detection={detection}
+              roles={roles}
+              onRole={(role, layer) =>
+                setRoles(current => {
+                  const next = { ...current };
+                  if (layer) next[role] = layer;
+                  else delete next[role];
+                  return next;
+                })
+              }
+            />
+          )}
           <label className="field">
             <span>Site bearing</span>
             <input

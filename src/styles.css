@@ -3255,3 +3255,82 @@
   grid-template-columns: 1fr 1fr;
   gap: 10px;
 }
+
+/* The layer census in the CAD import tab: what each layer was read as, and a way to say otherwise. */
+.layer-picker {
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  margin-top: 12px;
+  overflow: hidden;
+}
+.layer-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--panel-soft);
+  border: 0;
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+}
+.layer-picker-head span {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.layer-picker-head small {
+  color: var(--ink-faint);
+}
+.layer-picker-head small.warn {
+  color: var(--warning);
+}
+.layer-picker .helper {
+  padding: 0 12px;
+}
+.layer-rows {
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 0 12px;
+}
+.layer-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px;
+  align-items: center;
+  padding: 5px 0;
+  border-bottom: 1px solid var(--line);
+}
+.layer-row.assigned .layer-name {
+  color: var(--accent-ink);
+  font-weight: 600;
+}
+.layer-name {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.layer-name small {
+  color: var(--ink-faint);
+  font-size: 11.5px;
+}
+.layer-row select {
+  max-width: 150px;
+}
+.layer-profiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--line);
+}
+.layer-profiles input {
+  flex: 1 1 160px;
+  min-width: 0;
+}

@@ -2203,11 +2203,11 @@ export function SitePlanner({
               d.origin = (bearing ? [lng, lat, bearing] : [lng, lat]) as typeof d.origin;
             });
           }}
-          onPlan={(entities, target) => {
+          onPlan={(entities, target, layers) => {
             let outcome: PlanImportReport | undefined;
             if (
               commit(d => {
-                outcome = importPlanEntities(d, entities, { floorId: target });
+                outcome = importPlanEntities(d, entities, layers ? { floorId: target, layers } : { floorId: target });
               }) &&
               outcome
             ) {

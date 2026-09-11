@@ -155,6 +155,31 @@ function emitBarriers(
     }
     report.passages += (passages.get(w) ?? []).length;
   }
+  dropStubs(draft, report);
+}
+
+/** Adding a wall welds a junction wherever its end lands, which splits whatever already crossed
+ *  there — so a wall ending close to another's end can leave behind a piece shorter than the plan is
+ *  allowed to hold. The document is then refused, and the refusal names the rule rather than the
+ *  drawing, which is no help at all to someone importing one. Drop the stubs instead, and the
+ *  junctions they leave orphaned, and report how many. */
+function dropStubs(draft: ProjectDocument, report: PlanImportReport) {
+  const at = new Map(draft.junctions.map(j => [j.id, j.position]));
+  const stubs = new Set(
+    draft.barriers
+      .filter(b => {
+        const p = at.get(b.startId),
+          q = at.get(b.endId);
+        return p && q && Math.hypot(q[0] - p[0], q[1] - p[1]) < MIN_SEGMENT;
+      })
+      .map(b => b.id),
+  );
+  if (!stubs.size) return;
+  draft.barriers = draft.barriers.filter(b => !stubs.has(b.id));
+  draft.objects = draft.objects.filter(o => !o.barrierId || !stubs.has(o.barrierId));
+  const used = new Set(draft.barriers.flatMap(b => [b.startId, b.endId]));
+  draft.junctions = draft.junctions.filter(j => used.has(j.id));
+  report.skipped.push(`${stubs.size} wall stub${stubs.size > 1 ? 's' : ''} under ${MIN_SEGMENT} m`);
 }
 
 /** One interior plate traced from the envelope, then divided along each partition — the same

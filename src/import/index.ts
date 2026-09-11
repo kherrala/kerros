@@ -5,6 +5,8 @@
 // (a browser), and for the AI path the provider and its credentials.
 export { importPlanEntities } from './planImport';
 export { VERTEX_LAYERS } from './types';
+export { detectLayers, layerPattern, LAYER_ROLES } from './detect';
+export type { LayerDetection, LayerReport, LayerRole } from './detect';
 export type { PlanEntity, PlanImportOptions, PlanImportReport, PlanLayerMap } from './types';
 export { AI_IMPORT_SYSTEM, AI_IMPORT_TOOLS, runAiPlanImport } from './aiImport';
 export type {

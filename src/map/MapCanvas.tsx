@@ -140,6 +140,15 @@ function planFeatures(p: MapCanvasProps, mapStyle?: MapStyleOptions): GeoJSON.Fe
   return entities;
 }
 
+/** The map heading that puts the plan square on screen.
+ *
+ *  A project's local frame is already turned by its origin bearing, so a site laid out along its
+ *  street has axis-aligned coordinates and a heading to match. Opening the map due north then shows
+ *  that plan standing at an angle — and every "reset north" put it back at that angle. The frame the
+ *  drawing was made in is the one to read it in, so north-up means site-up. A project with no
+ *  bearing is unaffected: its frame IS north. */
+const siteBearing = (project: ProjectDocument) => project.origin[2] ?? 0;
+
 export function MapCanvas(props: MapCanvasProps) {
   const container = useRef<HTMLDivElement>(null),
     map = useRef<GLMap | null>(null),
@@ -978,7 +987,7 @@ export function MapCanvas(props: MapCanvasProps) {
         transformRequest: props.basemap?.transformRequest,
         center: cam?.center ?? toLngLat([0, -1], props.project.origin),
         zoom: cam?.zoom ?? 18.5,
-        bearing: cam?.bearing ?? 0,
+        bearing: cam?.bearing ?? siteBearing(props.project),
         pitch: cam?.pitch ?? 0,
         maxZoom: 25,
         minZoom: 5,
@@ -1370,7 +1379,12 @@ export function MapCanvas(props: MapCanvasProps) {
     if (!m) return;
     const skipEase = firstTilt.current && !!props.initialCamera;
     firstTilt.current = false;
-    if (!skipEase) m.easeTo({ pitch: props.threeD ? 35 : 0, bearing: props.threeD ? -12 : 0, duration: 600 });
+    if (!skipEase)
+      m.easeTo({
+        pitch: props.threeD ? 35 : 0,
+        bearing: siteBearing(props.project) + (props.threeD ? -12 : 0),
+        duration: 600,
+      });
     if (props.threeD) {
       m.dragRotate.enable();
       m.touchZoomRotate.enableRotation();
@@ -1889,7 +1903,7 @@ export function MapCanvas(props: MapCanvasProps) {
         <button
           title="Reset north"
           aria-label="Reset north"
-          onClick={() => map.current?.easeTo({ bearing: 0, pitch: props.threeD ? 35 : 0 })}
+          onClick={() => map.current?.easeTo({ bearing: siteBearing(props.project), pitch: props.threeD ? 35 : 0 })}
         >
           <Compass size={18} />
         </button>
