@@ -1,9 +1,12 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import {
   ArrowUpRight,
   Camera,
   Compass,
+  ArrowDown,
+  ArrowLeft,
   ArrowRight,
+  ArrowUp,
   ChevronRight,
   Copy,
   Layers,
@@ -19,7 +22,7 @@ import type { Barrier, Drawing, Floor, Portal, ProjectDocument, SiteObject } fro
 import type { StatusReading } from '../model/live';
 import type { StatusPanelContext } from '../model/host';
 import { isArea, isSpace } from '../model/types';
-import { barrierEnds, distance, objectArea, objectPosition } from '../model/geometry';
+import { barrierEnds, distance, moveOrigin, objectArea, objectPosition } from '../model/geometry';
 import { entryInto, zoneSpaces } from '../model/ontology';
 import { statusLabel, statusTone } from '../adapters/status';
 import { cameraPeek } from '../map/cameraPeek';
@@ -170,8 +173,21 @@ export function Inspector(props: Props) {
     (a, b) => (statuses.get(b.feedId!)?.metrics?.occupancy ?? 0) - (statuses.get(a.feedId!)?.metrics?.occupancy ?? 0),
   )[0];
   const status = object?.feedId ? statuses.get(object.feedId) : undefined;
+  const [step, setStep] = useState(0.5);
   /** Edit one part of the site anchor. A blank or unparseable box leaves the anchor alone rather
    *  than snapping the whole site to the null island mid-keystroke. */
+  const setBearing = (value: number) => {
+    if (!Number.isFinite(value)) return;
+    const b = ((value % 360) + 360) % 360;
+    props.onEdit?.(d => {
+      d.origin = (b ? [d.origin[0], d.origin[1], b] : [d.origin[0], d.origin[1]]) as typeof d.origin;
+    });
+  };
+  const turn = (delta: number) => setBearing((project.origin[2] ?? 0) + delta);
+  const shift = (east: number, north: number) =>
+    props.onEdit?.(d => {
+      d.origin = moveOrigin(d.origin, east, north);
+    });
   const setOrigin = (part: 0 | 1 | 2, raw: string) => {
     const value = Number(raw);
     if (raw.trim() === '' || !Number.isFinite(value)) return;
@@ -791,37 +807,106 @@ export function Inspector(props: Props) {
                   Site anchor <Compass size={15} />
                 </h3>
                 <p className="helper">
-                  Where the plan is pinned and which way it faces. Geometry is untouched — metres stay metres; only the
-                  frame moves.
+                  Where the plan is pinned and which way it faces — the one thing a drawing cannot tell you. Geometry is
+                  untouched: metres stay metres, only the frame moves.
                 </p>
-                <div className="field-row">
-                  <Field
-                    label="Longitude"
-                    type="number"
-                    step={0.000001}
-                    value={project.origin[0]}
-                    onChange={v => setOrigin(0, v)}
-                    suffix="°"
+                <label className="field">
+                  <span>Bearing</span>
+                  <input
+                    type="range"
+                    aria-label="Bearing slider"
+                    min={0}
+                    max={360}
+                    step={0.1}
+                    value={((project.origin[2] ?? 0) + 360) % 360}
+                    onChange={e => setBearing(Number(e.target.value))}
                   />
-                  <Field
-                    label="Latitude"
+                </label>
+                <div className="nudge-row">
+                  {[-5, -1, -0.1].map(d => (
+                    <button className="button secondary small" key={d} onClick={() => turn(d)}>
+                      {d}°
+                    </button>
+                  ))}
+                  <input
+                    className="nudge-value"
+                    aria-label="Bearing"
                     type="number"
-                    step={0.000001}
-                    value={project.origin[1]}
-                    onChange={v => setOrigin(1, v)}
-                    suffix="°"
+                    step={0.1}
+                    value={Number((((project.origin[2] ?? 0) + 360) % 360).toFixed(2))}
+                    onChange={e => setBearing(Number(e.target.value))}
                   />
+                  {[0.1, 1, 5].map(d => (
+                    <button className="button secondary small" key={d} onClick={() => turn(d)}>
+                      +{d}°
+                    </button>
+                  ))}
                 </div>
-                <Field
-                  label="Bearing"
-                  type="number"
-                  step={0.1}
-                  min={-360}
-                  max={360}
-                  value={project.origin[2] ?? 0}
-                  onChange={v => setOrigin(2, v)}
-                  suffix="° from north"
-                />
+                <label className="field">
+                  <span>Move the site</span>
+                </label>
+                <div className="nudge-pad">
+                  <button className="button secondary small up" onClick={() => shift(0, step)} aria-label="Move north">
+                    <ArrowUp size={14} />
+                  </button>
+                  <button
+                    className="button secondary small left"
+                    onClick={() => shift(-step, 0)}
+                    aria-label="Move west"
+                  >
+                    <ArrowLeft size={14} />
+                  </button>
+                  <select
+                    className="step"
+                    aria-label="Step size"
+                    value={step}
+                    onChange={e => setStep(Number(e.target.value))}
+                  >
+                    {[0.1, 0.25, 0.5, 1, 5].map(v => (
+                      <option key={v} value={v}>
+                        {v} m
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    className="button secondary small right"
+                    onClick={() => shift(step, 0)}
+                    aria-label="Move east"
+                  >
+                    <ArrowRight size={14} />
+                  </button>
+                  <button
+                    className="button secondary small down"
+                    onClick={() => shift(0, -step)}
+                    aria-label="Move south"
+                  >
+                    <ArrowDown size={14} />
+                  </button>
+                </div>
+                <p className="helper">
+                  Steps are metres on the ground, north-up — the compass, not the plan's own grid.
+                </p>
+                <details className="anchor-exact">
+                  <summary>Exact coordinates</summary>
+                  <div className="field-row">
+                    <Field
+                      label="Longitude"
+                      type="number"
+                      step={0.000001}
+                      value={project.origin[0]}
+                      onChange={v => setOrigin(0, v)}
+                      suffix="°"
+                    />
+                    <Field
+                      label="Latitude"
+                      type="number"
+                      step={0.000001}
+                      value={project.origin[1]}
+                      onChange={v => setOrigin(1, v)}
+                      suffix="°"
+                    />
+                  </div>
+                </details>
               </section>
             )}
             {editing && floor && (

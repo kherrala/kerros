@@ -23,6 +23,17 @@ const metresPerDegree = (lat: number) => {
 };
 export const geoOrigin = (lngLat: Point, bearing = 0): Origin =>
   bearing ? [lngLat[0], lngLat[1], bearing] : [lngLat[0], lngLat[1]];
+/** Shift a site anchor by a distance on the ground, in metres east and north.
+ *
+ *  Nudging a building into place is a thing you do in metres — "half a metre that way" — and the
+ *  anchor is stored in degrees, where the useful step depends on latitude and differs between the
+ *  two axes. Deliberately NOT rotated by the site bearing: this moves the site across the world,
+ *  and the directions that make sense for that are the compass ones, not the plan's own grid. */
+export const moveOrigin = (origin: Origin, east: number, north: number): Origin => {
+  const m = metresPerDegree(origin[1]);
+  const moved: Origin = [origin[0] + east / m.lng, origin[1] + north / m.lat];
+  return origin[2] ? [moved[0], moved[1], origin[2]] : moved;
+};
 export const toLocal = (lngLat: Point, origin: Origin): Point => {
   const m = metresPerDegree(origin[1]);
   const d: Point = [(lngLat[0] - origin[0]) * m.lng, (lngLat[1] - origin[1]) * m.lat];

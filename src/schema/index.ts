@@ -61,6 +61,7 @@ export {
   MIN_SEGMENT,
   OPENING_MIN_SEGMENT,
   geoOrigin,
+  moveOrigin,
   toLngLat,
   toLocal,
   addBarrier,

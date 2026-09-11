@@ -1227,9 +1227,16 @@
   font-size: 11.5px;
   font-weight: 600;
   color: #454a66;
+  /* A hard 1 px outline, not a glow. A blurred halo spreads the label's own colour into the ring
+     around it and the text stops having edges — at 11.5 px that reads as out of focus. Four offsets
+     at zero blur trace the glyph exactly and leave it crisp. */
+  --label-halo: rgba(255, 255, 255, 0.92);
   text-shadow:
-    0 1px 3px rgba(255, 255, 255, 0.9),
-    0 0 8px rgba(255, 255, 255, 0.7);
+    1px 0 0 var(--label-halo),
+    -1px 0 0 var(--label-halo),
+    0 1px 0 var(--label-halo),
+    0 -1px 0 var(--label-halo),
+    0 1px 2px rgba(255, 255, 255, 0.65);
   white-space: nowrap;
 }
 .space-label small {
@@ -2384,17 +2391,17 @@
 .dark .map-scale > span {
   border-color: #8a90a4;
 }
-.dark .space-label {
-  color: #eceff8;
-  text-shadow:
-    0 1px 3px rgba(8, 10, 16, 0.95),
-    0 0 8px rgba(8, 10, 16, 0.8);
-}
-.dark .space-label small {
-  color: #a6acc0;
-}
+/* A room label stands on the room's own floor, and a floor plate is pale in both themes — so the
+   label keeps its dark ink in dark mode. Inverting it with the rest of the chrome put white text on
+   a white floor. Only the outdoor labels, which sit on the basemap, follow the theme. */
 .dark .space-label.outdoor {
-  color: #b8bed2;
+  color: #ccd2e6;
+  --label-halo: rgba(8, 10, 16, 0.92);
+  text-shadow:
+    1px 0 0 var(--label-halo),
+    -1px 0 0 var(--label-halo),
+    0 1px 0 var(--label-halo),
+    0 -1px 0 var(--label-halo);
 }
 .dark .vertex-handle {
   background: var(--panel);
@@ -3333,4 +3340,52 @@
 .layer-profiles input {
   flex: 1 1 160px;
   min-width: 0;
+}
+
+/* Site anchor: a bearing you drag and a position you nudge, because nobody adjusts a building by
+   typing degrees of longitude. */
+.nudge-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 10px;
+}
+.nudge-row .button {
+  padding: 4px 6px;
+  min-width: 0;
+}
+.nudge-value {
+  flex: 1 1 auto;
+  min-width: 56px;
+  text-align: center;
+}
+.nudge-pad {
+  display: grid;
+  grid-template-areas: ". up ." "left step right" ". down .";
+  gap: 4px;
+  justify-content: center;
+  align-items: center;
+  margin-bottom: 8px;
+}
+.nudge-pad .up {
+  grid-area: up;
+}
+.nudge-pad .left {
+  grid-area: left;
+}
+.nudge-pad .right {
+  grid-area: right;
+}
+.nudge-pad .down {
+  grid-area: down;
+}
+.nudge-pad .step {
+  grid-area: step;
+  min-width: 72px;
+}
+.anchor-exact summary {
+  cursor: pointer;
+  color: var(--ink-faint);
+  font-size: 12.5px;
+  margin-bottom: 8px;
 }
