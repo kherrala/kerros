@@ -1407,6 +1407,9 @@ export function MapCanvas(props: MapCanvasProps) {
     const o = props.project.objects.find(o => o.id === props.focusId);
     if (m && o) m.easeTo({ center: toLngLat(objectPosition(props.project, o), props.project.origin), duration: 500 });
   }, [props.focusId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Ground-plane projection: no elevation term, which is also how the markers are placed. Its
+  // inverse is unproject, so a handle you grab and the point you drop it on are in the same frame
+  // whether or not the view is pitched — which is what lets an object be dragged in 3D at all.
   const screen = (p: Point) => map.current?.project(toLngLat(p, props.project.origin));
   function startDrag(
     event: React.PointerEvent<HTMLButtonElement>,
@@ -1750,7 +1753,6 @@ export function MapCanvas(props: MapCanvasProps) {
           )}
         {props.canEdit &&
           props.tool === 'select' &&
-          !props.threeD &&
           selectedObject &&
           (() => {
             const s = screen(selectedObject.position);
@@ -1772,7 +1774,6 @@ export function MapCanvas(props: MapCanvasProps) {
           })()}
         {props.canEdit &&
           props.tool === 'select' &&
-          !props.threeD &&
           selectedObject &&
           !selectedObject.barrierId &&
           selectedObject.rotation !== undefined &&
@@ -1795,7 +1796,6 @@ export function MapCanvas(props: MapCanvasProps) {
           })()}
         {props.canEdit &&
           props.tool === 'select' &&
-          !props.threeD &&
           selectedObject?.kind === 'camera' &&
           (() => {
             // One handle for the whole cone: how far it reaches is the distance, how wide it opens
