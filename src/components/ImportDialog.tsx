@@ -23,6 +23,7 @@ export function ImportDialog({
   onFootprints,
   onDrawing,
   onPlan,
+  onOrigin,
   importProjections = [],
 }: {
   project: ProjectDocument;
@@ -35,6 +36,8 @@ export function ImportDialog({
   /** CAD plan entities (metres, extracted host-side — see scripts/plan-import). The handler builds
    *  walls, rooms and openings on the chosen floor through the editor's transactional commit. */
   onPlan?: (entities: PlanEntity[], floorId: string | null) => void;
+  /** Turn the site to a new bearing (degrees clockwise from north) before the plan is applied. */
+  onOrigin?: (bearing: number) => void;
   importProjections?: ImportProjection[];
 }) {
   const [kind, setKind] = useState<'drawing' | 'footprint' | 'plan' | 'project'>('drawing'),
@@ -42,6 +45,7 @@ export function ImportDialog({
     [crsIndex, setCrsIndex] = useState(0), // 0 = WGS84 lng/lat; 1..N = importProjections[i-1]
     [type, setType] = useState<'building' | 'parcel'>('building'),
     [planFloor, setPlanFloor] = useState(floorId),
+    [bearing, setBearing] = useState(String(project.origin[2] ?? 0)),
     [page, setPage] = useState(1),
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
@@ -58,6 +62,10 @@ export function ImportDialog({
         const entities = Array.isArray(parsed) ? parsed : ((parsed as { entities?: PlanEntity[] }).entities ?? null);
         if (!Array.isArray(entities))
           throw new Error('Expected plan-entity JSON (see scripts/plan-import/extract.mjs).');
+        // The heading is a property of the site, not of this sheet — apply it before the plan lands,
+        // so the walls are built into a frame already facing the right way.
+        const heading = Number(bearing);
+        if (Number.isFinite(heading) && heading !== (project.origin[2] ?? 0)) onOrigin?.(heading);
         onPlan?.(entities as PlanEntity[], planFloor);
       } else if (kind === 'footprint')
         onFootprints(
@@ -178,6 +186,22 @@ export function ImportDialog({
           <p className="helper">
             Walls, rooms, doors and windows will be built on the chosen floor — repeat per floor for a multi-storey
             building. Produce the JSON from a DWG with <code>scripts/plan-import/extract.mjs --expand --units m</code>.
+          </p>
+          <label className="field">
+            <span>Site bearing</span>
+            <input
+              type="number"
+              aria-label="Site bearing"
+              step={0.1}
+              min={-360}
+              max={360}
+              value={bearing}
+              onChange={e => setBearing(e.target.value)}
+            />
+          </label>
+          <p className="helper">
+            A drawing is square to its sheet, not to the world, so an imported plan lands on the site's current heading.
+            Degrees clockwise from north; adjustable afterwards under Site anchor.
           </p>
         </>
       )}

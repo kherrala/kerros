@@ -74,6 +74,20 @@ export function Inspector(props: Props) {
     (a, b) => (statuses.get(b.feedId!)?.metrics?.occupancy ?? 0) - (statuses.get(a.feedId!)?.metrics?.occupancy ?? 0),
   )[0];
   const status = object?.feedId ? statuses.get(object.feedId) : undefined;
+  /** Edit one part of the site anchor. A blank or unparseable box leaves the anchor alone rather
+   *  than snapping the whole site to the null island mid-keystroke. */
+  const setOrigin = (part: 0 | 1 | 2, raw: string) => {
+    const value = Number(raw);
+    if (raw.trim() === '' || !Number.isFinite(value)) return;
+    if (part === 0 && Math.abs(value) > 180) return;
+    if (part === 1 && Math.abs(value) > 90) return;
+    props.onEdit?.(d => {
+      const [lng, lat, bearing = 0] = d.origin;
+      const next = part === 0 ? [value, lat, bearing] : part === 1 ? [lng, value, bearing] : [lng, lat, value];
+      // A zero bearing is the absence of one — keep the two-element shape the schema started with.
+      d.origin = (next[2] ? next : next.slice(0, 2)) as typeof d.origin;
+    });
+  };
   // Event footage: the camera assigned to watch this object (SiteObject.watchedIds).
   const watcher = object
     ? project.objects.find(c => c.kind === 'camera' && c.watchedIds?.includes(object.id))
@@ -672,6 +686,45 @@ export function Inspector(props: Props) {
               ))}
               {!bound.length && <p className="helper">Give an object a feed id to connect it to your own live data.</p>}
             </section>
+            {editing && (
+              <section className="property-section">
+                <h3>
+                  Site anchor <Compass size={15} />
+                </h3>
+                <p className="helper">
+                  Where the plan is pinned and which way it faces. Geometry is untouched — metres stay metres; only the
+                  frame moves.
+                </p>
+                <div className="field-row">
+                  <Field
+                    label="Longitude"
+                    type="number"
+                    step={0.000001}
+                    value={project.origin[0]}
+                    onChange={v => setOrigin(0, v)}
+                    suffix="°"
+                  />
+                  <Field
+                    label="Latitude"
+                    type="number"
+                    step={0.000001}
+                    value={project.origin[1]}
+                    onChange={v => setOrigin(1, v)}
+                    suffix="°"
+                  />
+                </div>
+                <Field
+                  label="Bearing"
+                  type="number"
+                  step={0.1}
+                  min={-360}
+                  max={360}
+                  value={project.origin[2] ?? 0}
+                  onChange={v => setOrigin(2, v)}
+                  suffix="° from north"
+                />
+              </section>
+            )}
             {editing && floor && (
               <section className="property-section">
                 <h3>Floor settings</h3>

@@ -11,7 +11,7 @@
 // no new behaviour, only a data shape for the behaviour that exists. Interactive gestures (dragging
 // a wall, tracing a footprint) stay as plain `transact` callbacks in the editor; a Mutation is for
 // changes worth naming.
-import type { ObjectKind, Point, Portal, PortalGroup, ProjectDocument, SiteObject, Zone } from './types';
+import type { ObjectKind, Origin, Point, Portal, PortalGroup, ProjectDocument, SiteObject, Zone } from './types';
 import { addBarrier, splitRoom } from './geometry';
 import { createObject } from './factory';
 import {
@@ -58,7 +58,11 @@ export type Mutation =
   | { kind: 'addBarrier'; a: Point; b: Point; floorId: string | null; barrierKind: 'wall' | 'fence' }
   | { kind: 'splitRoom'; roomId: string; a: Point; b: Point; wall?: boolean }
   | { kind: 'divideSpaces'; floorId: string | null; a: Point; b: Point }
-  | { kind: 'mergeSpaces'; keepId: string; absorbedId: string };
+  | { kind: 'mergeSpaces'; keepId: string; absorbedId: string }
+  /** Move or turn the whole site. The geometry is untouched — local metres stay what they were; only
+   *  where the frame is pinned and which way it faces change. A plan carries no heading, so this is
+   *  how an imported one is squared onto the street it actually stands on. */
+  | { kind: 'setOrigin'; origin: Origin };
 
 /** What a mutation reports back, beyond the new document: the entity it created, or whether it did
  *  anything at all. Read it off the result rather than hunting the document for what changed.
@@ -137,6 +141,10 @@ const run = (draft: ProjectDocument, m: Mutation): MutationOutcome => {
       return splitRoom(draft, m.roomId, m.a, m.b, m.wall);
     case 'divideSpaces':
       return divideSpaces(draft, m.floorId, m.a, m.b);
+    case 'setOrigin': {
+      draft.origin = [...m.origin] as Origin;
+      return draft.origin.join(',');
+    }
     case 'mergeSpaces': {
       if (!mergeSpaces(draft, m.keepId, m.absorbedId))
         throw new Error('Those spaces do not touch, so there is nothing to merge.');

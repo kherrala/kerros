@@ -2196,6 +2196,12 @@ export function SitePlanner({
             setNewFloorBuilding(p.buildings[0].id);
             select(null);
           }}
+          onOrigin={bearing => {
+            commit(d => {
+              const [lng, lat] = d.origin;
+              d.origin = (bearing ? [lng, lat, bearing] : [lng, lat]) as typeof d.origin;
+            });
+          }}
           onPlan={(entities, target) => {
             let outcome: PlanImportReport | undefined;
             if (

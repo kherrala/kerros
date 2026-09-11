@@ -3248,3 +3248,10 @@
   pointer-events: none;
   z-index: 40;
 }
+
+/* Two numbers that belong together — a longitude and its latitude — read as one reading, not two. */
+.field-row {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px;
+}
