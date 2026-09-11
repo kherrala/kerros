@@ -8,6 +8,7 @@ import {
   Building2,
   ChevronDown,
   ChevronRight,
+  Compass,
   ChevronUp,
   CircleHelp,
   Eye,
@@ -1340,6 +1341,26 @@ export function SitePlanner({
             <div className="sidebar-scroll">
               {activeTab === 'structure' ? (
                 <>
+                  {editing && (
+                    <button
+                      className="anchor-entry"
+                      title="Where the plan is pinned and which way it faces"
+                      onClick={() => {
+                        select(null);
+                        setInspectorOpen(true);
+                      }}
+                    >
+                      <Compass size={16} />
+                      <span>
+                        Site anchor
+                        <small>
+                          {(project.origin[2] ?? 0).toFixed(1)}° · {project.origin[1].toFixed(5)},{' '}
+                          {project.origin[0].toFixed(5)}
+                        </small>
+                      </span>
+                      <ChevronRight size={15} />
+                    </button>
+                  )}
                   <div className="section-label">
                     {en.floors}
                     {editing && (

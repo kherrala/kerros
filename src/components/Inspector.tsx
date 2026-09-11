@@ -697,110 +697,6 @@ export function Inspector(props: Props) {
                   : project.description}
               </p>
             </div>
-            <div className="overview-stats">
-              {monitoring ? (
-                <div>
-                  <strong>{bound.length}</strong>
-                  <span>Live bindings</span>
-                </div>
-              ) : (
-                <div>
-                  <strong>{objects.length}</strong>
-                  <span>Objects here</span>
-                </div>
-              )}
-              <div>
-                <strong>{objects.filter(o => o.kind === 'room' || o.kind === 'zone').length}</strong>
-                <span>Spaces & zones</span>
-              </div>
-            </div>
-            {monitoring && sensed.length > 0 && (
-              <section className="property-section">
-                <h3>Occupancy & environment</h3>
-                <div className="overview-status">
-                  <span className="status-dot normal" />
-                  <span>People on this {floor ? 'floor' : 'site'}</span>
-                  <strong>{people(sensed)}</strong>
-                </div>
-                <div className="overview-status">
-                  <span className="status-dot normal" />
-                  <span>Whole building</span>
-                  <strong>{people(allBound)}</strong>
-                </div>
-                {co2Values.length > 0 && (
-                  <div className="overview-status">
-                    <span className={`status-dot ${Math.max(...co2Values) > 1000 ? 'warning' : 'normal'}`} />
-                    <span>CO₂ · avg / peak</span>
-                    <strong>
-                      {Math.round(co2Values.reduce((a, b) => a + b, 0) / co2Values.length)} / {Math.max(...co2Values)}{' '}
-                      ppm
-                    </strong>
-                  </div>
-                )}
-                {busiest && (
-                  <button className="alarm-row" onClick={() => props.onSelect(busiest.id)}>
-                    <span className="status-dot normal" />
-                    <span>
-                      {busiest.name}
-                      <small>Busiest space · {statuses.get(busiest.feedId!)?.metrics?.occupancy} people</small>
-                    </span>
-                    <ChevronRight size={15} />
-                  </button>
-                )}
-              </section>
-            )}
-            {monitoring && (
-              <section className="property-section">
-                <h3>
-                  Status overview <ShieldCheck size={15} />
-                </h3>
-                <div className="overview-status">
-                  <span className="status-dot normal" />
-                  <span>Normal</span>
-                  <strong>{bound.filter(o => statusTone(statuses.get(o.feedId!)) === 'normal').length}</strong>
-                </div>
-                <div className="overview-status">
-                  <span className="status-dot critical" />
-                  <span>Active alarms</span>
-                  <strong>{bound.filter(o => statusTone(statuses.get(o.feedId!)) === 'critical').length}</strong>
-                </div>
-                <div className="overview-status">
-                  <span className="status-dot warning" />
-                  <span>Offline / stale / unknown</span>
-                  <strong>
-                    {bound.filter(o => ['warning', 'unknown'].includes(statusTone(statuses.get(o.feedId!)))).length}
-                  </strong>
-                </div>
-              </section>
-            )}
-            {monitoring && alarms.length > 0 && (
-              <section className="property-section">
-                <h3>Site alarms</h3>
-                {alarms.map(o => (
-                  <button className="alarm-row" onClick={() => props.onSelect(o.id)} key={o.id}>
-                    <span className="status-dot critical" />
-                    <span>
-                      {o.name}
-                      <small>{statusLabel(statuses.get(o.feedId!))}</small>
-                    </span>
-                    <ChevronRight size={15} />
-                  </button>
-                ))}
-              </section>
-            )}
-            <section className="property-section">
-              <h3>
-                Quick access <MoreHorizontal size={16} />
-              </h3>
-              {bound.slice(0, 4).map(o => (
-                <button className="object-row" onClick={() => props.onSelect(o.id)} key={o.id}>
-                  <EntityIcon kind={o.kind} />
-                  <span>{o.name}</span>
-                  <span className={`status-dot ${statusTone(statuses.get(o.feedId!))}`} />
-                </button>
-              ))}
-              {!bound.length && <p className="helper">Give an object a feed id to connect it to your own live data.</p>}
-            </section>
             {editing && (
               <section className="property-section">
                 <h3>
@@ -909,6 +805,110 @@ export function Inspector(props: Props) {
                 </details>
               </section>
             )}
+            <div className="overview-stats">
+              {monitoring ? (
+                <div>
+                  <strong>{bound.length}</strong>
+                  <span>Live bindings</span>
+                </div>
+              ) : (
+                <div>
+                  <strong>{objects.length}</strong>
+                  <span>Objects here</span>
+                </div>
+              )}
+              <div>
+                <strong>{objects.filter(o => o.kind === 'room' || o.kind === 'zone').length}</strong>
+                <span>Spaces & zones</span>
+              </div>
+            </div>
+            {monitoring && sensed.length > 0 && (
+              <section className="property-section">
+                <h3>Occupancy & environment</h3>
+                <div className="overview-status">
+                  <span className="status-dot normal" />
+                  <span>People on this {floor ? 'floor' : 'site'}</span>
+                  <strong>{people(sensed)}</strong>
+                </div>
+                <div className="overview-status">
+                  <span className="status-dot normal" />
+                  <span>Whole building</span>
+                  <strong>{people(allBound)}</strong>
+                </div>
+                {co2Values.length > 0 && (
+                  <div className="overview-status">
+                    <span className={`status-dot ${Math.max(...co2Values) > 1000 ? 'warning' : 'normal'}`} />
+                    <span>CO₂ · avg / peak</span>
+                    <strong>
+                      {Math.round(co2Values.reduce((a, b) => a + b, 0) / co2Values.length)} / {Math.max(...co2Values)}{' '}
+                      ppm
+                    </strong>
+                  </div>
+                )}
+                {busiest && (
+                  <button className="alarm-row" onClick={() => props.onSelect(busiest.id)}>
+                    <span className="status-dot normal" />
+                    <span>
+                      {busiest.name}
+                      <small>Busiest space · {statuses.get(busiest.feedId!)?.metrics?.occupancy} people</small>
+                    </span>
+                    <ChevronRight size={15} />
+                  </button>
+                )}
+              </section>
+            )}
+            {monitoring && (
+              <section className="property-section">
+                <h3>
+                  Status overview <ShieldCheck size={15} />
+                </h3>
+                <div className="overview-status">
+                  <span className="status-dot normal" />
+                  <span>Normal</span>
+                  <strong>{bound.filter(o => statusTone(statuses.get(o.feedId!)) === 'normal').length}</strong>
+                </div>
+                <div className="overview-status">
+                  <span className="status-dot critical" />
+                  <span>Active alarms</span>
+                  <strong>{bound.filter(o => statusTone(statuses.get(o.feedId!)) === 'critical').length}</strong>
+                </div>
+                <div className="overview-status">
+                  <span className="status-dot warning" />
+                  <span>Offline / stale / unknown</span>
+                  <strong>
+                    {bound.filter(o => ['warning', 'unknown'].includes(statusTone(statuses.get(o.feedId!)))).length}
+                  </strong>
+                </div>
+              </section>
+            )}
+            {monitoring && alarms.length > 0 && (
+              <section className="property-section">
+                <h3>Site alarms</h3>
+                {alarms.map(o => (
+                  <button className="alarm-row" onClick={() => props.onSelect(o.id)} key={o.id}>
+                    <span className="status-dot critical" />
+                    <span>
+                      {o.name}
+                      <small>{statusLabel(statuses.get(o.feedId!))}</small>
+                    </span>
+                    <ChevronRight size={15} />
+                  </button>
+                ))}
+              </section>
+            )}
+            <section className="property-section">
+              <h3>
+                Quick access <MoreHorizontal size={16} />
+              </h3>
+              {bound.slice(0, 4).map(o => (
+                <button className="object-row" onClick={() => props.onSelect(o.id)} key={o.id}>
+                  <EntityIcon kind={o.kind} />
+                  <span>{o.name}</span>
+                  <span className={`status-dot ${statusTone(statuses.get(o.feedId!))}`} />
+                </button>
+              ))}
+              {!bound.length && <p className="helper">Give an object a feed id to connect it to your own live data.</p>}
+            </section>
             {editing && floor && (
               <section className="property-section">
                 <h3>Floor settings</h3>

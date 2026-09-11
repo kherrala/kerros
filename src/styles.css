@@ -3389,3 +3389,37 @@
   font-size: 12.5px;
   margin-bottom: 8px;
 }
+
+/* The way in to the site anchor. It lives in the properties panel, which is closed by default and
+   shows the site only when nothing is selected — so without a door like this you have to know. */
+.anchor-entry {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  margin-bottom: 6px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel-soft);
+  color: var(--ink-soft);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.anchor-entry:hover {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.anchor-entry span {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
+.anchor-entry small {
+  color: var(--ink-faint);
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
