@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { excavationRings } from './underground';
 import { createObject } from '../model/factory';
 import { newProject } from '../model/testFixtures';
-import { closeRing, ringArea } from '../model/geometry';
+import { addBarrier, closeRing, ringArea } from '../model/geometry';
 import type { Point, ProjectDocument } from '../model/types';
 
 const rect = (x0: number, y0: number, x1: number, y1: number): Point[] => [
@@ -65,5 +65,49 @@ describe('excavation outline', () => {
     plate(p, 'p1', rect(0, 0, 10, 10));
     plate(p, 'p2', rect(100, 100, 110, 110));
     expect(excavationRings(p, p.floors)).toHaveLength(2);
+  });
+});
+
+describe('a basement drawn as rooms rather than one plate', () => {
+  it('is excavated under all of it, not under its largest room', () => {
+    // What an import produces: no zone plate, just the rooms the walls enclose. Digging under the
+    // biggest of them leaves the rest of the storey hanging over open air with a cut edge running
+    // through the middle of the building.
+    const p = belowGradeProject();
+    const west = createObject('room', [-5, 5], 'p1', 'West');
+    west.rings = [closeRing(rect(-10, 0, 0, 10))];
+    const east = createObject('room', [5, 5], 'p1', 'East');
+    east.rings = [closeRing(rect(0.3, 0, 6, 10))]; // smaller, and the wall's width away
+    p.objects.push(west, east);
+    for (const [a, b] of [
+      [
+        [0.15, 0],
+        [0.15, 10],
+      ],
+      [
+        [-10, 0],
+        [6, 0],
+      ],
+      [
+        [-10, 10],
+        [6, 10],
+      ],
+      [
+        [-10, 0],
+        [-10, 10],
+      ],
+      [
+        [6, 0],
+        [6, 10],
+      ],
+    ] as [Point, Point][])
+      addBarrier(p, a, b, 'p1', 'wall');
+    const [dug] = excavationRings(p, p.floors);
+    expect(dug).toBeTruthy();
+    const xs = dug.map(q => q[0]);
+    // Reaches the east room, not just the west one.
+    expect(Math.max(...xs)).toBeGreaterThan(5);
+    expect(Math.min(...xs)).toBeLessThan(-9);
+    expect(Math.abs(ringArea(dug))).toBeGreaterThan(150);
   });
 });

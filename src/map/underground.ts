@@ -1,6 +1,7 @@
 import polygonClipping from 'polygon-clipping';
 import type { Floor, Point, ProjectDocument, Ring, SiteObject } from '../model/types';
 import { closeRing, openRing, ringArea } from '../model/geometry';
+import { floorOutline } from '../model/walls';
 import { isVertical, primaryShafts, servedFloors } from '../model/vertical';
 
 export const DEPTH_CAP = 96;
@@ -33,8 +34,12 @@ export function excavationRings(project: ProjectDocument, levels: Floor[]): Poin
   const below = levels.filter(f => f.elevation < 0);
   const polygons: Ring[][] = [];
   for (const f of below) {
-    const plate = index.outlines.get(f.id);
-    if (plate?.rings) polygons.push([closeRing(plate.rings[0])]);
+    // The floor's whole footprint, not its biggest room. `outlines` picks the single largest area on
+    // a level, which is the floor plate on a document drawn as one zone per storey — and is one room
+    // among several on an imported one. The pit was then dug under part of the basement and stopped
+    // in the middle of it, leaving the rest of the storey hanging in the air with a cut edge running
+    // through the building.
+    for (const ring of floorOutline(project, f.id)) polygons.push([closeRing(ring)]);
     for (const o of index.objects.get(f.id) ?? []) if (o.slope && o.rings) polygons.push([closeRing(o.rings[0])]);
   }
   if (!polygons.length) return [];
