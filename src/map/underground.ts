@@ -1,6 +1,7 @@
 import polygonClipping from 'polygon-clipping';
 import type { Floor, Point, ProjectDocument, Ring, SiteObject } from '../model/types';
 import { closeRing, openRing, ringArea } from '../model/geometry';
+import { isVertical, primaryShafts, servedFloors } from '../model/vertical';
 
 export const DEPTH_CAP = 96;
 const SHALLOW_DEPTH = 24;
@@ -49,6 +50,14 @@ interface FloorIndex {
   floors: Map<string, Floor>;
   objects: Map<string | null, SiteObject[]>;
   outlines: Map<string, SiteObject>;
+  /** Ids of the objects that stand for their shaft — see primaryShafts. Anything vertical NOT in
+   *  here is a twin of one that is, and is left to it to draw. */
+  primary: Set<string>;
+  /** Shafts that reach a floor without being filed under it. A stair lives on one storey and climbs
+   *  to another, and the storey it arrives at has to draw it or the flight appears to come from
+   *  nowhere — which is exactly what it did. Kept apart from `objects` so that everything already
+   *  counting a floor's own objects keeps counting the same ones. */
+  reaching: Map<string, SiteObject[]>;
 }
 const indices = new WeakMap<ProjectDocument, FloorIndex>();
 
@@ -57,12 +66,22 @@ export function floorIndex(project: ProjectDocument): FloorIndex {
   const cached = indices.get(project);
   if (cached) return cached;
   const floors = new Map(project.floors.map(f => [f.id, f]));
+  // Twins of one shaft draw once, from the lowest of them; the rest are the same lift seen again.
+  const primary = primaryShafts(project);
   const objects = new Map<string | null, SiteObject[]>(),
-    outlines = new Map<string, SiteObject>();
+    outlines = new Map<string, SiteObject>(),
+    reaching = new Map<string, SiteObject[]>();
   for (const object of project.objects) {
     const group = objects.get(object.floorId) ?? [];
     group.push(object);
     objects.set(object.floorId, group);
+    if (isVertical(object.kind) && primary.has(object.id))
+      for (const f of servedFloors(project, object)) {
+        if (f.id === object.floorId) continue;
+        const arriving = reaching.get(f.id) ?? [];
+        arriving.push(object);
+        reaching.set(f.id, arriving);
+      }
     if (object.floorId === null || !object.rings || !['zone', 'room'].includes(object.kind)) continue;
     const previous = outlines.get(object.floorId);
     if (
@@ -72,7 +91,7 @@ export function floorIndex(project: ProjectDocument): FloorIndex {
     )
       outlines.set(object.floorId, object);
   }
-  const result = { floors, objects, outlines };
+  const result = { floors, objects, outlines, reaching, primary };
   indices.set(project, result);
   return result;
 }

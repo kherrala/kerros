@@ -312,10 +312,10 @@ without crossing a wall, records that run. Runs long enough to walk through beco
 brushing at a corner do not. They are marked `attests: 'none'` — nothing watches an open edge, so a
 crossing there can never be observed.
 
-The difference on a real building is not marginal. On the Stockmann demo, doors alone leave **1,456
-of 1,626 spaces with no way in or out**, and every one of its 52 lift landings a dead end — you can
-ride between floors but never get out. Adding open boundaries connects **all of them**. (These
-numbers are asserted in `app/demo/demo.test.ts`, so they move with the building or not at all.)
+The difference on a real building is not marginal. On the Stockmann demo, doors alone leave **1,323
+of 1,494 spaces with no way in or out**, and every one of its lift shafts a dead end — you can ride
+between floors but never get out. Adding open boundaries connects **all of them**. (These numbers are
+asserted in `app/demo/demo.test.ts`, so they move with the building or not at all.)
 
 ::: warning If routing says nowhere is reachable
 This is almost always why. Door-only inference describes a building made entirely of corridors and

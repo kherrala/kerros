@@ -142,6 +142,25 @@ export interface SiteObject {
     | 'exit'
     | 'firealarm';
   servedFloorIds?: string[];
+  /** Stairs only: which geometry this climb has.
+   *
+   *  `straight` is one run. `switchback` turns back on itself around a half-landing — the half-turn
+   *  stair that fits a storey into a short core box, and what most building stairs actually are.
+   *  `dogleg` turns a quarter at its landing, for a stair in the corner of a plan. `spiral` winds
+   *  around a pole and can land on every level it passes. `escalator` is a machine: a fixed 30° pitch
+   *  and a flat comb plate at each end.
+   *
+   *  All of them connect the same floors and route identically, which is why this is one field rather
+   *  than five kinds — the difference is what it looks like and how much run it needs. Absent picks
+   *  the shape that fits: a straight run where the footprint allows a civil pitch, a switchback where
+   *  it does not, since a plan that gives a 4.5 m box to a 4.4 m storey means a stair that turns, not
+   *  a ladder. */
+  stairModel?: 'straight' | 'switchback' | 'dogleg' | 'spiral' | 'escalator';
+  /** Elevators only: which faces of the car open, relative to the object's own rotation. A through-car
+   *  opens front and back; a corner lobby car opens front and one side. Absent means the front alone,
+   *  which is what almost every lift does. Which FLOORS it opens on is `servedFloorIds` — a level the
+   *  shaft passes without serving has no doors on any side. */
+  doorSides?: ('front' | 'back' | 'left' | 'right')[];
   coverageAngle?: number;
   coverageRange?: number;
   color?: string;

@@ -33,6 +33,12 @@ export interface StatusReading {
    *  anyone should be worried: a door can be open and perfectly normal, or closed and in alarm.
    *  Omitted means unknown, and an unknown door is drawn with the architectural swing symbol. */
   open?: boolean;
+  /** For a lift: the floor its car is standing at right now, as a floor id. The plan draws the car
+   *  there and slides it when the value changes, which is the difference between a shaft and a lift
+   *  you can watch. Omitted means unknown, and an unknown car rests at the lowest level it serves —
+   *  where an idle lift really does wait. Sits beside `open`, which says whether its doors are
+   *  standing open, for the same reason: both are what the thing is doing, not whether to worry. */
+  carFloorId?: string;
   /** Opaque host state, passed through untouched — the library never reads it. */
   details?: Record<string, unknown>;
 }

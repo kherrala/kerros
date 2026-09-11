@@ -278,6 +278,21 @@ export function validateProject(value: unknown): ProjectDocument {
     if (o.servedFloorIds && (!Array.isArray(o.servedFloorIds) || o.servedFloorIds.some(id => !floorIds.has(id))))
       fail('unknown served floor.');
     if (o.servedFloorIds && !distinct(o.servedFloorIds)) fail('served floors must be listed once each.');
+    if (o.doorSides !== undefined) {
+      if (o.kind !== 'elevator') fail('only an elevator lists door sides.');
+      if (
+        !Array.isArray(o.doorSides) ||
+        !o.doorSides.length ||
+        o.doorSides.some(d => !['front', 'back', 'left', 'right'].includes(d as string)) ||
+        !distinct(o.doorSides as string[])
+      )
+        fail('door sides are front, back, left or right, listed once each.');
+    }
+    if (o.stairModel !== undefined) {
+      if (o.kind !== 'stairs') fail('only stairs carry a stair model.');
+      if (!['straight', 'switchback', 'dogleg', 'spiral', 'escalator'].includes(o.stairModel as string))
+        fail('a stair model is straight, switchback, dogleg, spiral or escalator.');
+    }
     if (o.watchedIds && (!Array.isArray(o.watchedIds) || o.watchedIds.some(id => !p.objects.some(x => x.id === id))))
       fail('unknown watched object.');
     if (o.watchedIds && !distinct(o.watchedIds)) fail('watched objects must be listed once each.');

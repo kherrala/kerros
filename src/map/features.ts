@@ -3,6 +3,7 @@ import type { Barrier, MaterialKind, Point, ProjectDocument, Ring, SiteObject } 
 import type { StatusReading } from '../model/live';
 import { statusTone } from '../adapters/status';
 import { undergroundView } from './underground';
+import { isVertical, reaches } from '../model/vertical';
 import type { MapStyleOptions } from '../theme';
 import {
   add,
@@ -38,6 +39,11 @@ export const COLORS: Record<string, string> = {
 };
 export const visibleOnFloor = (object: { floorId: string | null }, floorId: string | null) =>
   object.floorId === null || (floorId !== null && object.floorId === floorId);
+/** The same question for objects that span levels. A shaft is filed under the lowest level it serves
+ *  and reaches the rest, so asking only where it is filed hides it from every storey it arrives at —
+ *  on the plan as much as in the model. Takes the project because the answer is in `servedFloorIds`. */
+export const onFloor = (project: ProjectDocument, object: SiteObject, floorId: string | null) =>
+  visibleOnFloor(object, floorId) || (isVertical(object.kind) && reaches(project, object, floorId));
 export const objectRings = footprint;
 /** Roughly how wide a shape is on the plan, independent of its rotation. `width`/`depth` are an
  *  axis-aligned bounding box, which badly overstates anything drawn on a rotated site grid — a 2.5 m
@@ -168,7 +174,7 @@ export function makeFeatures(
   // has nothing to do with the level you are standing on. The 3D scene already drops it when buried;
   // the plan has to agree, or a basement is drawn on top of the site plate.
   const buried = undergroundView(project, floorId, false).buried;
-  for (const o of project.objects.filter(o => visibleOnFloor(o, floorId) && !(buried && o.floorId === null))) {
+  for (const o of project.objects.filter(o => onFloor(project, o, floorId) && !(buried && o.floorId === null))) {
     const props = {
       id: o.id,
       kind: o.kind,

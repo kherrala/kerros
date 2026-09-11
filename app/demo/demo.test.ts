@@ -32,12 +32,14 @@ describe('demo projects', () => {
       return ids.filter(id => !touched.has(id));
     };
     const doorOnly = inferPortals(p);
-    expect(ids).toHaveLength(1626);
-    expect(isolated(doorOnly), 'door-only inference strands most of the store').toHaveLength(1456);
+    expect(ids).toHaveLength(1494);
+    expect(isolated(doorOnly), 'door-only inference strands most of the store').toHaveLength(1323);
     expect(isolated([...doorOnly, ...inferOpenBoundaries(p)]), 'open boundaries reach the rest').toHaveLength(0);
+    // One object per shaft, not one per storey: a lift is a thing standing in a place reaching a
+    // list of levels, and `servedFloorIds` is where that list lives.
     expect(
       p.objects.filter(o => o.kind === 'elevator'),
-      'the lift landings the guide counts',
-    ).toHaveLength(52);
+      'the lift shafts the guide counts',
+    ).toHaveLength(8);
   });
 });

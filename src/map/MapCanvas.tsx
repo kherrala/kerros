@@ -31,7 +31,7 @@ import { useKerrosTheme, useStrings, type MapStyleOptions } from '../theme';
 import { neutralBasemap } from '../adapters/basemap';
 import { sunlight } from './lighting';
 import { EntityIcon } from '../components/Icons';
-import { draftFeatures, makeFeatures, navGraphFeatures, visibleOnFloor } from './features';
+import { draftFeatures, makeFeatures, navGraphFeatures, onFloor, visibleOnFloor } from './features';
 import { routeArrowImage, routeFeatures } from './route';
 import { aimCenter, JourneyPlayer } from './journey';
 import type { Route } from '../model/navigation';
@@ -951,7 +951,7 @@ export function MapCanvas(props: MapCanvasProps) {
         scene.current.animateIn();
       }
       scene.current?.setMapStyle(mapStyleRef.current);
-      scene.current?.update(p.project, p.floorId, p.stack, p.selected, p.evening);
+      scene.current?.update(p.project, p.floorId, p.stack, p.selected, p.evening, p.statuses);
       scene.current?.setRoute(p.route ?? null, p.activeStep ?? null);
     } else if (m.getLayer('kerros-3d')) {
       m.removeLayer('kerros-3d');
@@ -1677,7 +1677,7 @@ export function MapCanvas(props: MapCanvasProps) {
   if (ready && props.showPlan)
     for (const o of props.project.objects) {
       if (
-        !visibleOnFloor(o, props.floorId) ||
+        !onFloor(props.project, o, props.floorId) ||
         !(groundSymbols || o.floorId !== null || pinned(o)) ||
         ['window', 'building', 'parcel', 'office', 'container', 'storage', 'fixture', 'landscape'].includes(o.kind)
       )

@@ -123,3 +123,20 @@ export {
 export type { Route, RouteStep, RouteLeg } from '../model/navigation';
 
 export { EXTERIOR_PRESETS, type ExteriorPreset } from '../model/materials';
+
+export {
+  flights,
+  flightsAt,
+  isVertical,
+  passesThrough,
+  PITCH,
+  pitchOf,
+  primaryShafts,
+  reaches,
+  runFor,
+  servedFloors,
+  shaftKey,
+  shaftVoids,
+  span,
+  type Flight,
+} from '../model/vertical';

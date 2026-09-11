@@ -19,7 +19,19 @@ import {
   rotate,
   toLngLat,
 } from '../model/geometry';
+import { pointInRing } from '../model/geometry';
 import { COLORS, objectRings, wallPieces } from './features';
+import {
+  type Flight,
+  flights,
+  flightsAt,
+  isVertical,
+  pitchOf,
+  reaches,
+  servedFloors,
+  shaftVoids,
+} from '../model/vertical';
+import type { StatusReading } from '../model/live';
 import { makeFixture, makeRoof } from './architecture';
 import { MaterialLibrary } from './materials';
 import { EXTERIOR_PRESETS } from '../model/materials';
@@ -78,6 +90,12 @@ export class SceneLayer implements CustomLayerInterface {
   private highlight = new THREE.Group();
   private selected: string | null = null;
   private evening = false;
+  private statuses: Map<string, StatusReading> | null = null;
+  /** Only the part of the feed the scene is built from — where the cars are and whether doors stand
+   *  open. A tone changing from normal to alarm recolours a marker and must not rebuild the scene. */
+  private liftSignature = '';
+  /** Per-floor stairwell cut-outs; cleared with the scene. */
+  private voidCache = new Map<string, Ring[]>();
   private revision = 0;
   private depthScale = 1;
   private buried = false;
@@ -378,57 +396,334 @@ export class SceneLayer implements CustomLayerInterface {
       for (let i = 1; i < panes; i++)
         side(-o.width / 2 + (i * o.width) / panes, 0.045, base + rim, height - rim * 2, frame);
     } else if (o.kind === 'stairs') {
-      // A stair climbs. Drawn as a flat 18 cm plate it read as a rug on the floor, which is what it
-      // had been doing: a whole escalator spine appeared as pale rectangles lying in the atrium.
-      // Rise to the next level of the same building and ride the incline between the two.
-      const here = project.floors.find(f => f.id === o.floorId);
-      const above = here
-        ? project.floors
-            .filter(f => f.buildingId === here.buildingId && f.elevation > here.elevation)
-            .sort((x, y) => x.elevation - y.elevation)[0]
-        : undefined;
-      const rise = above && here ? above.elevation - here.elevation : 0;
-      const rings = objectRings({ ...o, position, rotation });
-      if (rise <= 0.1) {
-        this.surface(rings, z + wallBase(o.floorId), 0.18, o.color ?? COLORS[o.kind] ?? '#bfcac7', o.id);
-      } else {
-        // The run goes along the object's own depth axis; its two ends are the top and foot.
-        const rad = (rotation * Math.PI) / 180,
-          hx = (Math.sin(rad) * o.depth) / 2,
-          hy = (-Math.cos(rad) * o.depth) / 2;
-        const base = z + wallBase(o.floorId);
-        this.slopedSurface(
-          { ...o, rings },
-          {
-            // Axis always runs downhill: top of the flight first, foot second.
-            axis: [
-              [position[0] - hx, position[1] - hy],
-              [position[0] + hx, position[1] + hy],
-            ],
-            high: base + rise,
-            low: base,
-          },
-          0,
-          0.22,
-          o.color ?? COLORS[o.kind] ?? '#bfcac7',
-        );
-      }
+      this.shaft(project, o, z, position, rotation);
+    } else if (o.kind === 'elevator') {
+      this.lift(project, o, z, position, rotation);
     } else {
       this.surface(
         objectRings({ ...o, position, rotation }),
         z + wallBase(o.floorId),
-        Math.min(o.height, o.kind === 'elevator' ? 1.2 : 3),
+        Math.min(o.height, 3),
         o.color ?? COLORS[o.kind] ?? '#bfcac7',
         o.id,
       );
     }
   }
-  update(project: ProjectDocument, floorId: string | null, stack: boolean, selected: string | null, evening = false) {
+  /** An area's rings with the shafts that pass through its level cut out of them.
+   *
+   *  Cheap when there is nothing to cut, which is the usual case: a floor with no shaft through it
+   *  gets its own rings back untouched, and one with a shaft pays a clip only for the areas the
+   *  shaft actually lands in. */
+  private withVoids(project: ProjectDocument, rings: Ring[], floorId: string, primary: Set<string>): Ring[] {
+    let voids = this.voidCache.get(floorId);
+    if (!voids) {
+      voids = shaftVoids(project, floorId, primary);
+      this.voidCache.set(floorId, voids);
+    }
+    if (!voids.length || !rings.length) return rings;
+    const hits = voids.filter(v => v.some(p => pointInRing(p, rings[0])) || rings[0].some(p => pointInRing(p, v)));
+    if (!hits.length) return rings;
+    try {
+      const cut = polygonClipping.difference(
+        [rings.map(r => closeRing(r))] as never,
+        ...hits.map(v => [v] as never),
+      ) as unknown as Ring[][];
+      return cut.flat();
+    } catch {
+      return rings; // degenerate shaft footprint: an uncut floor beats no floor
+    }
+  }
+  /** A stair, spiral or escalator, drawn as the climb it actually makes.
+   *
+   *  The flights come from the levels the document says the shaft serves, not from whatever storey
+   *  happens to sit above it, and each is drawn at the elevation of the level it leaves — so the
+   *  flight arriving at the level you are standing on is there, coming up through the floor, instead
+   *  of being filed invisibly under the storey below. */
+  private shaft(project: ProjectDocument, o: SiteObject, z: number, position: Point, rotation: number) {
+    const color = o.color ?? COLORS[o.kind] ?? '#bfcac7';
+    const own = project.floors.find(f => f.id === o.floorId)?.elevation ?? 0;
+    const all = flights(project, o);
+    // No authored geometry: read one off the plan. A footprint that cannot take the rise at a civil
+    // pitch is describing a stair that turns, which is what a short wide core box always is.
+    const model =
+      o.stairModel ?? (all.length && pitchOf(all[0].rise, Math.max(0.6, o.depth)) > 38 ? 'switchback' : 'straight');
+    // Every flight when the whole stack is on show; otherwise the two you could touch from here —
+    // the one arriving at this level and the one leaving it. Drawing all of them in a single-floor
+    // view hangs a ladder of treads through storeys that are not being drawn.
+    const near = this.stack
+      ? all
+      : (() => {
+          const { up, down } = flightsAt(project, o, this.activeFloor);
+          return [down, up].filter((f): f is Flight => !!f);
+        })();
+    if (!near.length) {
+      // Serves one level only: there is no climb to draw, and a plate is the honest picture.
+      this.surface(objectRings({ ...o, position, rotation }), z + wallBase(o.floorId), 0.18, color, o.id);
+      return;
+    }
+    for (const flight of near) {
+      const base = z + (flight.from.elevation - own) + wallBase(o.floorId);
+      if (model === 'spiral') {
+        this.spiral(o, position, base, flight.rise, color);
+        continue;
+      }
+      // A bank of escalators is stacked criss-cross: each flight sits over the one below and runs
+      // the other way, so you step off one and turn to step onto the next. Drawing every flight the
+      // same way up would make a single impossible ramp climbing the whole building.
+      const index = all.indexOf(flight);
+      const reversed = model === 'escalator' && index % 2 === 1;
+      this.flight(o, position, rotation + (reversed ? 180 : 0), base, flight.rise, color, model);
+    }
+  }
+  /** A straight climb: treads for a stair, a ribbed deck between flat landing plates for an
+   *  escalator. Both run along the object's own depth axis, which is where the plan put them. */
+  private flight(
+    o: SiteObject,
+    position: Point,
+    rotation: number,
+    base: number,
+    rise: number,
+    color: string,
+    model: 'straight' | 'switchback' | 'dogleg' | 'escalator',
+  ) {
+    const rad = (rotation * Math.PI) / 180;
+    // Unit vector along the run, in plan metres. The footprint's depth is the run the drawing gives
+    // it — if that is short for the rise, the thing really is as steep as it looks, and saying so is
+    // more useful than quietly lying about the pitch.
+    const ux = Math.sin(rad),
+      uy = -Math.cos(rad);
+    const at = (t: number): Point => [position[0] + ux * t, position[1] + uy * t];
+    const run = Math.max(0.6, o.depth);
+    const half = run / 2;
+    if (model === 'escalator') {
+      // Landing plates at both ends, then the incline between them. A real escalator has about a
+      // metre of flat comb plate at each end; without them the deck spears into the floor.
+      const pad = Math.min(1, run / 4);
+      const deck = run - pad * 2;
+      this.surface([rectangle(at(half - pad / 2), o.width, pad, rotation)], base, 0.2, color, o.id);
+      this.surface([rectangle(at(-half + pad / 2), o.width, pad, rotation)], base + rise, 0.2, color, o.id);
+      const body = { ...o, rings: [rectangle(at(0), o.width, deck, rotation)] } as SiteObject;
+      this.slopedSurface(
+        body,
+        { axis: [at(-half + pad), at(half - pad)], high: base + rise, low: base },
+        0,
+        0.22,
+        color,
+      );
+      // Balustrades: a waist-high blade either side, following the same incline.
+      for (const sign of [-1, 1]) {
+        const side = [sign * (o.width / 2 - 0.06), 0] as Point;
+        const offset = rotate(side, rotation);
+        const rail = {
+          ...o,
+          rings: [rectangle([at(0)[0] + offset[0], at(0)[1] + offset[1]], 0.1, deck, rotation)],
+        } as SiteObject;
+        this.slopedSurface(
+          rail,
+          {
+            axis: [
+              [at(-half + pad)[0] + offset[0], at(-half + pad)[1] + offset[1]],
+              [at(half - pad)[0] + offset[0], at(half - pad)[1] + offset[1]],
+            ],
+            high: base + rise + 0.95,
+            low: base + 0.95,
+          },
+          0,
+          0.08,
+          '#8f9a96',
+        );
+      }
+      return;
+    }
+    // A stair is steps, and a stair that cannot climb its storey in one run turns back on itself —
+    // which is what a real core stair does and why a core box is short and wide rather than long.
+    // Straight, a 4.4 m storey over a 4.5 m run is a 44° chute; two flights with a half-landing
+    // between them is 26° and fits the same box. The footprint still decides: the number of sweeps
+    // is whatever keeps the pitch civil inside the plan's own outline.
+    // A straight stair is one run; the turning ones are two half-runs about a landing. Half the rise
+    // each, so a 4.4 m storey over a 4.5 m box climbs at 26° twice instead of 44° once — which is the
+    // difference between a stair and a chute, and why a real core stair is short and wide.
+    const sweeps = model === 'straight' ? 1 : 2;
+    // A half-turn puts the second flight beside the first, facing back. A quarter-turn puts it across
+    // the landing at right angles. Both climb the same; they differ in where the second run lies.
+    const turn = model === 'dogleg' ? 90 : 180;
+    const laneWidth = sweeps > 1 ? o.width / 2 : o.width;
+    for (let lane = 0; lane < sweeps; lane++) {
+      const from = base + (rise * lane) / sweeps,
+        climb = rise / sweeps;
+      // A 175 mm riser is the comfortable domestic figure and close to code everywhere; capped so a
+      // tall storey does not spend hundreds of boxes on something read at a glance.
+      const steps = Math.max(2, Math.min(24, Math.round(climb / 0.175)));
+      const going = run / steps;
+      const spin = rotation + (lane ? turn : 0);
+      const rad = (spin * Math.PI) / 180;
+      const vx = Math.sin(rad),
+        vy = -Math.cos(rad);
+      // Second flight sits beside the first across the footprint, not through it.
+      const offset = lane && sweeps > 1 ? rotate([laneWidth / 2, 0], rotation) : ([0, 0] as Point);
+      const shifted = lane ? ([position[0] + offset[0], position[1] + offset[1]] as Point) : position;
+      const on = (t: number): Point => [shifted[0] + vx * t, shifted[1] + vy * t];
+      if (lane && sweeps > 1) {
+        // The landing the turn happens on, at the height the first flight reached.
+        this.surface(
+          [rectangle(on(half - going / 2), laneWidth * 1.9, going * 1.7, spin)],
+          from - 0.05,
+          0.11,
+          color,
+          o.id,
+        );
+      }
+      for (let i = 0; i < steps; i++) {
+        this.surface(
+          [rectangle(on(half - going * (i + 0.5)), laneWidth * 0.94, going * 1.02, spin)],
+          from + (climb * i) / steps,
+          climb / steps + 0.04,
+          color,
+          o.id,
+        );
+      }
+    }
+  }
+  /** A lift: the shaft as tall as the levels it serves, its doors on the level you are standing on,
+   *  and the car where the feed says it is.
+   *
+   *  It used to be a 1.2 m box — shorter than the doors it was supposed to contain — because the
+   *  generic object path capped elevators there to stop them blocking the view. A lift is not
+   *  furniture: it is a hole through the building, and drawing it as one is the only way the plan
+   *  shows that floors 2 and 7 are on the same shaft. Above the level in focus it turns to ghost, so
+   *  it reads as continuing without becoming a column in front of everything else. */
+  private lift(project: ProjectDocument, o: SiteObject, z: number, position: Point, rotation: number) {
+    const color = o.color ?? COLORS[o.kind] ?? '#bfcac7';
+    const own = project.floors.find(f => f.id === o.floorId)?.elevation ?? 0;
+    const levels = servedFloors(project, o);
+    const base = z + wallBase(o.floorId);
+    const rel = (f: Floor) => z + (f.elevation - own) + wallBase(o.floorId);
+    const active = project.floors.find(f => f.id === this.activeFloor);
+    if (levels.length < 2) {
+      this.surface(objectRings({ ...o, position, rotation }), base, Math.min(o.height, 2.4), color, o.id);
+      return;
+    }
+    const bottom = rel(levels[0]);
+    const top = rel(levels[levels.length - 1]) + (levels[levels.length - 1].height ?? o.height);
+    // Split at the level in focus: solid to the head of this storey, ghost for whatever is above it.
+    const cut = active ? Math.min(top, z + (active.elevation - own) + wallBase(o.floorId) + (active.height ?? 3)) : top;
+    const shell = (from: number, to: number, ghost: boolean) => {
+      if (to - from < 0.05) return;
+      const t = 0.09;
+      for (const [w, d, dx, dy] of [
+        [o.width, t, 0, (o.depth - t) / 2],
+        [o.width, t, 0, -(o.depth - t) / 2],
+        [t, o.depth, (o.width - t) / 2, 0],
+        [t, o.depth, -(o.width - t) / 2, 0],
+      ] as [number, number, number, number][]) {
+        const at = rotate([dx, dy], rotation);
+        this.surface(
+          [rectangle([position[0] + at[0], position[1] + at[1]], w, d, rotation)],
+          from,
+          to - from,
+          ghost ? color : '#b4bab7',
+          o.id,
+          undefined,
+          ghost,
+        );
+      }
+    };
+    shell(bottom, cut, false);
+    shell(cut, top, true);
+    // The landing doors, on the storey in focus, facing the way the lift is turned. Two leaves that
+    // part: closed unless the feed says this car is standing here with its doors open.
+    const reading = this.statuses?.get(o.feedId ?? '');
+    const carFloor = reading?.carFloorId ?? null;
+    const doorsOpen = !!reading?.open && (!carFloor || carFloor === this.activeFloor);
+    if (active && levels.some(f => f.id === active.id)) {
+      const head = Math.min(2.3, (active.height ?? 3) - 0.35);
+      // A level the shaft merely passes has no doors at all — it is not in `levels`, so this is
+      // skipped there and the void is all you see. A car that opens on more than one face lists
+      // them; the default is the front, which is what nearly every lift does.
+      for (const face of o.doorSides ?? ['front']) {
+        // Each face turns the leaves a further quarter-turn and measures across the matching side.
+        const turn = { front: 0, right: 90, back: 180, left: 270 }[face];
+        const spin = rotation + turn;
+        const across = turn % 180 === 0 ? o.width : o.depth;
+        const out = (turn % 180 === 0 ? o.depth : o.width) / 2 - 0.03;
+        const leaf = across / 2 - 0.03;
+        const gap = doorsOpen ? across / 2 - 0.06 : 0;
+        for (const sign of [-1, 1]) {
+          const at = rotate([sign * (leaf / 2 + gap / 2), out], spin);
+          this.surface(
+            [rectangle([position[0] + at[0], position[1] + at[1]], leaf, 0.07, spin)],
+            rel(active) + 0.02,
+            head,
+            '#98a3a6',
+            o.id,
+          );
+        }
+      }
+    }
+    // The car itself. Where the feed puts it; failing that, resting at the lowest level it serves —
+    // which is where a lift with nothing to do actually waits.
+    const carAt = levels.find(f => f.id === carFloor) ?? levels[0];
+    const inset = 0.14;
+    this.surface(
+      [rectangle(position, Math.max(0.4, o.width - inset * 2), Math.max(0.4, o.depth - inset * 2), rotation)],
+      rel(carAt) + 0.04,
+      Math.min(2.3, (carAt.height ?? 3) - 0.4),
+      reading?.carFloorId ? '#dfe6e3' : '#cdd4d1',
+      o.id,
+    );
+  }
+  /** A spiral: wedge treads winding around a central pole.
+   *
+   *  Its exits are wherever it is served — a spiral passing three levels with a landing on each is
+   *  one object serving three floors, which the document could already say and nothing drew. */
+  private spiral(o: SiteObject, position: Point, base: number, rise: number, color: string) {
+    const outer = Math.max(0.8, Math.min(o.width, o.depth) / 2);
+    const inner = Math.min(0.16, outer / 5);
+    const steps = Math.max(6, Math.min(30, Math.round(rise / 0.18)));
+    // One full turn per storey reads as a spiral at any storey height; more would be a screw, less a
+    // ramp with a kink.
+    const sweep = (2 * Math.PI) / steps;
+    for (let i = 0; i < steps; i++) {
+      const a0 = i * sweep,
+        a1 = a0 + sweep * 1.04;
+      const ring: Point[] = [];
+      for (const [r, from, to] of [
+        [outer, a0, a1],
+        [inner, a1, a0],
+      ] as [number, number, number][]) {
+        const span = 4;
+        for (let k = 0; k <= span; k++) {
+          const a = from + ((to - from) * k) / span;
+          ring.push([position[0] + Math.cos(a) * r, position[1] + Math.sin(a) * r]);
+        }
+      }
+      this.surface([closeRing(ring)], base + (rise * i) / steps, 0.07, color, o.id);
+    }
+    // The pole the whole thing hangs off.
+    this.surface([rectangle(position, inner * 2, inner * 2, 0)], base, rise, '#9aa3a0', o.id);
+  }
+  update(
+    project: ProjectDocument,
+    floorId: string | null,
+    stack: boolean,
+    selected: string | null,
+    evening = false,
+    statuses: Map<string, StatusReading> | null = null,
+  ) {
+    const liftSignature = statuses
+      ? [...statuses.values()]
+          .filter(r => r.carFloorId !== undefined || r.open !== undefined)
+          .map(r => `${r.feedId}:${r.carFloorId ?? ''}:${r.open ?? ''}`)
+          .sort()
+          .join('|')
+      : '';
+    this.statuses = statuses;
     if (
       this.project === project &&
       this.stack === stack &&
       this.activeFloor === floorId &&
       this.evening === evening &&
+      this.liftSignature === liftSignature &&
       this.scene.children.length
     ) {
       if (this.selected !== selected) {
@@ -438,12 +733,14 @@ export class SceneLayer implements CustomLayerInterface {
       return;
     }
     if (this.project !== project) this.xyCache.clear();
+    this.voidCache.clear();
     this.disposeScene();
     this.project = project;
     this.stack = stack;
     this.activeFloor = floorId;
     this.selected = selected;
     this.evening = evening;
+    this.liftSignature = liftSignature;
     this.revision++;
     const exterior = exteriorWalls(project);
     const index = floorIndex(project),
@@ -555,6 +852,9 @@ export class SceneLayer implements CustomLayerInterface {
           ...(index.objects.get(null) ?? []),
           ...(under ? (index.objects.get(under.id) ?? []) : []),
           ...(floorId ? (index.objects.get(floorId) ?? []) : []),
+          // A stair that climbs to this level belongs on it, even though it is filed under the one
+          // it starts from. Without this the flight you are standing at the top of is not drawn.
+          ...(floorId ? (index.reaching.get(floorId) ?? []) : []),
         ];
     for (const o of visibleObjects) {
       if (buried && (o.floorId === null || (activeF && floors.get(o.floorId)?.buildingId !== activeF.buildingId)))
@@ -563,7 +863,12 @@ export class SceneLayer implements CustomLayerInterface {
       // below-grade levels stay hidden until you go down to one. The excavation is only dug when
       // you are buried, so without this a basement — and especially a garage that sprawls past the
       // tower — hangs over the surrounding streets with no ground around it.
-      if (!buried && belowGrade(o.floorId)) continue;
+      // A shaft is the exception: it is filed under the lowest level it serves, which for a lift
+      // running from a garage is below grade, and skipping it there would hide the whole shaft from
+      // every storey above. It stands where it reaches, so it is judged by the level in focus.
+      if (!buried && belowGrade(o.floorId) && !(isVertical(o.kind) && reaches(project, o, floorId))) continue;
+      // A twin of a shaft already drawn from its lowest level. One lift, one shaft.
+      if (isVertical(o.kind) && !index.primary.has(o.id)) continue;
       if (o.floorId && outlineOnly.has(o.floorId)) continue;
       if (o.floorId && shellBelow.has(o.floorId)) continue;
       if (structureOverview && o.floorId !== floorId && o.kind !== 'zone') continue;
@@ -628,7 +933,9 @@ export class SceneLayer implements CustomLayerInterface {
               : GROUND);
         const height = elevated ? o.height : indoor ? (o.kind === 'room' ? ROOM : SLAB) : 0.04;
         this.surface(
-          o.rings,
+          // A stairwell is a hole in the floor you are standing on, too. Added as holes in the
+          // area's own rings so the plate keeps its shape and loses only the shaft.
+          indoor && o.floorId ? this.withVoids(project, o.rings, o.floorId, index.primary) : o.rings,
           base,
           height,
           color,
@@ -668,6 +975,11 @@ export class SceneLayer implements CustomLayerInterface {
       let merged: Ring[][];
       try {
         merged = polygonClipping.union(polygons[0], ...polygons.slice(1)) as unknown as Ring[][];
+        // Punch the stairwells. A shaft that carries on past this storey goes through its floor, and
+        // a slab drawn over it is a lid on the flight below.
+        const voids = shaftVoids(project, fid, index.primary);
+        if (voids.length)
+          merged = polygonClipping.difference(merged as never, ...voids.map(v => [v] as never)) as unknown as Ring[][];
       } catch {
         continue; // degenerate footprint: no slab is better than a wrong one
       }

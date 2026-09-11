@@ -16,6 +16,8 @@ import {
   geoOrigin,
   navPath,
   objectPosition,
+  PITCH,
+  runFor,
   segmentProjection,
 } from '@kerros/schema';
 
@@ -285,15 +287,22 @@ function core(
     door.offset = distance(wa, wb) / 2;
     p.objects.push(door);
   }
-  lifts.forEach(([name, pt]) => {
-    const l = createObject('elevator', pt, f, name);
-    l.servedFloorIds = all;
-    l.feedId = `${name.replace(/\s/g, '-').toLowerCase()}-${f}`;
-    p.objects.push(l);
-  });
-  const s = createObject('stairs', stair[1], f, stair[0]);
-  s.servedFloorIds = all;
-  p.objects.push(s);
+  // The core walls, door and washroom belong to each storey; the lift and the stair do not. A shaft
+  // is ONE object standing in one place and reaching a list of levels — `servedFloorIds` has always
+  // said so, and repeating it per storey was a workaround from before anything read that list. Built
+  // on the lowest level it serves, which is where its flights count up from.
+  if (f === all[0]) {
+    lifts.forEach(([name, pt]) => {
+      const l = createObject('elevator', pt, f, name);
+      l.servedFloorIds = all;
+      l.feedId = name.replace(/\s/g, '-').toLowerCase();
+      p.objects.push(l);
+    });
+    const s = createObject('stairs', stair[1], f, stair[0]);
+    s.stairModel = 'switchback';
+    s.servedFloorIds = all;
+    p.objects.push(s);
+  }
   const toilet = createObject('fixture', wc, f, 'Washrooms');
   toilet.model = 'toilet' as ModelKind;
   toilet.width = 1.6;
@@ -519,18 +528,27 @@ function createCampus(): ProjectDocument {
     core(p, f, CORE_W, [['Lift D', [-33, -11]]], ['Stair West', [-30, -4]], [-34, -4], all);
     pillars(p, f);
     // Central escalator spine and spiral stairs beside the atrium.
-    for (const [name, x, y, r] of STK_ESCALATORS) {
-      const s = createObject('stairs', [x, y], f, name);
-      s.rotation = r;
-      s.servedFloorIds = all;
-      p.objects.push(s);
-    }
-    for (const [i, pt] of STK_SPIRALS.entries()) {
-      const s = createObject('stairs', pt, f, `Spiral stair ${i + 1}`);
-      s.width = 2.2;
-      s.depth = 2.2;
-      s.servedFloorIds = all;
-      p.objects.push(s);
+    if (f === all[0]) {
+      const storey = Math.abs((p.floors[1]?.elevation ?? 4.4) - (p.floors[0]?.elevation ?? 0)) || 4.4;
+      for (const [name, x, y, r] of STK_ESCALATORS) {
+        const s = createObject('stairs', [x, y], f, name);
+        s.rotation = r;
+        s.stairModel = 'escalator';
+        // An escalator climbs at 30°, so its run follows from the storey height. Left at the
+        // stair default it would be a 4.5 m ramp climbing 4.4 m — the 44° slope that made the
+        // demo's spine look like a chute rather than a machine.
+        s.depth = Math.max(s.depth, runFor(storey, PITCH.escalator));
+        s.servedFloorIds = all;
+        p.objects.push(s);
+      }
+      for (const [i, pt] of STK_SPIRALS.entries()) {
+        const s = createObject('stairs', pt, f, `Spiral stair ${i + 1}`);
+        s.width = 2.2;
+        s.depth = 2.2;
+        s.stairModel = 'spiral';
+        s.servedFloorIds = all;
+        p.objects.push(s);
+      }
     }
     if (office) stockmannOffices(p, f, STK, ATRIUM, [CORE_E, CORE_W]);
     else {

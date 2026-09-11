@@ -554,6 +554,53 @@ export function Inspector(props: Props) {
                     <p className="helper">Watched objects use this camera for event footage.</p>
                   </>
                 )}
+                {editing && object.kind === 'stairs' && (
+                  <>
+                    <h3>Stair geometry</h3>
+                    <select
+                      className="field"
+                      value={object.stairModel ?? ''}
+                      onChange={e => update({ stairModel: (e.target.value || undefined) as SiteObject['stairModel'] })}
+                    >
+                      <option value="">Fit to the footprint</option>
+                      <option value="straight">Straight flight</option>
+                      <option value="switchback">Switchback (half turn)</option>
+                      <option value="dogleg">Dogleg (quarter turn)</option>
+                      <option value="spiral">Spiral</option>
+                      <option value="escalator">Escalator</option>
+                    </select>
+                    <p className="helper">
+                      Left to fit, a run too steep for its footprint is drawn as the stair that turns.
+                    </p>
+                  </>
+                )}
+                {editing && object.kind === 'elevator' && (
+                  <>
+                    <h3>Doors open onto</h3>
+                    {(['front', 'right', 'back', 'left'] as const).map(side => (
+                      <label className="check-row" key={side}>
+                        <input
+                          type="checkbox"
+                          checked={(object.doorSides ?? ['front']).includes(side)}
+                          onChange={e => {
+                            const now = new Set(object.doorSides ?? ['front']);
+                            if (e.target.checked) now.add(side);
+                            else now.delete(side);
+                            update({
+                              doorSides: now.size
+                                ? (['front', 'back', 'left', 'right'] as const).filter(x => now.has(x))
+                                : undefined,
+                            });
+                          }}
+                        />
+                        {side[0].toUpperCase() + side.slice(1)}
+                      </label>
+                    ))}
+                    <p className="helper">
+                      Relative to the lift's own rotation. A level it passes without serving has no doors at all.
+                    </p>
+                  </>
+                )}
                 {editing && ['elevator', 'stairs'].includes(object.kind) && (
                   <>
                     <h3>Served floors</h3>
