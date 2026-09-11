@@ -19,3 +19,4 @@ export type {
   PlanSource,
 } from './aiImport';
 export { documentSvg } from './documentSvg';
+export { landmarks, sheetOffset, shiftEntities, type Landmark } from './register';
