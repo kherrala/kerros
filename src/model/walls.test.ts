@@ -483,4 +483,65 @@ describe('a floor outlined by its rooms', () => {
     // …and the walls around the outside still are.
     expect(p.barriers.filter(b => outside.has(b.id)).length).toBeGreaterThanOrEqual(4);
   });
+  const boxed = () => {
+    const p = newProject();
+    const f = 'floor-ground';
+    for (const [a, b] of [
+      [
+        [0, 0],
+        [10, 0],
+      ],
+      [
+        [10, 0],
+        [10, 8],
+      ],
+      [
+        [10, 8],
+        [0, 8],
+      ],
+      [
+        [0, 8],
+        [0, 0],
+      ],
+    ] as [Point, Point][])
+      addBarrier(p, a, b, f, 'wall');
+    for (const b of p.barriers) b.thickness = 0.4;
+    const room = createObject('room', [5, 4], f, 'Room');
+    room.rings = [
+      closeRing([
+        [0.2, 0.2],
+        [9.8, 0.2],
+        [9.8, 7.8],
+        [0.2, 7.8],
+      ]),
+    ];
+    p.objects.push(room);
+    return p;
+  };
+  it('is not hijacked by a fence drawn on the same floor', () => {
+    // A fence is drawn on a floor but is not part of its plate. Unioned in, it becomes the longest
+    // edge of the "building", and mainAxis is what every freshly drawn wall squares itself to.
+    const p = boxed();
+    addBarrier(p, [-20, -30], [-20, 35], 'floor-ground', 'fence');
+    p.barriers.at(-1)!.thickness = 0.1;
+    expect(floorOutline(p, 'floor-ground')).toHaveLength(1);
+    expect(Math.abs(mainAxis(p, 'floor-ground')) % 90).toBeLessThan(1);
+  });
+  it('does not turn a detached wall into a building of its own', () => {
+    // A garden wall touches no room, so its body is its own polygon in the union — and then its own
+    // outline, which exteriorWalls reads as a facade and the renderer finishes like one.
+    const p = boxed();
+    addBarrier(p, [-20, -30], [-20, 35], 'floor-ground', 'wall');
+    const stray = p.barriers.at(-1)!;
+    stray.thickness = 0.3;
+    expect(floorOutline(p, 'floor-ground')).toHaveLength(1);
+    expect(exteriorWalls(p).has(stray.id), 'a wall away from the building is not a facade').toBe(false);
+  });
+  it('squares the corners of the plate', () => {
+    // Wall solids swept at bare length overlap only across their inner quarter, leaving a notch at
+    // every outer corner — a 12-vertex ring where a box has four.
+    const p = boxed();
+    const [outline] = floorOutline(p, 'floor-ground');
+    expect(outline.length).toBeLessThanOrEqual(5);
+  });
 });

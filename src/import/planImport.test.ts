@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { importPlanEntities, type PlanEntity } from './planImport';
-import { validateProject, type Point } from '../schema';
+import { bridgeDoorways, importPlanEntities, type PlanEntity } from './planImport';
+import { addBarrier, enclosedRegions, validateProject, type Point } from '../schema';
 import { newProject } from '../model/testFixtures';
 
 // A synthetic two-room house in the prefab-CAD idiom the importer understands: the envelope drawn
@@ -166,5 +166,86 @@ describe('walls drawn with more than two face lines', () => {
     // 0 -> 0.30 is the full wall, not the 0.20 m between the inner pair.
     expect(p.barriers.every(b => Math.abs(b.thickness - 0.3) < 0.02)).toBe(true);
     expect(() => validateProject(structuredClone(p))).not.toThrow();
+  });
+});
+
+describe('an oblique doorway the Manhattan pass cannot see', () => {
+  // A box with a partition that stops short of the south wall, leaving a loose end, and the
+  // envelope corner it should reach across. The gap between them is the doorway.
+  const cutCorner = () => {
+    const p = newProject();
+    const f = 'floor-ground';
+    for (const [a, b] of [
+      // The south wall is drawn in two runs, so there is a junction at [7, 0] for the doorway to
+      // reach — which is what an envelope corner or a wall end gives you on a real plan.
+      [
+        [0, 0],
+        [7, 0],
+      ],
+      [
+        [7, 0],
+        [10, 0],
+      ],
+      [
+        [10, 0],
+        [10, 8],
+      ],
+      [
+        [10, 8],
+        [0, 8],
+      ],
+      [
+        [0, 8],
+        [0, 0],
+      ],
+      // The partition, stopping short of the south wall: a loose end at [6, 1.4].
+      [
+        [6, 8],
+        [6, 1.4],
+      ],
+    ] as [Point, Point][])
+      addBarrier(p, a, b, f, 'wall');
+    for (const b of p.barriers) b.thickness = 0.12;
+    return p;
+  };
+  // Door symbols strung along the line from the partition's loose end to the south-east corner.
+  const doorPts = (from: Point, to: Point): Point[] =>
+    [0.02, 0.15, 0.3, 0.45, 0.6, 0.75, 0.9, 0.98].map(t => [
+      from[0] + (to[0] - from[0]) * t,
+      from[1] + (to[1] - from[1]) * t,
+    ]);
+  const obliques = (p: ReturnType<typeof cutCorner>) =>
+    p.barriers.filter(b => {
+      const a = p.junctions.find(j => j.id === b.startId)!.position,
+        c = p.junctions.find(j => j.id === b.endId)!.position;
+      return Math.abs(a[0] - c[0]) > 0.05 && Math.abs(a[1] - c[1]) > 0.05;
+    });
+  const report = () => ({ walls: 0, rooms: 0, doors: 0, windows: 0, passages: 0, named: 0, skipped: [] });
+
+  it('bridges the gap a door is drawn across, and closes the room', () => {
+    const p = cutCorner();
+    const was = enclosedRegions(p, 'floor-ground').length;
+    bridgeDoorways(p, 'floor-ground', doorPts([6, 1.4], [7, 0]), report());
+    const built = obliques(p);
+    expect(built, 'the doorway the drawing shows a door in').toHaveLength(1);
+    // …carrying the door, which is the whole reason it could be found at all.
+    expect(p.objects.filter(o => o.barrierId === built[0].id && o.kind === 'door')).toHaveLength(1);
+    // …and it closed something, which is the only reason it is worth drawing.
+    expect(enclosedRegions(p, 'floor-ground').length).toBeGreaterThan(was);
+    expect(() => validateProject(p)).not.toThrow();
+  });
+  it('bridges nothing when the drawing shows no door there', () => {
+    // The same gap with no door symbols is just a gap. Inventing a wall across it would be the
+    // importer drawing something the plan does not.
+    const p = cutCorner();
+    bridgeDoorways(p, 'floor-ground', [], report());
+    expect(obliques(p)).toHaveLength(0);
+  });
+  it('leaves an axis-aligned gap alone', () => {
+    // A break in a straight wall is the Manhattan pass\'s own business — a doorway it already found,
+    // or a passage it meant to leave open. Bridging it again would seal what the drawing opened.
+    const p = cutCorner();
+    bridgeDoorways(p, 'floor-ground', doorPts([6, 1.4], [6, 0]), report());
+    expect(obliques(p)).toHaveLength(0);
   });
 });

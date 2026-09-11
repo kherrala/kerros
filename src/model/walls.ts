@@ -12,6 +12,7 @@ import {
   closeRing,
   distance,
   openRing,
+  pointInRing,
   rectangle,
   segmentProjection,
 } from './geometry';
@@ -63,14 +64,22 @@ export function floorOutline(project: ProjectDocument, floorId: string | null): 
         // room makes every interior partition look like it sits on the outside of something. The
         // floor's real footprint is what you could stand on plus what encloses it, and unioning the
         // wall bodies in is what closes those gaps into a single plate.
-        const solids: Ring[][] = rooms.map(o => [closeRing(o.rings![0])]);
+        const roomRings = rooms.map(o => closeRing(o.rings![0]));
+        const solids: Ring[][] = roomRings.map(r => [r]);
         for (const b of project.barriers) {
-          if (b.floorId !== floorId) continue;
+          // Walls only. A fence is drawn on a floor but is not part of its plate, and unioning one
+          // in makes the site boundary the building's longest edge — which is then what every new
+          // wall squares itself to.
+          if (b.floorId !== floorId || b.kind !== 'wall') continue;
           const [a, c] = barrierEnds(project, b);
           const len = distance(a, c);
           if (len < 1e-6) continue;
           const angle = (Math.atan2(c[1] - a[1], c[0] - a[0]) * 180) / Math.PI;
-          solids.push([closeRing(rectangle([(a[0] + c[0]) / 2, (a[1] + c[1]) / 2], len, b.thickness, angle))]);
+          // Run on by half a thickness at each end, as spaces.ts sweeps them, or every outer corner
+          // keeps a square notch where the two walls only overlap across their inner quarter.
+          solids.push([
+            closeRing(rectangle([(a[0] + c[0]) / 2, (a[1] + c[1]) / 2], len + b.thickness, b.thickness, angle)),
+          ]);
         }
         // Snapped to a tenth of a millimetre first. Two walls meeting at a corner arrive here with
         // coordinates that differ in the fifteenth decimal, and the clipper answers that by failing
@@ -81,7 +90,14 @@ export function floorOutline(project: ProjectDocument, floorId: string | null): 
         const merged = polygonClipping.union(...(clean as [Ring[], ...Ring[][]])) as unknown as Ring[][];
         // Outer rings only: a courtyard is a hole in the plate, not a second outline, and a stairwell
         // void certainly is not a façade.
-        rings = merged.map(pg => openRing(pg[0]));
+        //
+        // And only the polygons that a room is actually part of. Wall bodies are here to close the
+        // gaps BETWEEN rooms; one standing away from the building — a garden wall, a retaining wall —
+        // touches no room and would otherwise come back as a little footprint of its own, which then
+        // reads as a façade with its own exterior finish.
+        rings = merged
+          .filter(pg => roomRings.some(r => r.some(q => pointInRing(q, openRing(pg[0])))))
+          .map(pg => openRing(pg[0]));
       } catch {
         // Still degenerate. The rooms alone are a worse outline — they leave a gap at every wall —
         // but they are an outline, and no outline at all means no façade and no floor plate.

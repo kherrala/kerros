@@ -20,9 +20,11 @@ import {
   centroid,
   closeRing,
   createObject,
+  distance,
   divideSpaces,
   enclosedRegions,
   refreshPortals,
+  segmentProjection,
   spaceAt,
 } from '../schema';
 import type { Point, ProjectDocument } from '../schema';
@@ -68,6 +70,8 @@ export function importPlanEntities(
     );
   }
   emitBarriers(draft, floorId, envelope, partitions, passages, report);
+  // Before the rooms, because a bridged doorway is what closes the region they are read from.
+  bridgeDoorways(draft, floorId, doorPts, report);
   emitRooms(draft, floorId, partitions, passages, report);
   emitOpenings(draft, floorId, envelope, partitions, openings, report);
   nameRooms(draft, floorId, regional, layers, report);
@@ -281,6 +285,124 @@ function emitOpenings(
       if (o.kind === 'door') report.doors++;
       else report.windows++;
     }
+  }
+}
+
+/** Close an oblique doorway the Manhattan pass could not see.
+ *
+ *  The reconstruction reads axis-aligned faces, which is what a Finnish prefab drawing is made of —
+ *  except where it is not. A room cut off at 45° leaves two wall ends dangling a metre or so apart
+ *  with nothing between them but the door symbol drawn across the gap, and every axis-aligned pass
+ *  drops all three: the faces because they are oblique, the wall because it has no faces, the door
+ *  because it has no wall. The region then leaks and two rooms import as one.
+ *
+ *  What the drawing is actually saying there is legible without reading oblique geometry at all: two
+ *  loose wall ends, a plausible door's distance apart, with door symbols standing on the line between
+ *  them. That is a doorway, and this bridges it — a barrier on that line carrying the door.
+ *
+ *  Deliberately conservative. It fires only between ends that nothing else has claimed, only when the
+ *  span is a door's width, and only when the drawing put a door symbol there: it can close a gap the
+ *  drawing shows a door in, and it cannot invent a wall anywhere else. */
+export function bridgeDoorways(
+  draft: ProjectDocument,
+  floorId: string | null,
+  doorPts: Point[],
+  report: PlanImportReport,
+) {
+  const mine = draft.barriers.filter(b => b.floorId === floorId);
+  // A loose end is a junction exactly one wall reaches: a wall that simply stops is the drawing
+  // admitting something is missing there.
+  const uses = new Map<string, number>();
+  for (const b of mine) for (const id of [b.startId, b.endId]) uses.set(id, (uses.get(id) ?? 0) + 1);
+  const at = (id: string) => draft.junctions.find(j => j.id === id)!.position;
+  const loose = [...uses].filter(([, n]) => n === 1).map(([id]) => id);
+  const before = enclosedRegions(draft, floorId).length;
+
+  type Candidate = { from: string; to: string; span: number; score: number };
+  const candidates: Candidate[] = [];
+  for (const from of loose)
+    for (const to of uses.keys()) {
+      if (from === to) continue;
+      const a = at(from),
+        b = at(to);
+      const span = distance(a, b);
+      // A door's worth of gap: a generous double door is 1.6 m, a single leaf 0.9. Shorter than
+      // 0.6 is a butt joint the snapping missed; wider than 1.8 is not a doorway, it is a room.
+      if (span < 0.6 || span > 1.8) continue;
+      // Axis-aligned gaps are the Manhattan pass's own business — a wall it broke, a passage it
+      // meant to leave. This is only for what it could not represent at all.
+      const angle = Math.abs(((((Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI) % 90) + 90) % 90);
+      if (angle < 8 || angle > 82) continue;
+      // Nothing already runs along this line: a wall the Manhattan pass DID find is not a gap.
+      if (
+        mine.some(w => {
+          const [wa, wb] = barrierEnds(draft, w);
+          return segmentProjection(a, wa, wb).distance < 0.15 && segmentProjection(b, wa, wb).distance < 0.15;
+        })
+      )
+        continue;
+      // Door symbols standing ON the line and reaching BOTH ends of it. A swing sweeping past is
+      // not a door in the gap, and a symbol crowding one jamb is the door in the wall next to it.
+      const ts = doorPts.filter(q => segmentProjection(q, a, b).distance < 0.4).map(q => segmentProjection(q, a, b).t);
+      if (ts.length < 6) continue;
+      if (!ts.some(t => t < 0.2) || !ts.some(t => t > 0.8)) continue;
+      candidates.push({ from, to, span, score: ts.length / span });
+    }
+
+  // Strongest claim first. A junction takes part in one bridge and no more: a gap is one doorway,
+  // and without this the same gap is bridged twice — once from each end — and a corner sprouts a
+  // second doorway running off at another angle.
+  const claimed = new Set<string>();
+  let regions = before;
+  // Shortest first. Where two lines from one loose end both carry door symbols and both close a
+  // room, the doorway is the narrower: a door is the smallest gap that separates two places, and
+  // the longer line is the same doorway plus a diagonal across the room behind it.
+  for (const c of candidates.sort((x, y) => x.span - y.span || y.score - x.score)) {
+    if (claimed.has(c.from) || claimed.has(c.to) || (uses.get(c.from) ?? 0) !== 1) continue;
+    const a = at(c.from),
+      b = at(c.to);
+    const neighbours = mine.filter(w => [c.from, c.to].includes(w.startId) || [c.from, c.to].includes(w.endId));
+    const thickness = Math.max(0.05, Math.min(...neighbours.map(w => w.thickness), 0.2));
+    // The test that matters: does this actually close a room? A doorway is worth drawing where it
+    // separates two places and nowhere else, and a line that leaves the plan exactly as open as it
+    // was is a coincidence among the door symbols, not a wall. Probed on a copy, so a candidate that
+    // fails leaves nothing behind.
+    const probe: ProjectDocument = {
+      ...draft,
+      junctions: [...draft.junctions, { id: 'probe-a', position: a, floorId }, { id: 'probe-b', position: b, floorId }],
+      barriers: [
+        ...draft.barriers,
+        { ...mine[0], id: 'probe', startId: 'probe-a', endId: 'probe-b', floorId, thickness },
+      ],
+    };
+    const after = enclosedRegions(probe, floorId).length;
+    // Re-measured each time, not against the count this pass started with: a second bridge judged
+    // against a stale number is judged against a plan that no longer exists.
+    if (after <= regions) continue;
+    regions = after;
+    claimed.add(c.from);
+    claimed.add(c.to);
+    uses.set(c.from, 2);
+    addBarrier(draft, a, b, floorId, 'wall');
+    const wall = draft.barriers.at(-1)!;
+    wall.thickness = thickness;
+    wall.name = 'Partition';
+    const storey = draft.floors.find(f => f.id === floorId)?.height;
+    if (storey) wall.height = storey;
+    report.walls++;
+    // The doorway fills the span but for a jamb at each end — a door flush to a wall end is one the
+    // document will not hold.
+    const clear = distance(a, b) - 2 * (thickness + 0.02);
+    if (clear < OPENING_MIN_SEGMENT / 2) {
+      report.skipped.push(`bridged doorway too narrow to hold a door at ${a.map(v => v.toFixed(1))}`);
+      continue;
+    }
+    const door = createObject('door', [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], floorId, 'Door');
+    door.width = Math.round(clear * 100) / 100;
+    door.barrierId = wall.id;
+    door.offset = Math.round((distance(a, b) / 2) * 1000) / 1000;
+    draft.objects.push(door);
+    report.doors++;
   }
 }
 
