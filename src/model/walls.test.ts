@@ -422,3 +422,65 @@ describe('removing a wall takes its openings with it', () => {
     expect(() => validateProject(p)).not.toThrow();
   });
 });
+
+describe('a floor outlined by its rooms', () => {
+  it('does not make every partition an exterior wall', () => {
+    // A box with two partitions in it, and a room in each of the three bays — the shape an import
+    // produces, where there are no zones to outline the floor with.
+    const p = newProject();
+    const f = 'floor-ground';
+    for (const [a, b] of [
+      [
+        [0, 0],
+        [12, 0],
+      ],
+      [
+        [12, 0],
+        [12, 8],
+      ],
+      [
+        [12, 8],
+        [0, 8],
+      ],
+      [
+        [0, 8],
+        [0, 0],
+      ],
+      [
+        [4, 0],
+        [4, 8],
+      ],
+      [
+        [8, 0],
+        [8, 8],
+      ],
+    ] as [Point, Point][])
+      addBarrier(p, a, b, f, 'wall');
+    // The partitions are the two that run north-south inside the box; adding them split the top and
+    // bottom walls, so "inside" has to mean the line they stand on, not merely their endpoints.
+    const inner = (b: (typeof p.barriers)[number]) => {
+      const [a, c] = barrierEnds(p, b);
+      return Math.abs(a[0] - c[0]) < 0.01 && (Math.abs(a[0] - 4) < 0.01 || Math.abs(a[0] - 8) < 0.01);
+    };
+    for (const b of p.barriers) b.thickness = inner(b) ? 0.1 : 0.4;
+    for (const ring of enclosedRegions(p, f)) {
+      const room = createObject('room', centroid(ring), f, 'Room');
+      room.rings = [closeRing(ring)];
+      p.objects.push(room);
+    }
+    expect(p.objects.filter(o => o.kind === 'room')).toHaveLength(3);
+    // Rooms do not touch — there is a wall in every gap — so unioning them alone gives one polygon
+    // PER ROOM, and then every partition lies along an outline and is read as facing the outside.
+    // The footprint has to include the walls to be a footprint.
+    expect(floorOutline(p, f)).toHaveLength(1);
+    const outside = exteriorWalls(p);
+    const partitions = p.barriers.filter(inner);
+    expect(partitions.length).toBeGreaterThan(0);
+    expect(
+      partitions.filter(b => outside.has(b.id)),
+      'a partition is not a facade',
+    ).toHaveLength(0);
+    // …and the walls around the outside still are.
+    expect(p.barriers.filter(b => outside.has(b.id)).length).toBeGreaterThanOrEqual(4);
+  });
+});

@@ -6,7 +6,15 @@
 // bearing — so 0° is the site's own grid rather than true north, and a building laid out along its
 // street needs no reference angle at all beyond the default.
 import polygonClipping from 'polygon-clipping';
-import { OPENING_MIN_SEGMENT, barrierEnds, closeRing, distance, openRing, segmentProjection } from './geometry';
+import {
+  OPENING_MIN_SEGMENT,
+  barrierEnds,
+  closeRing,
+  distance,
+  openRing,
+  rectangle,
+  segmentProjection,
+} from './geometry';
 import type { Point, ProjectDocument, Ring } from './types';
 
 /** A segment's direction as an *axis* in [0, 180). A wall and the same wall drawn backwards describe
@@ -50,12 +58,41 @@ export function floorOutline(project: ProjectDocument, floorId: string | null): 
     const rooms = project.objects.filter(o => o.floorId === floorId && o.kind === 'room' && o.rings?.length);
     if (rooms.length) {
       try {
-        const merged = polygonClipping.union(
-          ...(rooms.map(o => [closeRing(o.rings![0])]) as [Ring[], ...Ring[][]]),
-        ) as unknown as Ring[][];
+        // The rooms AND the walls between them. Rooms alone do not touch — there is a wall in every
+        // gap — so their union is one polygon per room rather than one building, and an outline per
+        // room makes every interior partition look like it sits on the outside of something. The
+        // floor's real footprint is what you could stand on plus what encloses it, and unioning the
+        // wall bodies in is what closes those gaps into a single plate.
+        const solids: Ring[][] = rooms.map(o => [closeRing(o.rings![0])]);
+        for (const b of project.barriers) {
+          if (b.floorId !== floorId) continue;
+          const [a, c] = barrierEnds(project, b);
+          const len = distance(a, c);
+          if (len < 1e-6) continue;
+          const angle = (Math.atan2(c[1] - a[1], c[0] - a[0]) * 180) / Math.PI;
+          solids.push([closeRing(rectangle([(a[0] + c[0]) / 2, (a[1] + c[1]) / 2], len, b.thickness, angle))]);
+        }
+        // Snapped to a tenth of a millimetre first. Two walls meeting at a corner arrive here with
+        // coordinates that differ in the fifteenth decimal, and the clipper answers that by failing
+        // to close a ring at all — which silently cost this floor its whole outline.
+        const snap = (pg: Ring[]): Ring[] =>
+          pg.map(r => r.map(q => [Math.round(q[0] * 1e4) / 1e4, Math.round(q[1] * 1e4) / 1e4] as Point));
+        const clean = solids.map(snap);
+        const merged = polygonClipping.union(...(clean as [Ring[], ...Ring[][]])) as unknown as Ring[][];
+        // Outer rings only: a courtyard is a hole in the plate, not a second outline, and a stairwell
+        // void certainly is not a façade.
         rings = merged.map(pg => openRing(pg[0]));
       } catch {
-        rings = []; // degenerate footprint: fall through to the site's own outline
+        // Still degenerate. The rooms alone are a worse outline — they leave a gap at every wall —
+        // but they are an outline, and no outline at all means no façade and no floor plate.
+        try {
+          const merged = polygonClipping.union(
+            ...(rooms.map(o => [closeRing(o.rings![0])]) as [Ring[], ...Ring[][]]),
+          ) as unknown as Ring[][];
+          rings = merged.map(pg => openRing(pg[0]));
+        } catch {
+          rings = [];
+        }
       }
     }
   }
