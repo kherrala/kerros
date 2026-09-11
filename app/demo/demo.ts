@@ -211,21 +211,23 @@ const STK_SPIRALS: Point[] = [
 // name, elevation, colour, ground-floor sub-departments, isOffice
 // Every storey shares one brightness: an elevation-graded ladder read as the lower floors being
 // badly lit rather than lower, and a visitor stepping between levels expects the same daylight.
-// Retail levels wear a light warm neutral, office levels a light cool one; basements sit only a
-// step darker so below-grade still reads below-grade.
+// Every level wears a light cool neutral — daylight grey rather than the warm putty these plates
+// used to carry, which under a strong sun read as beige and made a whole department store look like
+// a model made of cardboard. Offices sit a shade bluer than retail, and basements only a step darker
+// so below-grade still reads below-grade.
 const STK_FLOORS: [string, string, number, string, string[], boolean][] = [
-  ['floor-basement', 'Herkku food market', -8.8, '#c5c1ba', ['Bakery', 'Deli & sushi', 'Alko'], false],
-  ['floor-b1', 'Electronics & services', -4.2, '#c5c1ba', ['Power electronics', 'Shoe repair', 'Pet supplies'], false],
-  ['floor-ground', 'Beauty & cosmetics', 0, '#d7d2c8', ['Fragrances', 'Skincare', 'Watches & jewellery'], false],
-  ['floor-01', 'Womenswear', 4.2, '#d7d2c8', ['Designer studio', 'Knitwear', 'Lingerie'], false],
-  ['floor-02', 'Menswear & denim', 8.4, '#d7d2c8', ['Suits', 'Casual', 'Shoes'], false],
-  ['floor-03', 'Shoes & accessories', 12.6, '#d7d2c8', ['Handbags', 'Travel', 'Sunglasses'], false],
-  ['floor-04', 'Kids & sport', 16.8, '#d7d2c8', ['Toys', 'Outdoor', 'Denim junior'], false],
-  ['floor-05', 'Home & interior', 21, '#d7d2c8', ['ISKU Koti', 'Kitchen', 'Textiles'], false],
-  ['floor-06', 'Books, toys & café', 25.2, '#d7d2c8', ['Academic bookstore', 'Restaurant', 'Crazy Days hall'], false],
-  ['floor-07', 'Offices · buying & admin', 29.4, '#d5dbdf', [], true],
-  ['floor-08', 'Offices · marketing & HR', 33.6, '#d5dbdf', [], true],
-  ['floor-09', 'Offices · management & F8 lounge', 37.8, '#d5dbdf', [], true],
+  ['floor-basement', 'Herkku food market', -8.8, '#d2d8de', ['Bakery', 'Deli & sushi', 'Alko'], false],
+  ['floor-b1', 'Electronics & services', -4.2, '#d2d8de', ['Power electronics', 'Shoe repair', 'Pet supplies'], false],
+  ['floor-ground', 'Beauty & cosmetics', 0, '#e1e6ea', ['Fragrances', 'Skincare', 'Watches & jewellery'], false],
+  ['floor-01', 'Womenswear', 4.2, '#e1e6ea', ['Designer studio', 'Knitwear', 'Lingerie'], false],
+  ['floor-02', 'Menswear & denim', 8.4, '#e1e6ea', ['Suits', 'Casual', 'Shoes'], false],
+  ['floor-03', 'Shoes & accessories', 12.6, '#e1e6ea', ['Handbags', 'Travel', 'Sunglasses'], false],
+  ['floor-04', 'Kids & sport', 16.8, '#e1e6ea', ['Toys', 'Outdoor', 'Denim junior'], false],
+  ['floor-05', 'Home & interior', 21, '#e1e6ea', ['ISKU Koti', 'Kitchen', 'Textiles'], false],
+  ['floor-06', 'Books, toys & café', 25.2, '#e1e6ea', ['Academic bookstore', 'Restaurant', 'Crazy Days hall'], false],
+  ['floor-07', 'Offices · buying & admin', 29.4, '#dfe6ec', [], true],
+  ['floor-08', 'Offices · marketing & HR', 33.6, '#dfe6ec', [], true],
+  ['floor-09', 'Offices · management & F8 lounge', 37.8, '#dfe6ec', [], true],
 ];
 // A floor plate is the footprint with the atrium (and, for offices, the cores) punched out.
 /** Push a ring outward from its centre by `metres` — a serviceable buffer for the broadly convex
@@ -259,7 +261,7 @@ function pillars(p: ProjectDocument, f: string) {
     o.model = 'post' as ModelKind;
     o.width = o.depth = 0.8;
     o.height = 4.2;
-    o.color = '#b8ad98';
+    o.color = '#c4cad0';
     p.objects.push(o);
   }
 }
@@ -393,7 +395,7 @@ function createCampus(): ProjectDocument {
     [24, 24],
     [-16, 24],
   ];
-  const gallery = poly(p, 'zone', 'Entresol gallery', ENT, 'floor-entresol', '#f0e9db');
+  const gallery = poly(p, 'zone', 'Entresol gallery', ENT, 'floor-entresol', '#edf1f5');
   gallery.rings!.push(closeRing(ATRIUM.map(pt => [...pt] as Point)));
   poly(
     p,
@@ -419,7 +421,7 @@ function createCampus(): ProjectDocument {
       [-16, 24],
     ],
     'floor-entresol',
-    '#e6e3d2',
+    '#e5eae7',
   );
   for (const [i, pt] of STK_SPIRALS.entries()) {
     const s = createObject('stairs', pt, 'floor-entresol', `Spiral stair ${i + 1}`);
@@ -429,7 +431,7 @@ function createCampus(): ProjectDocument {
     p.objects.push(s);
   }
   // -1A: the pharmacy mezzanine ring with its real tunnel link toward the Academic Bookstore.
-  const b1aGallery = poly(p, 'zone', 'Wellness gallery', ENT, 'floor-b1a', '#e3ddd2');
+  const b1aGallery = poly(p, 'zone', 'Wellness gallery', ENT, 'floor-b1a', '#e0e6ec');
   b1aGallery.rings!.push(closeRing(ATRIUM.map(pt => [...pt] as Point)));
   poly(
     p,
@@ -481,7 +483,7 @@ function createCampus(): ProjectDocument {
       [-16, 30],
     ],
     'floor-b1',
-    '#c9c6bd',
+    '#d5dae0',
   );
   const ramp = createObject(
     'poi',
@@ -497,7 +499,7 @@ function createCampus(): ProjectDocument {
   // left no ground outside the doors at all, so an entrance had nothing to open onto — by the plan's
   // own account the street did not exist. A real boundary takes in the pavement out to the kerb.
   poly(p, 'parcel', 'Property boundary', outset(STK, 7), null, '#f3f4f0');
-  poly(p, 'building', 'Stockmann', STK, null, '#d8d2c6');
+  poly(p, 'building', 'Stockmann', STK, null, '#dadee4');
   const all = p.floors.map(f => f.id);
   for (const [f, dept, elevation, color, sub, office] of STK_FLOORS) {
     const level = f === 'floor-basement' ? -2 : f === 'floor-b1' ? -1 : f === 'floor-ground' ? 0 : Number(f.slice(-2));

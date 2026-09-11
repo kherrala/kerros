@@ -771,9 +771,7 @@ export class SceneLayer implements CustomLayerInterface {
         // where the ontology reads it from. A flight that says nothing carries you up.
         const way = /\bdown\b/i.test(o.name ?? '') ? -1 : 1;
         const spare =
-          way > 0
-            ? { at: -going / 2, base: -STEP_RISE }
-            : { at: deck + going / 2, base: rise + riser - STEP_RISE };
+          way > 0 ? { at: -going / 2, base: -STEP_RISE } : { at: deck + going / 2, base: rise + riser - STEP_RISE };
         const group = this.parts([spare, ...band].map(tread), color, false);
         // One step's travel, in scene space, taken by projecting two plan points rather than by
         // rebuilding the rotation here: `xy` is the only thing that knows which way plan north

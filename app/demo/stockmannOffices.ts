@@ -191,7 +191,7 @@ export function stockmannOffices(
     meeting: '#d2e6d6',
     studio: '#dde2f1',
     lounge: '#efe4cd',
-    support: '#e2dfd7',
+    support: '#e3e6ea',
   };
   const rooms: { object: SiteObject; use: RoomUse; angle: number; enclosed: boolean; monitored?: boolean }[] = [];
   const inside = (point: Point, rings: Ring[]) =>
@@ -242,7 +242,7 @@ export function stockmannOffices(
     project.objects.push(object);
     return object;
   }
-  for (const polygon of circulation) emit(polygon, 'Gallery & lift lobbies', '#d8d6cf');
+  for (const polygon of circulation) emit(polygon, 'Gallery & lift lobbies', '#dfe3e8');
   for (const wing of wings) {
     const b = basis(wing);
     let cursor = 0;
