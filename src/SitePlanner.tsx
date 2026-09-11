@@ -720,7 +720,11 @@ export function SitePlanner({
       return;
     }
     if (PLACE_TOOLS.includes(tool)) {
-      commit(p => {
+      // One click, one object, and the tool is done. These tools place a single thing and leave it
+      // selected, so staying armed means the next click — on the thing you just placed, to move it
+      // or read it — drops another one on top instead. Drawing tools are different: a wall or a zone
+      // takes several clicks, so they stay until the shape is finished.
+      const placed = commit(p => {
         const o = createObject(tool as ObjectKind, point, floorId);
         if (isOpening(o.kind)) {
           // The very fit the preview drew. Two copies of this rule would drift apart, and a preview
@@ -736,6 +740,7 @@ export function SitePlanner({
         p.objects.push(o);
         setSelected(o.id);
       });
+      if (placed) setTool('select');
     }
   }
   // A basemap building becomes a first-class model: its own building entry (carrying the basemap
@@ -1042,6 +1047,11 @@ export function SitePlanner({
     // destroy a name, its feed bindings and its zone memberships. So ask, and let the answer say which.
     const rejoin = project.barriers.some(b => b.id === selected) ? spacesRejoinedBy(project, selected) : null;
     if (rejoin && !merge) {
+      // One question at a time. The delete prompt has been answered — the wall is going — and what
+      // is left to settle is what happens to the two spaces it separated. Leaving it open stacks a
+      // second dialog on a first that is already spent, and answering the merge leaves the delete
+      // prompt standing there asking again.
+      setDeleteOpen(false);
       setMerge({ wallId: selected, a: rejoin[0], b: rejoin[1] });
       return;
     }

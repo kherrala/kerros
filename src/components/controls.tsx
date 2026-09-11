@@ -15,8 +15,21 @@ export function Modal({
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
-    dialog.current?.showModal();
-    return () => dialog.current?.close();
+    const el = dialog.current;
+    el?.showModal();
+    // Put the keyboard where the dialog is asking you to act.
+    //
+    // Left alone, a dialog focuses its first focusable child, which here is the X in the corner: the
+    // one control that throws the dialog away. Enter then dismisses the question instead of
+    // answering it, which is the opposite of what pressing Enter on a confirmation should do.
+    //
+    // A dialog that wants typing wants its first field — opening "Add a floor" and having to reach
+    // for the mouse to click into the name is the wrong first move. Anything else wants the last
+    // button in its footer, which is where the action sits.
+    const field = el?.querySelector<HTMLElement>('input, select, textarea');
+    const actions = el?.querySelectorAll<HTMLElement>('footer button');
+    (field ?? actions?.[actions.length - 1])?.focus();
+    return () => el?.close();
   }, []);
   return (
     <dialog
