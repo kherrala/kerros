@@ -164,6 +164,9 @@ export class SceneLayer implements CustomLayerInterface {
   private presentedElevation = (z: number) => z;
   private cage = new UndergroundCage();
   private sun?: THREE.DirectionalLight;
+  /** The two lights that are not the sun, kept so the scene can be re-lit without being rebuilt. */
+  private skyLight?: THREE.HemisphereLight;
+  private roomLight?: THREE.AmbientLight;
   private route: Route | null = null;
   private routeStep: number | null = null;
   private routeGroup: THREE.Group | null = null;
@@ -258,6 +261,26 @@ export class SceneLayer implements CustomLayerInterface {
     this.renderer.resetState();
     this.envCache.set(key, target);
     return target.texture;
+  }
+  /** Move the existing lights to where a new sun puts them, without touching the geometry. Valid
+   *  only while the dusk treatment is unchanged — see the caller. */
+  private relight(project: ProjectDocument, floorId: string | null, sun: Sun) {
+    const air = ambient(sun, project.floors.find(f => f.id === floorId)?.light);
+    this.scene.environmentIntensity = air.environment;
+    this.skyLight?.color.set(air.sky);
+    this.skyLight?.groundColor.set(air.ground);
+    if (this.skyLight) this.skyLight.intensity = air.hemisphere;
+    this.roomLight?.color.set(air.interior);
+    if (this.roomLight) this.roomLight.intensity = air.interiorLevel;
+    const beam = sunlight(sun);
+    if (this.sun) {
+      this.sun.color.set(beam.color);
+      this.sun.intensity = beam.intensity;
+      this.sun.position.set(...beam.position);
+      this.fitShadowCamera();
+    }
+    if (this.renderer) this.renderer.shadowMap.needsUpdate = true;
+    this.map?.triggerRepaint();
   }
   /** Point the sun at the model and shrink its shadow frustum to fit. A fixed +/-140 m box spends
    *  most of a 2048 map on empty ground: a small building got a handful of texels and its shadows
@@ -1023,15 +1046,28 @@ export class SceneLayer implements CustomLayerInterface {
           .join('|')
       : '';
     this.statuses = statuses;
-    if (
+    const settled =
       this.project === project &&
       this.stack === stack &&
       this.activeFloor === floorId &&
-      this.sunState === sun &&
       this.liftSignature === liftSignature &&
       this.excavation === excavation &&
-      this.scene.children.length
-    ) {
+      this.scene.children.length > 0;
+    if (settled && this.sunState === sun) {
+      if (this.selected !== selected) {
+        this.selected = selected;
+        this.refreshHighlight();
+      }
+      return;
+    }
+    // The sun moves every ten minutes, and a building does not change when it does. Rebuilding a
+    // seventeen-storey model — or a hundred-level one — to move a light would freeze the map on a
+    // timer for no reason, so when the sun is the only thing that has moved, only the lights move.
+    // Crossing into or out of dusk is the exception: that turns lamps on, changes the glazing and
+    // recolours the contact shadows, none of which live in a light.
+    if (settled && this.sunState.evening === sun.evening) {
+      this.sunState = sun;
+      this.relight(project, floorId, sun);
       if (this.selected !== selected) {
         this.selected = selected;
         this.refreshHighlight();
@@ -1122,10 +1158,13 @@ export class SceneLayer implements CustomLayerInterface {
     const sky = new THREE.HemisphereLight(air.sky, air.ground, air.hemisphere);
     sky.position.set(0, 0, 1);
     this.scene.add(sky);
+    this.skyLight = sky;
     // The building's own lighting, which does not care what the sun is doing. Offices, shop floors
     // and garages burn their lights around the clock, and Kerros draws buildings from the inside —
     // so a storey in section at midnight is lit by this and stays readable, while outside goes dark.
-    this.scene.add(new THREE.AmbientLight(air.interior, air.interiorLevel));
+    const room = new THREE.AmbientLight(air.interior, air.interiorLevel);
+    this.scene.add(room);
+    this.roomLight = room;
     const beam = sunlight(sun);
     const light = new THREE.DirectionalLight(beam.color, beam.intensity);
     light.position.set(...beam.position);

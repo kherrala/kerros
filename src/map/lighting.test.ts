@@ -85,23 +85,47 @@ describe('what the sun does to the picture', () => {
     expect(position[2]).toBeGreaterThan(5);
   });
 
-  it('never turns the building lights off', () => {
-    // A plan that goes black at sunset is describing a power cut, not an evening. Kerros draws
-    // buildings from the inside, so the interior term is what most of the picture is lit by, and it
-    // is the same at two in the morning as at ten in the morning.
+  it('holds a lit interior at the same level whatever the sky is doing', () => {
+    // A plan that goes black at sunset is describing a power cut, not an evening — and one that
+    // blows out at noon is not readable either. The ceiling makes up the difference between what
+    // the sky is giving and what a lit interior sits at, which is what a real building's lighting
+    // control does, and it is the only way the same storey reads the same at every hour.
+    const hours = [
+      '2026-06-21T10:00:00Z',
+      '2026-06-21T16:00:00Z',
+      '2026-09-12T05:00:00Z',
+      '2026-12-21T10:30:00Z',
+      '2026-12-21T02:00:00Z',
+    ];
+    const totals = hours.map(when => {
+      const air = ambient(sunAt(HELSINKI, new Date(when)));
+      return air.daylight + air.interiorLevel;
+    });
+    for (const total of totals) expect(total).toBeGreaterThan(1.9);
+    expect(Math.max(...totals) - Math.min(...totals)).toBeLessThan(0.5);
+    // And the lamps work hardest when the sun is not there to help.
     const noon = ambient(sunAt(HELSINKI, new Date('2026-06-21T10:00:00Z')));
     const night = ambient(sunAt(HELSINKI, new Date('2026-12-21T02:00:00Z')));
-    expect(night.interiorLevel).toBeGreaterThan(1);
-    expect(night.interiorLevel).toBe(noon.interiorLevel);
+    expect(night.interiorLevel).toBeGreaterThan(noon.interiorLevel);
     expect(night.interior).toBe(noon.interior);
-    expect(ambient(sunAt(HELSINKI, new Date('2026-12-21T02:00:00Z'))).day).toBe(0);
+    expect(night.day).toBe(0);
     expect(ambient(sunAt(HELSINKI, new Date('2026-06-21T10:20:00Z'))).day).toBe(1);
+  });
+
+  it('leaves an unlit level dark', () => {
+    // A shell, a closed floor, a level whose lights are off: that is a thing a building has, and
+    // the plan should say so rather than quietly lighting it anyway.
+    const night = sunAt(HELSINKI, new Date('2026-12-21T02:00:00Z'));
+    expect(ambient(night, { kelvin: 4000, level: 0 }).interiorLevel).toBe(0);
+    expect(ambient(night, { kelvin: 4000, level: 0.4 }).interiorLevel).toBeLessThan(
+      ambient(night, { kelvin: 4000, level: 1 }).interiorLevel,
+    );
   });
 
   it('takes the lamp from the floor, and warms the light with it', () => {
     const sun = sunAt(HELSINKI, new Date('2026-12-21T02:00:00Z'));
-    const tube = ambient(sun, { kelvin: 4000, level: 0.8 });
-    const tungsten = ambient(sun, { kelvin: 2700, level: 0.8 });
+    const tube = ambient(sun, { kelvin: 4000, level: 1 });
+    const tungsten = ambient(sun, { kelvin: 2700, level: 1 });
     const dimmed = ambient(sun, { kelvin: 4000, level: 0.3 });
     const blue = (c: string) => Number.parseInt(c.slice(5, 7), 16);
     expect(blue(tungsten.interior)).toBeLessThan(blue(tube.interior));

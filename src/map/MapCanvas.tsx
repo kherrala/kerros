@@ -735,7 +735,7 @@ export function MapCanvas(props: MapCanvasProps) {
       anchor: 'map',
       position: beam.mapPosition,
       color: beam.color,
-      intensity: 0.2 + 0.26 * ambient(p.sun).day,
+      intensity: 0.28 + 0.14 * ambient(p.sun).day,
     });
     m.setSky({
       'sky-color': p.dark ? '#172435' : evening ? '#656c8d' : '#92b9d2',

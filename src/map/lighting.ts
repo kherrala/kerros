@@ -17,7 +17,11 @@ import type { Point } from '../model/types';
 
 /** The sun at the top of its scale, before the air takes its cut. Deliberately modest: see
  *  `sunlight` for why the beam is no longer the thing lighting the model. */
-const SUN_PEAK = 1.7;
+const SUN_PEAK = 2.3;
+
+/** What a fully lit interior surface sits at, all sources together. Held across the day so the same
+ *  storey reads the same at noon and at midnight — see `ambient`. */
+const TARGET_INTERIOR = 2.05;
 
 const RAD = Math.PI / 180;
 const DEG = 180 / Math.PI;
@@ -85,7 +89,7 @@ export function sunAt(lngLat: Point, when: Date | number = new Date()): Sun {
  *  and dusk, at the angles the two fixed lightings used before this file knew where the sun was. */
 export const FIXED: Record<'day' | 'evening', Sun> = {
   day: { altitude: 34, azimuth: 247, evening: false },
-  evening: { altitude: -8, azimuth: 294, evening: true },
+  evening: { altitude: -3, azimuth: 294, evening: true },
 };
 
 /** Linear interpolation through a table of (altitude, value) stops, flat outside its ends. */
@@ -126,6 +130,20 @@ const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
  *  ten times as much atmosphere. This is why the scene no longer needs a "too strong" fixed value.
  *  Helsinki's sun tops out at 53° in June and 6° at midwinter, and the difference now shows. */
 function beam(altitude: number): number {
+  // Afterglow. Below the horizon the sky is still lit from under the rim, and that light still
+  // arrives from a direction — it is what gives a dusk façade its warm edge, and drawing dusk with
+  // no directional light at all left the model flat and lifeless. Faded in as the sun nears the
+  // horizon and out again at civil twilight, so nothing jumps as it crosses.
+  const glow =
+    0.12 *
+    Math.max(0, Math.min(1, (altitude - CIVIL_TWILIGHT) / -CIVIL_TWILIGHT)) *
+    Math.max(0, Math.min(1, 1 - altitude / 3));
+  return beamAbove(altitude) + glow;
+}
+
+/** The direct beam alone, with no allowance for afterglow: what the sun is actually delivering to a
+ *  surface, and so what the ceiling has to make up. */
+function beamAbove(altitude: number): number {
   if (altitude <= 0) return 0;
   const airMass = 1 / (Math.sin(altitude * RAD) + 0.50572 * (altitude + 6.07995) ** -1.6364);
   return 0.7 ** (airMass ** 0.678);
@@ -149,11 +167,11 @@ export const sunlight = (sun: Sun) => {
     // Low light is long light: the blue is scattered out of it before it arrives.
     color: graded<string>(
       [
-        [-6, '#ff9a63'],
-        [2, '#ffb072'],
-        [10, '#ffd7a6'],
-        [25, '#ffeed6'],
-        [45, '#fff6e9'],
+        [-6, '#ffb083'],
+        [2, '#ffc094'],
+        [10, '#ffdcb4'],
+        [25, '#fff1dc'],
+        [45, '#fff8ee'],
       ],
       sun.altitude,
       blend,
@@ -197,8 +215,9 @@ export const LAMPS: { id: string; label: string; kelvin: number }[] = [
   { id: 'cool', label: 'Cool white', kelvin: 6500 },
 ];
 
-/** What a floor is lit by when it does not say: a fluorescent ceiling, on. */
-export const DEFAULT_LIGHT: InteriorLight = { kelvin: 4000, level: 0.8 };
+/** What a floor is lit by when it does not say: a fluorescent ceiling, fully on. Most floors are
+ *  fully lit; dimming is the thing worth authoring. */
+export const DEFAULT_LIGHT: InteriorLight = { kelvin: 4000, level: 1 };
 
 /** The nearest named lamp to a colour temperature, for showing an authored number as a choice. */
 export const lampFor = (kelvin: number) =>
@@ -256,22 +275,34 @@ export function ambient(sun: Sun, light: InteriorLight = DEFAULT_LIGHT) {
     sun.altitude,
     lerp,
   );
+  const hemisphere = lerp(0.18, 0.26, day),
+    environment = lerp(0.2, 0.28, day);
+  // What the sky alone puts on a level surface: the beam foreshortened by its own angle, plus the
+  // two diffuse terms. This is the number the ceiling has to make up.
+  const daylight =
+    SUN_PEAK * beamAbove(sun.altitude) * Math.max(0, Math.sin(sun.altitude * RAD)) + hemisphere + environment;
+  const lit = Math.max(0, Math.min(1, light.level));
   return {
     /** Hemisphere sky and ground colours, and its strength: the outdoor half. */
     sky: blend('#8ea7cf', '#c7ddf5', day),
     ground: blend('#3f3a48', '#b9ac94', day),
-    hemisphere: lerp(0.2, 0.3, day),
+    hemisphere,
     /** The image-based environment, for specular life on glass and metal. */
-    environment: lerp(0.22, 0.3, day),
+    environment,
     /** The building's own lights: colour and strength, both from the floor, neither following the
      *  sun. A level that says nothing is lit by a fluorescent ceiling, because most levels are. */
     interior: kelvinColor(light.kelvin),
-    // A fully lit working interior, and the brightest thing in the scene by a distance. That is not
-    // a fudge: a cutaway plan is a picture of the inside of a building, and the inside of a building
-    // is lit by its ceiling. The sun is here for direction — which way the shadows fall, which
-    // façade is the bright one — and the lamps are here for seeing by.
-    interiorLevel: 2 * Math.max(0, Math.min(1, light.level)),
+    // The ceiling makes up the difference between what the sky is giving and what a lit interior is
+    // supposed to sit at — which is what a real building does. A workplace is designed to a lux
+    // level and modern lighting control holds it there, dimming as the sun comes round and coming up
+    // as it goes; the lamps being "always on" is about the level being held, not about a fixed
+    // wattage. It is also the only way a plan is equally readable at every hour, which is the point
+    // of drawing one. A floor dimmed below full sits proportionally lower, and one set to nothing
+    // goes dark, because an unlit level is a thing a building has.
+    interiorLevel: lit > 0 ? Math.max(0.25, TARGET_INTERIOR * lit - daylight) : 0,
     /** How far along the fade to night the scene is: 1 in full day, 0 after civil twilight. */
     day,
+    /** What the sky alone puts on a level surface, before the ceiling makes up the difference. */
+    daylight,
   };
 }
