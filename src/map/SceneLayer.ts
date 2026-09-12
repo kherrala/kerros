@@ -1746,8 +1746,20 @@ export class SceneLayer implements CustomLayerInterface {
       textures: this.renderer?.info.memory.textures ?? 0,
     };
   }
-  render(_gl: WebGLRenderingContext | WebGL2RenderingContext, args: CustomRenderMethodInput) {
+  render(gl: WebGLRenderingContext | WebGL2RenderingContext, args: CustomRenderMethodInput) {
     if (!this.renderer) return;
+    // The model draws over the map, and the only way to say so is to throw away the depth the map
+    // has written before us.
+    //
+    // MapLibre gives every style layer a slice of the depth buffer by its position in the list and
+    // draws its opaque fills into it; a custom layer is handed the buffer as it stands and its own
+    // geometry is depth-tested against those slices. Our heights are metres above the ground, not
+    // slices, so which of the two wins is a matter of camera pitch and zoom rather than of layer
+    // order — and it showed: a floor plate would lose to a land-use polygon and vanish, leaving a
+    // slab of flat basemap colour inside the building while the walls, whose faces happened to land
+    // on the near side of the contest, stayed put. Clearing the depth buffer settles it. Everything
+    // the map has drawn is behind us by construction, which is what being the last layer means.
+    gl.clear(gl.DEPTH_BUFFER_BIT);
     const now = performance.now();
     // Capped so a backgrounded tab does not resume by teleporting every car a hundred metres.
     const elapsed = Math.min(0.1, this.lastFrame ? (now - this.lastFrame) / 1000 : 0);

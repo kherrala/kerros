@@ -122,6 +122,9 @@ const rgb = (c: [number, number, number]) =>
         .padStart(2, '0'),
     )
     .join('')}`;
+/** Mix two hex colours. Exported so the basemap's sky can follow the same sun the model does
+ *  rather than snapping between a day palette and a night one. */
+export const mixColor = (a: string, b: string, t: number) => blend(a, b, Math.max(0, Math.min(1, t)));
 const blend = (a: string, b: string, t: number) => {
   const [ar, ag, ab] = hex(a),
     [br, bg, bb] = hex(b);

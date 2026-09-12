@@ -29,7 +29,7 @@ import {
 import { statusLabel, statusTone } from '../adapters/status';
 import { useKerrosTheme, useStrings, type MapStyleOptions } from '../theme';
 import { neutralBasemap } from '../adapters/basemap';
-import { ambient, type Sun, sunlight } from './lighting';
+import { ambient, mixColor, type Sun, sunlight } from './lighting';
 import { EntityIcon } from '../components/Icons';
 import { draftFeatures, makeFeatures, navGraphFeatures, onFloor, visibleOnFloor } from './features';
 import { routeArrowImage, routeFeatures } from './route';
@@ -291,12 +291,24 @@ export function MapCanvas(props: MapCanvasProps) {
   // an extrusion writes depth, swallows the floor plate whole and leaves a building with a hole in
   // it. Once a footprint is known to be ours it stays ours. Cleared with the style.
   const cityIds = useRef(new Set<string | number>());
+  /** The basemap's own footprint layers, with the filter each carried before we narrowed it. */
+  const footprintFilters = useRef(new Map<string, unknown>());
   const refreshCityFilter = () => {
     const m = map.current,
       p = latest.current;
     const fp = p.basemap?.vectorSchema?.footprints;
     if (!m || !fp || !m.getLayer('kerros-city-3d')) return;
-    if (!p.threeD || !p.cityBuildings || undergroundView(p.project, p.floorId, p.stack).buried) return;
+    // Out of 3D the model is not standing there, so the basemap's building is the only one there is
+    // and gets its own filter back. The massing layer's own visibility already follows the toggle,
+    // so narrowing it costs nothing — but the flat fill has to be narrowed whatever the toggle says,
+    // or turning the city massing off would bring the box back with it.
+    if (!p.threeD || undergroundView(p.project, p.floorId, p.stack).buried) {
+      for (const [id, was] of footprintFilters.current)
+        if (m.getLayer(id)) m.setFilter(id, (was ?? undefined) as FilterSpecification | undefined);
+      footprintFilters.current.clear();
+      cityHidden.current = '';
+      return;
+    }
     const source = (m.getLayer('kerros-city-3d') as unknown as { source: string }).source;
     const parcels = p.project.objects.filter(o => o.kind === 'parcel' && o.rings);
     const ids = cityIds.current;
@@ -312,12 +324,24 @@ export function MapCanvas(props: MapCanvasProps) {
       if (parcels.some(o => pointInRing(local, o.rings![0]))) ids.add(fid);
     }
     const next = JSON.stringify([...ids].sort());
-    if (next !== cityHidden.current) {
-      cityHidden.current = next;
-      m.setFilter('kerros-city-3d', [
-        '!',
-        ['in', ['get', fp.idField], ['literal', [...ids]]],
-      ] as unknown as FilterSpecification);
+    if (next === cityHidden.current) return;
+    cityHidden.current = next;
+    const mine = ['!', ['in', ['get', fp.idField], ['literal', [...ids]]]] as unknown as FilterSpecification;
+    m.setFilter('kerros-city-3d', mine);
+    // And out of the basemap's own flat building fill, which is the half of this that was missed.
+    // A vector style paints its buildings as an opaque fill, and an opaque fill is drawn in a pass
+    // of its own that writes depth — so however late the model's layer is added, the basemap's
+    // building can still win over the floor plate inside it, while the walls, standing on the
+    // footprint's edge, survive. That is the box of flat basemap colour over the building: the plan
+    // is not missing, the map is drawn on top of it. Where our own model stands, the basemap's
+    // building has nothing left to say.
+    for (const layer of m.getStyle().layers) {
+      if (layer.id === 'kerros-city-3d' || !('source-layer' in layer) || layer['source-layer'] !== fp.sourceLayer)
+        continue;
+      if (!footprintFilters.current.has(layer.id))
+        footprintFilters.current.set(layer.id, m.getFilter(layer.id) ?? null);
+      const was = footprintFilters.current.get(layer.id) as FilterSpecification | null;
+      m.setFilter(layer.id, (was ? ['all', was, mine] : mine) as FilterSpecification);
     }
   };
   // Adopt tool: turn the clicked basemap building footprint (all tile pieces, unioned) into local
@@ -730,10 +754,14 @@ export function MapCanvas(props: MapCanvasProps) {
       m.setPaintProperty('kerros-underground', 'fill-color', '#15130f');
     }
     // Evening lighting used to fall only on the 3D model, so the building sat at dusk inside a map
-    // that was still at noon. Dusk is a property of the whole composition: veil the basemap too,
-    // warm rather than neutral, and lighter than the dark-mode veil so the city stays legible.
-    const evening = p.sun.evening;
-    const dusk = evening && !p.dark && !underground;
+    // that was still at noon. Dusk is a property of the whole composition, so the basemap is veiled
+    // too — lighter than the dark-mode veil, so the city stays legible.
+    //
+    // Cool, and on a ramp. A warm veil over a basemap whose buildings are already a warm stone read
+    // as orange rather than as evening: the city looked lit by a fire rather than unlit by the sun.
+    // And it arrived all at once at civil twilight, which is not how an evening happens — it follows
+    // the sun down now, so the city loses its light over the hour the sun takes to go.
+    const dusk = (1 - ambient(p.sun).day) * (p.dark || underground ? 0 : 1);
     const beam = sunlight(p.sun);
     // The basemap's own light follows the same sun as the model's, so the city's shadows fall the
     // way the building's do instead of the two disagreeing about the time of day.
@@ -743,15 +771,19 @@ export function MapCanvas(props: MapCanvasProps) {
       color: beam.color,
       intensity: 0.28 + 0.14 * ambient(p.sun).day,
     });
+    // The sky follows the sun down with everything else. Day blue through to an evening violet, over
+    // a horizon that warms as the sun reaches it — which is the one part of a dusk that should be
+    // warm, and the reason the ground no longer is.
+    const daylight = ambient(p.sun).day;
     m.setSky({
-      'sky-color': p.dark ? '#172435' : evening ? '#656c8d' : '#92b9d2',
-      'horizon-color': p.dark ? '#343b4c' : evening ? '#d9ac92' : '#e8e4d9',
+      'sky-color': p.dark ? '#172435' : mixColor('#5d6488', '#92b9d2', daylight),
+      'horizon-color': p.dark ? '#343b4c' : mixColor('#d9ac92', '#e8e4d9', daylight),
       'sky-horizon-blend': 0.65,
       'atmosphere-blend': p.threeD && !underground ? 0.65 : 0,
     });
-    m.setLayoutProperty('kerros-dim', 'visibility', p.dark || underground || dusk ? 'visible' : 'none');
-    m.setPaintProperty('kerros-dim', 'fill-color', dusk ? '#2a1d2b' : '#0d0f16');
-    m.setPaintProperty('kerros-dim', 'fill-opacity', dusk ? 0.28 : 0.55);
+    m.setLayoutProperty('kerros-dim', 'visibility', p.dark || underground || dusk > 0.02 ? 'visible' : 'none');
+    m.setPaintProperty('kerros-dim', 'fill-color', dusk > 0 ? '#141a2b' : '#0d0f16');
+    m.setPaintProperty('kerros-dim', 'fill-opacity', dusk > 0 ? 0.42 * dusk : 0.55);
     m.setPaintProperty('kerros-premises', 'fill-color', p.dark ? '#232734' : '#f3f4f0');
     m.setPaintProperty('kerros-premises-line', 'line-color', p.dark ? '#565d73' : '#9aa0ac');
     m.setLayoutProperty('kerros-plan-dim', 'visibility', p.dark && !p.threeD && p.showPlan ? 'visible' : 'none');
@@ -970,6 +1002,14 @@ export function MapCanvas(props: MapCanvasProps) {
         m.addLayer(scene.current);
         scene.current.animateIn();
       }
+      // The veils go under the model, and are put back under it here rather than trusted to stay.
+      // They are added with the rest of the plan's layers and the 3D layer is added after them, so
+      // the order is right the first time — but a basemap swap, a floor that dives below ground or
+      // the plan being switched off and on again all re-add layers, and which of them ends up on top
+      // then depends on which already existed. Get it the wrong way round and the dusk veil paints a
+      // flat tinted lid across the floor plate while the walls, standing outside the veiled polygon,
+      // keep their colour: a building with an orange box where its inside should be.
+      for (const veil of ['kerros-dim', 'kerros-underground']) if (m.getLayer(veil)) m.moveLayer(veil, 'kerros-3d');
       scene.current?.setMapStyle(mapStyleRef.current);
       scene.current?.update(p.project, p.floorId, p.stack, p.selected, p.sun, p.statuses, p.excavation ?? false);
       scene.current?.setRoute(p.route ?? null, p.activeStep ?? null);
@@ -1054,6 +1094,7 @@ export function MapCanvas(props: MapCanvasProps) {
       styleReady.current = true;
       cityHidden.current = '';
       cityIds.current = new Set();
+      footprintFilters.current = new Map();
       if (!m.getLayer('kerros-3d')) scene.current = null;
       sync();
       setReady(true);
