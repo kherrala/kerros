@@ -198,11 +198,13 @@ const CORE_W: Point[] = [
 ];
 const boxWalls = (r: Point[]): [Point, Point][] => r.map((pt, i) => [pt, r[(i + 1) % r.length]] as [Point, Point]);
 // The central escalator spine plus a spiral stair at each end, alongside the atrium.
-const STK_ESCALATORS: [string, number, number, number][] = [
-  ['Escalator up', 6, -12, 0],
-  ['Escalator down', 11, -12, 0],
-  ['Escalator up', 6, 20, 0],
-  ['Escalator down', 11, 20, 0],
+// name, x, y, rotation, which way it carries you. A bank runs alternate ways so you step off one
+// and turn to step onto the next, and the direction is stated rather than read out of the name.
+const STK_ESCALATORS: [string, number, number, number, 'up' | 'down'][] = [
+  ['Escalator up', 6, -12, 0, 'up'],
+  ['Escalator down', 11, -12, 0, 'down'],
+  ['Escalator up', 6, 20, 0, 'up'],
+  ['Escalator down', 11, 20, 0, 'down'],
 ];
 // Clear of the escalator bank and sized like the feature stair it is. At 2.2 m across and two
 // metres from the escalators' flank, the spirals were a pair of fire-escape ladders crowding the
@@ -542,10 +544,13 @@ function createCampus(): ProjectDocument {
     // Central escalator spine and spiral stairs beside the atrium.
     if (f === all[0]) {
       const storey = Math.abs((p.floors[1]?.elevation ?? 4.4) - (p.floors[0]?.elevation ?? 0)) || 4.4;
-      for (const [name, x, y, r] of STK_ESCALATORS) {
+      for (const [name, x, y, r, travel] of STK_ESCALATORS) {
         const s = createObject('stairs', [x, y], f, name);
         s.rotation = r;
         s.stairModel = 'escalator';
+        s.travel = travel;
+        // Bound to a feed, so the sample host can start and stop it the way it commands a lift.
+        s.feedId = `feed-${s.id}`;
         // An escalator climbs at 30°, so its run follows from the storey height. Left at the
         // stair default it would be a 4.5 m ramp climbing 4.4 m — the 44° slope that made the
         // demo's spine look like a chute rather than a machine.

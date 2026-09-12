@@ -167,6 +167,17 @@ export interface SiteObject {
    *  it does not, since a plan that gives a 4.5 m box to a 4.4 m storey means a stair that turns, not
    *  a ladder. */
   stairModel?: 'straight' | 'switchback' | 'dogleg' | 'spiral' | 'escalator';
+  /** Escalators only: which way the machine carries you.
+   *
+   *  It is a property of the machine, not of the drawing and not of its name: an escalator runs one
+   *  way, a bank of them runs alternate ways, and which way this one runs is the first thing anyone
+   *  asks of it. The same vocabulary as `Zone.connects`, so the described layer and the object never
+   *  need translating between them. Absent means up, which is what a lone escalator nearly always
+   *  does. A stair that is not an escalator ignores it — a stair carries you both ways.
+   *
+   *  An imported escalator arrives once per storey it is drawn on; the twin standing lowest is the
+   *  one the model draws and routes from, so that is the one to author. */
+  travel?: 'up' | 'down';
   /** Elevators only: which faces of the car open, relative to the object's own rotation. A through-car
    *  opens front and back; a corner lobby car opens front and one side. Absent means the front alone,
    *  which is what almost every lift does. Which FLOORS it opens on is `servedFloorIds` — a level the

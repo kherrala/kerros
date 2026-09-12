@@ -6,9 +6,11 @@
 import { inferOpenBoundaries, inferPortals } from '../../src/model/inference';
 import { uid, type ProjectDocument, type SiteObject, type Zone } from '../../src/model/types';
 
-/** An escalator runs one way; a stair does not. Read from the name, which is where the demo says so. */
-const direction = (name: string): 'adjacent' | 'up' | 'down' =>
-  /\bup\b/i.test(name) ? 'up' : /\bdown\b/i.test(name) ? 'down' : 'adjacent';
+/** How a shaft's landings reach each other. A lift ride is direct, a stair passes every level on the
+ *  way both ways, and an escalator carries you one way — which way is the object's own `travel`,
+ *  not something to be guessed from what somebody called it. */
+const connectsBy = (shaft: SiteObject): Zone['connects'] =>
+  shaft.kind === 'elevator' ? 'all' : shaft.stairModel === 'escalator' ? (shaft.travel ?? 'up') : 'adjacent';
 /** Landings that share a kind, a name and a position are one shaft. */
 function cores(project: ProjectDocument): Zone[] {
   const groups = new Map<string, SiteObject[]>();
@@ -30,8 +32,7 @@ function cores(project: ProjectDocument): Zone[] {
       id: uid(),
       name: members[0].name,
       spaceIds: members.map(m => m.id),
-      // A lift ride is direct; a stair passes every level on the way.
-      connects: members[0].kind === 'elevator' ? 'all' : direction(members[0].name),
+      connects: connectsBy(members[0]),
       purpose: 'circulation',
     });
   }

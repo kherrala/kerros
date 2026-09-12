@@ -65,6 +65,9 @@ export function navPath(p: ProjectDocument, floorId: string | null, points: Poin
 /** Thread a vertical connection through an elevator/stairs object: one node per served floor at the object's position. Stairs chain adjacent served floors (you pass every level); an elevator gets an edge per floor pair (a ride is direct, so ELEVATOR_BASE is paid once). Per-floor twin objects share a name (see the demo lifts); pass any one of them and each edge binds the twin on its upper floor. */
 export function chainVertical(p: ProjectDocument, object: SiteObject): NavNode[] {
   const kind: NavEdgeKind = object.kind === 'elevator' ? 'elevator' : 'stairs';
+  // An escalator carries you one way, so the edges it threads are one-way: a route may ride it in
+  // the direction it runs and must walk round to come back. A stair has no direction to run in.
+  const travel = object.stairModel === 'escalator' ? (object.travel ?? 'up') : null;
   const floors = [...new Set(object.servedFloorIds ?? [])]
     .map(id => p.floors.find(f => f.id === id))
     .filter((f): f is Floor => !!f)
@@ -76,8 +79,14 @@ export function chainVertical(p: ProjectDocument, object: SiteObject): NavNode[]
     return addNavNode(p, f.id, objectPosition(p, t), t.id);
   });
   for (let i = 1; i < out.length; i++)
-    for (let j = kind === 'elevator' ? 0 : i - 1; j < i; j++)
-      if (out[j].id !== out[i].id) addNavEdge(p, kind, out[j], out[i], twin(out[i].floorId!).id);
+    for (let j = kind === 'elevator' ? 0 : i - 1; j < i; j++) {
+      if (out[j].id === out[i].id) continue;
+      // Nodes come sorted upwards, so `out[j]` is the lower landing. An escalator running down is
+      // the same pair the other way about.
+      const [from, to] = travel === 'down' ? [out[i], out[j]] : [out[j], out[i]];
+      const edge = addNavEdge(p, kind, from, to, twin(out[i].floorId!).id);
+      if (travel) edge.directed = true;
+    }
   return out;
 }
 

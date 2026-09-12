@@ -237,6 +237,12 @@ export function validateProject(value: unknown): ProjectDocument {
     )
   )
     fail('invalid buildings or floors.');
+  // An escalator runs one way; a stair does not have a way to run. Saying a staircase travels up
+  // describes nothing, and something downstream would eventually believe it.
+  if (
+    p.objects.some(o => o.travel !== undefined && (o.kind !== 'stairs' || (o.travel !== 'up' && o.travel !== 'down')))
+  )
+    fail('travel belongs to an escalator and must be up or down.');
   // A lamp that exists: a colour temperature inside the range a luminaire is actually made in, and
   // a level between off and fully lit. Absent is the common case and means a fluorescent ceiling.
   if (
