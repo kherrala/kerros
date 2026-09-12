@@ -19,9 +19,19 @@ export const EYE = 1.7;
 export const BODY = 0.28;
 export const WALK_SPEED = 1.4; // m/s, an unhurried indoor pace
 export const RUN_SPEED = 3.4; // Shift: covering a department without waiting for it
-/** Below 60° the solved zoom runs away and the floor fills the screen; 85° is MapLibre's ceiling. */
+/** How far the head turns. 85° is MapLibre's hard ceiling and is as level as its camera goes, so
+ *  "look up" can only mean "back towards level" — and the resting pitch has to sit below the ceiling
+ *  or dragging up does nothing at all. Below 60° the zoom solved for eye height runs past what the
+ *  map will give, which would quietly lift the eye off the floor. */
 export const MIN_PITCH = 60,
   MAX_PITCH = 85;
+/** Where the head rests: a few degrees off level, so there is somewhere to look in both directions
+ *  and enough of the near floor in frame that walking reads as walking. */
+export const REST_PITCH = 80;
+/** The map's zoom ceiling, which is what bounds MIN_PITCH: looking down needs more zoom than looking
+ *  level, and a solve that hits the ceiling lifts the eye off the floor without saying so. Kept here
+ *  rather than in MapCanvas so the two cannot drift apart. */
+export const MAX_MAP_ZOOM = 26;
 export const LOOK_SPEED = 0.22; // degrees per pixel dragged
 export const TURN_SPEED = 90; // degrees per second for Q/E and arrow turning
 /** A wall piece whose underside clears this is a head-height lintel — the strip over a door — and you
@@ -112,6 +122,34 @@ export function eyeZoom(lat: number, screenDistance: number, pitchDeg: number, e
   return Math.log2((156543.03392 * Math.cos((lat * Math.PI) / 180) * screenDistance * cos) / Math.max(eye, 0.2));
 }
 
+/** One frame of walking: what the held keys do to a heading and a position over `dt` seconds.
+ *
+ *  Pulled out of the controller because it is the part with an opinion in it — which key turns you
+ *  and which key carries you — and that opinion is worth stating somewhere a test can read it.
+ *  Returns the new heading and the step to take, in plan metres, before any wall gets a say. */
+export function stride(keys: ReadonlySet<string>, heading: number, dt: number): { heading: number; step?: Point } {
+  // Turning is a turn on the spot: the arrows swing you round your own axis and move you nowhere,
+  // which is what a person does when they look down a different corridor. Strafing — sidling along
+  // without turning — is A and D, and is a different thing that wants a different key.
+  let facing = heading;
+  if (keys.has('turnLeft') !== keys.has('turnRight'))
+    facing = (((facing + (keys.has('turnRight') ? 1 : -1) * TURN_SPEED * dt) % 360) + 360) % 360;
+  const ahead = (keys.has('ahead') ? 1 : 0) - (keys.has('back') ? 1 : 0);
+  const side = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0);
+  if (!ahead && !side) return { heading: facing };
+  const rad = (facing * Math.PI) / 180;
+  // Plan +Y is the walker's forward at heading 0, so forward is [sin, cos] and right is its
+  // perpendicular. Diagonals are normalised — strafing must not be faster than walking.
+  const scale = (keys.has('fast') ? RUN_SPEED : WALK_SPEED) * dt * (ahead && side ? Math.SQRT1_2 : 1);
+  return {
+    heading: facing,
+    step: [
+      (ahead * Math.sin(rad) + side * Math.cos(rad)) * scale,
+      (ahead * Math.cos(rad) - side * Math.sin(rad)) * scale,
+    ],
+  };
+}
+
 /* ------------------------------------------------------------------ controller */
 
 export interface WalkTerrain {
@@ -162,9 +200,7 @@ export class WalkController {
   private drag: Point = [0, 0];
   position: Point = [0, 0];
   heading = 0;
-  /** 85° is as level as MapLibre's camera goes, and level is where a person looks. Anything less and
-   *  the floor fills the screen — which is a plan view with extra steps. */
-  pitch = MAX_PITCH;
+  pitch = REST_PITCH;
 
   constructor(private readonly on: WalkCallbacks) {}
 
@@ -173,7 +209,7 @@ export class WalkController {
     this.origin = origin;
     this.position = start.position;
     this.heading = start.heading;
-    this.pitch = clamp(start.pitch ?? MAX_PITCH, MIN_PITCH, MAX_PITCH);
+    this.pitch = clamp(start.pitch ?? REST_PITCH, MIN_PITCH, MAX_PITCH);
     this.running = true;
     // MapLibre's own handlers would fight every jumpTo we make, and its keyboard handler eats the
     // very keys we walk with. Remember which were on rather than re-enabling a fixed list on the way
@@ -311,23 +347,11 @@ export class WalkController {
     this.frame = requestAnimationFrame(this.tick);
     const dt = Math.min((now - this.last) / 1000, 0.1); // a backgrounded tab must not teleport you
     this.last = now;
-    const keys = this.keys;
-    if (!keys.size) return;
-    if (keys.has('turnLeft') !== keys.has('turnRight'))
-      this.heading = (((this.heading + (keys.has('turnRight') ? 1 : -1) * TURN_SPEED * dt) % 360) + 360) % 360;
-    const ahead = (keys.has('ahead') ? 1 : 0) - (keys.has('back') ? 1 : 0);
-    const side = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0);
-    if (ahead || side) {
-      const rad = (this.heading * Math.PI) / 180;
-      // Plan +Y is the walker's forward at heading 0, so forward is [sin, cos] and right is its
-      // perpendicular. Diagonals are normalised — strafing must not be faster than walking.
-      const scale = (keys.has('fast') ? RUN_SPEED : WALK_SPEED) * dt * (ahead && side ? Math.SQRT1_2 : 1);
-      const step: Point = [
-        (ahead * Math.sin(rad) + side * Math.cos(rad)) * scale,
-        (ahead * Math.cos(rad) - side * Math.sin(rad)) * scale,
-      ];
-      this.position = unstick([this.position[0] + step[0], this.position[1] + step[1]], this.terrain.walls);
-    }
+    if (!this.keys.size) return;
+    const moved = stride(this.keys, this.heading, dt);
+    this.heading = moved.heading;
+    if (moved.step)
+      this.position = unstick([this.position[0] + moved.step[0], this.position[1] + moved.step[1]], this.terrain.walls);
     this.apply();
   };
 

@@ -40,11 +40,11 @@ import { neutralBasemap } from '../adapters/basemap';
 import { ambient, mixColor, type Sun, sunlight } from './lighting';
 import { EntityIcon } from '../components/Icons';
 import { draftFeatures, makeFeatures, navGraphFeatures, onFloor, visibleOnFloor, wallPieces } from './features';
-import { routeArrowImage, routeFeatures } from './route';
+import { ROUTE_COLOR, ROUTE_EDGE, ROUTE_SOFT, routeArrowImage, routeFeatures, routeFlowGradient } from './route';
 import { aimCenter, JourneyPlayer } from './journey';
 import type { Route } from '../model/navigation';
 import { LIFT, SceneLayer, SLAB } from './SceneLayer';
-import { EYE, HEAD_ROOM, MIN_PITCH, unstick, WalkController, type WalkPose } from './walk';
+import { EYE, HEAD_ROOM, MAX_MAP_ZOOM, MIN_PITCH, unstick, WalkController, type WalkPose } from './walk';
 import { inSpace, spaceAt, spacePoint } from '../model/spaces';
 import { servedFloors } from '../model/vertical';
 import { floorIndex, undergroundView } from './underground';
@@ -475,7 +475,10 @@ export function MapCanvas(props: MapCanvasProps) {
     };
     for (const [id, data] of Object.entries(sources)) {
       const name = `kerros-${id}`;
-      if (!m.getSource(name)) m.addSource(name, { type: 'geojson', data });
+      // lineMetrics only on the route: it is what makes `line-progress` available, which is what the
+      // travelling highlight is drawn with. It cannot be turned on after the fact, and it is not free
+      // on sources with a lot of line geometry, so nothing else asks for it.
+      if (!m.getSource(name)) m.addSource(name, { type: 'geojson', data, lineMetrics: id === 'route' });
       else if (appliedSourceData.current.get(name) !== data) (m.getSource(name) as GeoJSONSource).setData(data);
       appliedSourceData.current.set(name, data);
     }
@@ -695,55 +698,70 @@ export function MapCanvas(props: MapCanvasProps) {
       });
       // 2D route: casing + accent line + direction chevrons on the current floor, dashed ghost for
       // other floors' segments, circles at vertical transitions. 3D rendering lives in SceneLayer.
+      // A track to follow rather than a line to trace: wide enough to read at a glance, white-edged
+      // so it carries over a pale floor and a dark one alike, and with the chevrons ON it rather than
+      // beside it. Drawn as three coats — white casing, green fill, travelling highlight — plus the
+      // arrows on top.
+      const trackWidth = (outer: number) =>
+        ['interpolate', ['linear'], ['zoom'], 15, outer * 0.5, 18, outer * 0.82, 21, outer] as unknown as number;
       m.addLayer({
         id: 'kerros-route-casing',
         type: 'line',
         source: 'kerros-route',
-        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'onFloor'], true]],
+        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'flow'], true]],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
-        paint: {
-          'line-color': '#ffffff',
-          'line-width': ['interpolate', ['linear'], ['zoom'], 15, 5, 20, 11],
-          'line-opacity': 0.9,
-        },
+        paint: { 'line-color': ROUTE_EDGE, 'line-width': trackWidth(31), 'line-opacity': 0.96 },
       });
       m.addLayer({
         id: 'kerros-route',
         type: 'line',
         source: 'kerros-route',
-        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'onFloor'], true]],
+        // Not the flow tracing: it covers the same ground, carries no `active`, and so painted itself
+        // over the whole path in the not-your-step tone — a route drawn twice, the second time wrong.
+        filter: [
+          'all',
+          ['==', ['geometry-type'], 'LineString'],
+          ['==', ['get', 'onFloor'], true],
+          ['!=', ['get', 'flow'], true],
+        ],
         layout: { 'line-cap': 'round', 'line-join': 'round' },
         paint: {
-          'line-color': ['case', ['==', ['get', 'active'], true], '#5b50e6', '#8d85dc'],
-          'line-width': [
-            'interpolate',
-            ['linear'],
-            ['zoom'],
-            15,
-            ['case', ['==', ['get', 'active'], true], 3.5, 2.5],
-            20,
-            ['case', ['==', ['get', 'active'], true], 7.5, 5],
-          ],
-          'line-opacity': ['case', ['==', ['get', 'active'], true], 1, 0.8],
+          'line-color': ['case', ['==', ['get', 'active'], true], ROUTE_COLOR, ROUTE_SOFT],
+          'line-width': trackWidth(20),
+          'line-opacity': ['case', ['==', ['get', 'active'], true], 1, 0.9],
         },
+      });
+      m.addLayer({
+        id: 'kerros-route-flow',
+        type: 'line',
+        source: 'kerros-route',
+        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'flow'], true]],
+        layout: { 'line-cap': 'butt', 'line-join': 'round' },
+        // Repainted on a timer while a route is shown; the static value is the band at rest.
+        paint: { 'line-width': trackWidth(20), 'line-gradient': routeFlowGradient(0) as never },
       });
       m.addLayer({
         id: 'kerros-route-off',
         type: 'line',
         source: 'kerros-route',
-        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['!=', ['get', 'onFloor'], true]],
-        paint: { 'line-color': '#8d85dc', 'line-width': 1.6, 'line-dasharray': [2, 2], 'line-opacity': 0.35 },
+        filter: [
+          'all',
+          ['==', ['geometry-type'], 'LineString'],
+          ['!=', ['get', 'onFloor'], true],
+          ['!=', ['get', 'flow'], true],
+        ],
+        paint: { 'line-color': ROUTE_SOFT, 'line-width': 2.4, 'line-dasharray': [2, 2], 'line-opacity': 0.45 },
       });
       m.addLayer({
         id: 'kerros-route-arrows',
         type: 'symbol',
         source: 'kerros-route',
-        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'onFloor'], true]],
+        filter: ['all', ['==', ['geometry-type'], 'LineString'], ['==', ['get', 'flow'], true]],
         layout: {
           'symbol-placement': 'line',
-          'symbol-spacing': 60,
+          'symbol-spacing': 52,
           'icon-image': 'kerros-route-arrow',
-          'icon-size': ['interpolate', ['linear'], ['zoom'], 15, 0.5, 20, 0.9],
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 15, 0.5, 18, 0.8, 21, 1],
           'icon-rotation-alignment': 'map',
           'icon-allow-overlap': true,
           'icon-ignore-placement': true,
@@ -755,10 +773,10 @@ export function MapCanvas(props: MapCanvasProps) {
         source: 'kerros-route',
         filter: ['==', ['get', 'vertical'], true],
         paint: {
-          'circle-radius': ['case', ['==', ['get', 'active'], true], 8, 6],
-          'circle-color': ['case', ['==', ['get', 'active'], true], '#5b50e6', '#8d85dc'],
-          'circle-stroke-width': 2,
-          'circle-stroke-color': '#ffffff',
+          'circle-radius': ['case', ['==', ['get', 'active'], true], 11, 8],
+          'circle-color': ['case', ['==', ['get', 'active'], true], ROUTE_COLOR, ROUTE_SOFT],
+          'circle-stroke-width': 3,
+          'circle-stroke-color': ROUTE_EDGE,
           'circle-opacity': ['case', ['==', ['get', 'onFloor'], true], 0.95, 0.4],
         },
       });
@@ -817,6 +835,7 @@ export function MapCanvas(props: MapCanvasProps) {
     for (const id of [
       'kerros-route-casing',
       'kerros-route',
+      'kerros-route-flow',
       'kerros-route-off',
       'kerros-route-arrows',
       'kerros-route-vertical',
@@ -830,12 +849,14 @@ export function MapCanvas(props: MapCanvasProps) {
         !!p.project.navEdges?.some(e => e.id === p.selected));
     for (const id of ['kerros-navgraph-edge', 'kerros-navgraph-node'])
       m.setLayoutProperty(id, 'visibility', graphOn ? 'visible' : 'none');
-    m.setPaintProperty('kerros-route-casing', 'line-color', p.dark ? '#14161f' : '#ffffff');
+    // The casing stays white in dark mode too. It is the edge of a painted track, not a halo tuned to
+    // the page behind it, and a dark edge on a dark floor loses the track's shape entirely.
+    m.setPaintProperty('kerros-route-casing', 'line-color', ROUTE_EDGE);
     {
       const ms = mapStyleRef.current;
       if (ms?.route || ms?.routeActive) {
-        const active = ms.routeActive ?? '#5b50e6',
-          base = ms.route ?? '#8d85dc';
+        const active = ms.routeActive ?? ROUTE_COLOR,
+          base = ms.route ?? ROUTE_SOFT;
         m.setPaintProperty('kerros-route', 'line-color', [
           'case',
           ['==', ['get', 'active'], true],
@@ -851,7 +872,7 @@ export function MapCanvas(props: MapCanvasProps) {
         m.setPaintProperty('kerros-route-off', 'line-color', base);
       }
     }
-    m.setPaintProperty('kerros-route-vertical', 'circle-stroke-color', p.dark ? '#14161f' : '#ffffff');
+    m.setPaintProperty('kerros-route-vertical', 'circle-stroke-color', ROUTE_EDGE);
     m.setPaintProperty('kerros-navgraph-node', 'circle-stroke-color', p.dark ? '#14161f' : '#ffffff');
     if (m.getLayer('background')) m.setPaintProperty('background', 'background-color', p.dark ? '#14161f' : '#e6e8e4');
     // City context: extrude the basemap's building footprints in 3D, and (below grade) draw ghost
@@ -1048,9 +1069,15 @@ export function MapCanvas(props: MapCanvasProps) {
         p.walk ?? false,
       );
       scene.current?.setRoute(p.route ?? null, p.activeStep ?? null);
-    } else if (m.getLayer('kerros-3d')) {
-      m.removeLayer('kerros-3d');
-      scene.current = null;
+    } else {
+      if (m.getLayer('kerros-3d')) {
+        m.removeLayer('kerros-3d');
+        scene.current = null;
+      }
+      // 3D moves these above the plan layers, just below its custom layer. Return them beneath
+      // the drawing in 2D, or the opaque underground veil covers every room when changing modes.
+      for (const veil of ['kerros-dim', 'kerros-underground'])
+        if (m.getLayer(veil)) m.moveLayer(veil, 'kerros-premises');
     }
     const validIds = new Set(p.project.drawings.map(d => `drawing-${d.id}`));
     for (const id of Object.keys(m.getStyle().sources).filter(id => id.startsWith('drawing-') && !validIds.has(id))) {
@@ -1088,7 +1115,10 @@ export function MapCanvas(props: MapCanvasProps) {
         zoom: cam?.zoom ?? 18.5,
         bearing: cam?.bearing ?? siteBearing(props.project),
         pitch: cam?.pitch ?? 0,
-        maxZoom: 25,
+        // 26, not 25: walk mode solves its zoom from its pitch, and looking down at the steepest the
+        // walker is allowed needs more zoom than looking level does. A ceiling the solve can hit is a
+        // ceiling that silently lifts the eye off the floor.
+        maxZoom: MAX_MAP_ZOOM,
         minZoom: 5,
         // Walk mode puts the eye ~2 m above the slab, and the only way MapLibre expresses that is a
         // very high zoom at a very steep pitch. The default ceiling of 60° leaves the horizon off
@@ -1285,6 +1315,10 @@ export function MapCanvas(props: MapCanvasProps) {
       wrap?.removeEventListener('wheel', forwardWheel, { capture: true });
       urls.current.forEach(URL.revokeObjectURL);
       urls.current.clear();
+      // MapLibre's full map teardown drops the style without calling custom-layer onRemove, then
+      // deliberately loses the context. Dispose Three first, including its context event listeners.
+      if (m.getLayer('kerros-3d')) m.removeLayer('kerros-3d');
+      scene.current = null;
       m.remove();
       map.current = null;
     };
@@ -1361,6 +1395,21 @@ export function MapCanvas(props: MapCanvasProps) {
     if (ready && !journey.current?.playing && !props.walk) fit(props.floorId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.floorId, props.stack]);
+  // The highlight travelling along the route. A timer rather than a rAF loop: the band moves at
+  // reading pace, not at the display's, and setPaintProperty on a gradient is a paint-only change
+  // the map coalesces into its own next frame. Off in 3D, where SceneLayer animates the ribbon's
+  // texture instead, and off entirely with no route — an idle map must stay idle.
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready || !props.route || props.threeD) return;
+    let phase = 0;
+    const tick = window.setInterval(() => {
+      phase = (phase + 0.011) % 1;
+      if (m.getLayer('kerros-route-flow'))
+        m.setPaintProperty('kerros-route-flow', 'line-gradient', routeFlowGradient(phase) as never);
+    }, 40);
+    return () => window.clearInterval(tick);
+  }, [ready, props.route, props.threeD]);
   // ---------------------------------------------------------------- walk mode
   // The camera stops being a camera and becomes a person: WalkController owns the pose, this owns
   // the things only the document knows — which walls are solid, what a stair leads to, and what the
@@ -1583,6 +1632,9 @@ export function MapCanvas(props: MapCanvasProps) {
         if (controller.signal.aborted) return;
         m.setTransformRequest(config.transformRequest ?? (url => ({ url })));
         styleReady.current = false;
+        // A full style swap also bypasses custom-layer disposal in MapLibre.
+        if (m.getLayer('kerros-3d')) m.removeLayer('kerros-3d');
+        scene.current = null;
         m.setStyle(style, { diff: false });
       })
       .catch(error => {
@@ -1901,6 +1953,10 @@ export function MapCanvas(props: MapCanvasProps) {
     name: string;
     width: number;
   }): 'full' | 'mini' | null => {
+    // The walk HUD already names the occupied room. Area dots and labels turn a large interior
+    // into a wall of text; reserve in-world markers for nearby devices and wayfinding instead.
+    if (props.walk && (o.kind === 'room' || o.kind === 'zone' || o.kind === 'light')) return null;
+    if (o.kind === 'light' && !pinned(o)) return null;
     if (pinned(o)) return 'full';
     if (o.kind === 'room' || o.kind === 'zone')
       // An area only earns a dot once it is big enough on screen to be worth pointing at. Without the

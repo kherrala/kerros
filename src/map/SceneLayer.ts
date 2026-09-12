@@ -8,7 +8,7 @@ import {
 } from 'maplibre-gl';
 import type { Floor, MaterialKind, Point, ProjectDocument, Ring, SiteObject, Slope } from '../model/types';
 import type { Route } from '../model/navigation';
-import { legStepIndices } from './route';
+import { legStepIndices, ROUTE_COLOR, routeTrackImage, TRACK_PIXELS, TRACK_TILE } from './route';
 import {
   closeRing,
   objectArea,
@@ -65,6 +65,8 @@ const ROOM = 0.05,
   GROUND = 0.06;
 /** Milliseconds between frames of a permanent animation — 24 fps, a step band's own rate. */
 const LOOP_FRAME = 42;
+/** The one rig id the route owns, so a rebuild can drop its own and leave every other alone. */
+const ROUTE_RIG = 'route:track';
 const wallBase = (floorId: string | null) => (floorId ? LIFT + SLAB : GROUND);
 
 /** An escalator step: 0.4 m of going and a 0.2 m face, the world over. These are properties of the
@@ -135,6 +137,7 @@ export class SceneLayer implements CustomLayerInterface {
   private unit = 1;
   private project?: ProjectDocument;
   private stack = false;
+  private walking = false;
   /** Per-storey ghost strength, shared out across however many levels the stack layers up. */
   private ghostAlpha = 0.17;
   private activeFloor: string | null = null;
@@ -176,6 +179,7 @@ export class SceneLayer implements CustomLayerInterface {
   private route: Route | null = null;
   private routeStep: number | null = null;
   private routeGroup: THREE.Group | null = null;
+  private routeTile: THREE.DataTexture | null = null;
   private mapStyle: MapStyleOptions = {};
   setMapStyle(style?: MapStyleOptions) {
     this.mapStyle = style ?? {};
@@ -278,7 +282,7 @@ export class SceneLayer implements CustomLayerInterface {
     if (this.skyLight) this.skyLight.intensity = air.hemisphere;
     this.roomLight?.color.set(air.interior);
     this.roomLight?.groundColor.set(air.interiorBounce);
-    if (this.roomLight) this.roomLight.intensity = air.interiorLevel;
+    if (this.roomLight) this.roomLight.intensity = air.interiorLevel * (this.walking ? 0.45 : 1);
     const beam = sunlight(sun);
     if (this.sun) {
       this.sun.color.set(beam.color);
@@ -1076,6 +1080,7 @@ export class SceneLayer implements CustomLayerInterface {
     const settled =
       this.project === project &&
       this.stack === stack &&
+      this.walking === walk &&
       this.activeFloor === floorId &&
       this.liftSignature === liftSignature &&
       this.excavation === excavation &&
@@ -1110,6 +1115,7 @@ export class SceneLayer implements CustomLayerInterface {
     this.rigs = [];
     this.project = project;
     this.stack = stack;
+    this.walking = walk;
     this.activeFloor = floorId;
     this.selected = selected;
     this.sunState = sun;
@@ -1624,7 +1630,7 @@ export class SceneLayer implements CustomLayerInterface {
       if (!(object instanceof THREE.Mesh)) return;
       const materials = Array.isArray(object.material) ? object.material : [object.material];
       if (!materials.some(m => m.visible && (!m.transparent || m.depthWrite))) return;
-      if (object.userData.entityId || object.userData.spans) this.pickables.push(object);
+      if (object.userData.entityId || object.userData.entityIds || object.userData.spans) this.pickables.push(object);
     });
     this.buildRoute(); // disposeScene swept the previous route group's resources with the scene
     if (this.renderer) this.renderer.shadowMap.needsUpdate = true;
@@ -1643,25 +1649,25 @@ export class SceneLayer implements CustomLayerInterface {
     else this.buildRoute();
     this.map?.triggerRepaint();
   }
+  /** The track's texture already carries the green and the white kerb, so the material's own colour
+   *  stays white and only emphasis separates the step being walked from the rest of the path. A
+   *  route is one route: dimming the other steps says "later", where recolouring them would say
+   *  "different". */
   private routeStyle(step: number) {
-    const active = step === this.routeStep;
-    return {
-      color: active ? (this.mapStyle.routeActive ?? '#6259e8') : (this.mapStyle.route ?? '#8d85dc'),
-      opacity: active ? 0.95 : 0.38,
-    };
+    return { opacity: this.routeStep === null || step === this.routeStep ? 1 : 0.5 };
   }
   private restyleRoute() {
     this.routeGroup?.traverse(o => {
-      if (o instanceof THREE.Mesh) {
-        const { color, opacity } = this.routeStyle(o.userData.step as number);
-        const m = o.material as THREE.MeshBasicMaterial;
-        m.color.set(color);
-        m.opacity = opacity;
-      }
+      if (o instanceof THREE.Mesh)
+        (o.material as THREE.MeshBasicMaterial).opacity = this.routeStyle(o.userData.step as number).opacity;
     });
   }
   private buildRoute() {
     this.clipBoundsDirty = true;
+    // update() clears every rig before it rebuilds, but setRoute() rebuilds on its own — without
+    // this, changing destination leaves the old rig scrolling a texture on a disposed group.
+    this.rigs = this.rigs.filter(r => r.id !== ROUTE_RIG);
+    this.rigState.delete(ROUTE_RIG);
     if (this.routeGroup) {
       this.routeGroup.removeFromParent();
       this.routeGroup.traverse(o => {
@@ -1670,6 +1676,8 @@ export class SceneLayer implements CustomLayerInterface {
           (o.material as THREE.Material).dispose();
         }
       });
+      this.routeTile?.dispose();
+      this.routeTile = null;
       this.routeGroup = null;
     }
     const route = this.route,
@@ -1692,11 +1700,35 @@ export class SceneLayer implements CustomLayerInterface {
         : this.present((this.stack ? (floors.get(fid)?.elevation ?? 0) : this.rebase) + LIFT + SLAB + ROOM + 0.07);
     const group = new THREE.Group();
     const steps = legStepIndices(route);
-    const mesh = (geometry: THREE.BufferGeometry, step: number) => {
-      const { color, opacity } = this.routeStyle(step);
+    // One texture for the whole route, tiled along it by the ribbon's metre-counting UVs. Built per
+    // build rather than cached: disposeScene sweeps the group with the scene, and a shared texture
+    // that outlived one of those would be disposed under the next route.
+    const tile = new THREE.DataTexture(
+      new Uint8Array(routeTrackImage(this.mapStyle.routeActive ?? ROUTE_COLOR).data.buffer),
+      TRACK_PIXELS[0],
+      TRACK_PIXELS[1],
+      THREE.RGBAFormat,
+    );
+    tile.wrapS = THREE.RepeatWrapping;
+    tile.colorSpace = THREE.SRGBColorSpace;
+    // Mipmapped and anisotropic: the track runs away to the horizon at eye level, and the far half of
+    // it is all grazing angle — which is where a sharp tile stops being sharp and starts sparkling.
+    tile.generateMipmaps = true;
+    tile.minFilter = THREE.LinearMipmapLinearFilter;
+    tile.magFilter = THREE.LinearFilter;
+    tile.anisotropy = Math.min(8, this.renderer?.capabilities.getMaxAnisotropy() ?? 1);
+    tile.needsUpdate = true;
+    const mesh = (geometry: THREE.BufferGeometry, step: number, tracked = true) => {
       const m = new THREE.Mesh(
         geometry,
-        new THREE.MeshBasicMaterial({ color, opacity, transparent: true, depthWrite: false, side: THREE.DoubleSide }),
+        new THREE.MeshBasicMaterial({
+          color: tracked ? '#ffffff' : (this.mapStyle.routeActive ?? ROUTE_COLOR),
+          map: tracked ? tile : null,
+          opacity: this.routeStyle(step).opacity,
+          transparent: true,
+          depthWrite: false,
+          side: THREE.DoubleSide,
+        }),
       );
       m.renderOrder = 10;
       m.raycast = () => {};
@@ -1706,7 +1738,9 @@ export class SceneLayer implements CustomLayerInterface {
     let run: { step: number; fid: string | null; points: Point[] } | null = null;
     const flush = () => {
       if (run && run.points.length > 1 && visible(run.fid)) {
-        const g = this.ribbonGeometry(run.points, zOf(run.fid), 0.22);
+        // 1.4 m of track. At 0.44 m the route was a stripe drawn on the floor; at eye level in walk
+        // mode a stripe is something you stand beside, and a track is something you stand on.
+        const g = this.ribbonGeometry(run.points, zOf(run.fid), 0.7);
         if (g) mesh(g, run.step);
       }
       run = null;
@@ -1725,13 +1759,13 @@ export class SceneLayer implements CustomLayerInterface {
           const g = new THREE.CylinderGeometry(0.14, 0.14, Math.abs(z2 - z1) || 0.1, 10);
           g.rotateX(Math.PI / 2);
           g.translate(x, y, (z1 + z2) / 2);
-          mesh(g, step);
+          mesh(g, step, false);
         } else if (leg.from.floorId === this.activeFloor || leg.to.floorId === this.activeFloor) {
           // shaft marker disc on the visible floor
-          const g = new THREE.CylinderGeometry(0.5, 0.5, 0.05, 24);
+          const g = new THREE.CylinderGeometry(0.8, 0.8, 0.05, 28);
           g.rotateX(Math.PI / 2);
           g.translate(x, y, zOf(this.activeFloor) + 0.02);
-          mesh(g, step);
+          mesh(g, step, false);
         }
         continue;
       }
@@ -1743,8 +1777,25 @@ export class SceneLayer implements CustomLayerInterface {
       run.points.push(leg.to.position);
     }
     flush();
-    if (!group.children.length) return;
+    if (!group.children.length) {
+      tile.dispose();
+      return;
+    }
     this.routeGroup = group;
+    this.routeTile = tile;
+    // Scrolling the tile IS the animation: one tile per TRACK_TILE metres, so a full cycle is one
+    // arrow's worth of travel and the band never appears to jump. Negative, because u grows towards
+    // the destination and the arrows have to march that way rather than back down the corridor.
+    this.rig(
+      ROUTE_RIG,
+      group,
+      1,
+      0.55, // cycles a second: one arrow-length every ~1.8 s, a walking pace rather than a barber's pole
+      (_, v) => {
+        tile.offset.x = -v;
+      },
+      true,
+    );
     this.scene.add(group); // raycast is a no-op and userData carries no entityId, so pickables ignore the ribbon
   }
   /** Flat mitred triangle-strip ribbon at a constant z, in scene metres. */
@@ -1756,8 +1807,14 @@ export class SceneLayer implements CustomLayerInterface {
     }
     if (pts.length < 2) return null;
     const positions: number[] = [],
+      uvs: number[] = [],
       indices: number[] = [];
+    // u counts metres walked, not vertices: the arrows have to be evenly spaced along the path, and
+    // a long straight run and a tight corner are the same number of vertices and very different
+    // distances. v crosses the ribbon, so the texture's own top and bottom edges are the track's.
+    let run = 0;
     for (let i = 0; i < pts.length; i++) {
+      if (i) run += Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]);
       const prev = pts[Math.max(0, i - 1)],
         next = pts[Math.min(pts.length - 1, i + 1)];
       const dx = next[0] - prev[0],
@@ -1784,6 +1841,7 @@ export class SceneLayer implements CustomLayerInterface {
         }
       }
       positions.push(pts[i][0] + nx * w, pts[i][1] + ny * w, z, pts[i][0] - nx * w, pts[i][1] - ny * w, z);
+      uvs.push(run / TRACK_TILE, 0, run / TRACK_TILE, 1);
       if (i) {
         const b = i * 2;
         indices.push(b - 2, b - 1, b, b - 1, b + 1, b);
@@ -1791,6 +1849,7 @@ export class SceneLayer implements CustomLayerInterface {
     }
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    g.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
     g.setIndex(indices);
     return g;
   }
@@ -1937,16 +1996,19 @@ export class SceneLayer implements CustomLayerInterface {
       Math.abs(p.y) <= 1.05 &&
       p.z < 1 &&
       p.z > -1 &&
+      (!this.walking || this.camera.position.distanceTo(target) <= 12) &&
       (!this.buried || o.floorId !== null) &&
       (!this.stack || o.floorId === null || o.floorId === this.activeFloor);
-    if (visible && this.stack) {
+    if (visible && (this.stack || this.walking)) {
       // Occlusion is by far the most expensive thing per marker — a ray against every pickable mesh.
       // While the camera is in motion, reuse the last verdict: markers shift by a few pixels a frame
       // and re-deriving this for hundreds of them was costing more than the rest of the frame put
       // together. It refreshes as soon as the camera stops.
       const settled = !this.map.isMoving();
       const cachedOcclusion = this.occlusionCache.get(o.id);
-      if (!settled && cachedOcclusion !== undefined) visible = cachedOcclusion;
+      // At eye level, a single step can put a wall in front of a marker. Nearby markers are few,
+      // so test them on each new camera frame instead of carrying a stale visibility verdict.
+      if (!this.walking && !settled && cachedOcclusion !== undefined) visible = cachedOcclusion;
       else {
         const near = new THREE.Vector3(p.x, p.y, -1).applyMatrix4(this.clipToWorld);
         const length = near.distanceTo(target);
@@ -2002,9 +2064,15 @@ export class SceneLayer implements CustomLayerInterface {
     this.scene.clear();
     this.highlight.clear();
     this.batch.clear();
+    // The track texture is not a shared material and nothing above sweeps a map off one, so it has to
+    // be let go here too — a route rebuilt on every floor switch would otherwise leak a texture a time.
+    this.routeTile?.dispose();
+    this.routeTile = null;
     this.routeGroup = null;
   }
   onRemove() {
+    clearTimeout(this.loopTimer);
+    this.loopTimer = undefined;
     this.disposeScene();
     this.materials.dispose();
     this.envCache.forEach(target => target.dispose());
@@ -2014,5 +2082,6 @@ export class SceneLayer implements CustomLayerInterface {
     this.renderer?.resetState();
     this.renderer?.dispose();
     this.renderer = undefined;
+    this.map = undefined;
   }
 }

@@ -1,6 +1,22 @@
 import { describe, expect, it } from 'vitest';
 import { rectangle } from '../model/geometry';
-import { BODY, EYE, eyeZoom, MAX_PITCH, unstick } from './walk';
+import {
+  BODY,
+  EYE,
+  eyeZoom,
+  MAX_MAP_ZOOM,
+  MAX_PITCH,
+  MIN_PITCH,
+  REST_PITCH,
+  stride,
+  unstick,
+  WALK_SPEED,
+} from './walk';
+import { createDemo } from '../../app/demo/demo';
+import { add, rotate } from '../model/geometry';
+import { wallPieces } from './features';
+import { spaceAt } from '../model/spaces';
+import { HEAD_ROOM } from './walk';
 import type { Point, Ring } from '../model/types';
 
 /** A 6 m wall along the x axis at y = 0, 0.2 m thick — the shape wallPieces() emits. */
@@ -81,5 +97,172 @@ describe('standing at eye height', () => {
 
   it('never divides by an eye height of zero', () => {
     expect(Number.isFinite(eyeZoom(60, 1075.5, 80, 0))).toBe(true);
+  });
+});
+
+describe('what the keys do', () => {
+  const held = (...keys: string[]) => new Set(keys);
+
+  it('turns on the spot, and does not walk you anywhere doing it', () => {
+    // The arrows swing you round your own axis: a person looking down a different corridor turns,
+    // they do not slide sideways. Strafing is A and D and is a different thing.
+    const left = stride(held('turnLeft'), 90, 0.5);
+    const right = stride(held('turnRight'), 90, 0.5);
+    expect(left.step).toBeUndefined();
+    expect(right.step).toBeUndefined();
+    expect(left.heading).toBeLessThan(90); // anticlockwise
+    expect(right.heading).toBeGreaterThan(90); // clockwise
+    expect(right.heading - left.heading).toBeCloseTo(90, 5); // 90°/s, half a second each way
+  });
+
+  it('wraps the heading rather than running off the end of the circle', () => {
+    expect(stride(held('turnLeft'), 5, 0.5).heading).toBeCloseTo(320, 5);
+    expect(stride(held('turnRight'), 340, 0.5).heading).toBeCloseTo(25, 5);
+  });
+
+  it('turns and walks at once without the turn stealing the step', () => {
+    // Holding forward while turning has to curve, not stop: the step is taken along the heading you
+    // finish the frame on, so a corridor can be walked round a corner in one motion.
+    const out = stride(held('ahead', 'turnRight'), 0, 0.5);
+    expect(out.heading).toBeCloseTo(45, 5);
+    expect(Math.hypot(...out.step!)).toBeCloseTo(WALK_SPEED * 0.5, 5);
+    expect(out.step![0]).toBeGreaterThan(0); // carried off along the new heading, not the old one
+  });
+
+  it('walks forward along the heading and strafes across it', () => {
+    const forward = stride(held('ahead'), 0, 1);
+    expect(forward.step![0]).toBeCloseTo(0, 6);
+    expect(forward.step![1]).toBeCloseTo(WALK_SPEED, 6); // plan +Y is forward at heading 0
+    const right = stride(held('right'), 0, 1);
+    expect(right.step![0]).toBeCloseTo(WALK_SPEED, 6);
+    expect(right.step![1]).toBeCloseTo(0, 6);
+  });
+
+  it('does not let a diagonal outrun a straight line', () => {
+    const diagonal = stride(held('ahead', 'right'), 0, 1);
+    expect(Math.hypot(...diagonal.step!)).toBeCloseTo(WALK_SPEED, 6);
+  });
+
+  it('hurries only when told to', () => {
+    const walked = Math.hypot(...stride(held('ahead'), 0, 1).step!);
+    const hurried = Math.hypot(...stride(held('ahead', 'fast'), 0, 1).step!);
+    expect(hurried).toBeGreaterThan(walked);
+  });
+});
+
+describe('walking the building that is actually drawn', () => {
+  // The fixtures above are two rectangles and a gap. This is the real thing: the demo office floor's
+  // own walls, doors, thicknesses and junction overruns. A collision that passes the fixtures and
+  // then traps you in the room you started in passes nothing worth having.
+  const demo = createDemo();
+  const floorId = 'floor-08';
+  const walls = wallPieces(demo, floorId, false)
+    .filter(p => p.base < HEAD_ROOM)
+    .map(p => p.ring);
+  const junctions = new Map(demo.junctions.map(j => [j.id, j.position]));
+
+  /** Walk from `from` towards `to` in controller-sized steps, reporting where you end up. */
+  const march = (from: Point, to: Point) => {
+    const span = Math.hypot(to[0] - from[0], to[1] - from[1]);
+    const steps = Math.max(1, Math.ceil(span / (WALK_SPEED / 60))); // one frame at 60 Hz
+    const dx = (to[0] - from[0]) / steps,
+      dy = (to[1] - from[1]) / steps;
+    let at = from;
+    for (let i = 0; i < steps; i++) at = unstick([at[0] + dx, at[1] + dy], walls);
+    return at;
+  };
+
+  /** Every door on the level, as the point in its opening and the direction through it. */
+  const doorways = demo.objects.flatMap(o => {
+    if (o.kind !== 'door' || !o.barrierId) return [];
+    const barrier = demo.barriers.find(b => b.id === o.barrierId && b.floorId === floorId);
+    if (!barrier) return [];
+    const a = junctions.get(barrier.startId),
+      b = junctions.get(barrier.endId);
+    if (!a || !b) return [];
+    const angle = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
+    const at = add(a, rotate([o.offset ?? 0, 0], angle));
+    const through = rotate([0, 1], angle) as Point; // across the wall, either way
+    return [{ at, through, width: o.width }];
+  });
+
+  it('has walls to walk into and doors to walk through', () => {
+    expect(walls.length).toBeGreaterThan(100);
+    expect(doorways.length).toBeGreaterThan(10);
+  });
+
+  it('goes through a doorway rather than bouncing off the wall it is in', () => {
+    // The complaint this exists for. wallPieces splits a wall at its openings, so a door is a gap in
+    // the collision list and nothing has to know what a door is — but only if the gap is wider than
+    // the walker. Start a stride back on one side, walk straight through, and check which side you
+    // come out on.
+    const crossed = doorways.filter(d => {
+      const from: Point = [d.at[0] - d.through[0] * 1.4, d.at[1] - d.through[1] * 1.4];
+      const to: Point = [d.at[0] + d.through[0] * 1.4, d.at[1] + d.through[1] * 1.4];
+      const end = march(from, to);
+      // Positive projection on the wall normal means the walker finished on the far side.
+      return (end[0] - d.at[0]) * d.through[0] + (end[1] - d.at[1]) * d.through[1] > 0.3;
+    });
+    expect(crossed.length / doorways.length).toBeGreaterThan(0.9);
+  });
+
+  it('will not walk through the solid part of a wall', () => {
+    // The other half of the same claim: a gap that lets everything through is not a wall. Aim at the
+    // middle of each wall piece, a metre off its face, and check you are stopped by it.
+    const solid = walls.filter(r => r.length > 4).slice(0, 60);
+    const blocked = solid.filter(ring => {
+      const cx = ring.slice(0, 4).reduce((s, p) => s + p[0], 0) / 4,
+        cy = ring.slice(0, 4).reduce((s, p) => s + p[1], 0) / 4;
+      // Approach from outside along the piece's shortest axis, which for a wall body is its thickness.
+      const dx = ring[1][0] - ring[0][0],
+        dy = ring[1][1] - ring[0][1];
+      const len = Math.hypot(dx, dy) || 1;
+      const n: Point = [-dy / len, dx / len];
+      const from: Point = [cx - n[0] * 1.2, cy - n[1] * 1.2];
+      const end = march(from, [cx, cy]);
+      return Math.hypot(end[0] - cx, end[1] - cy) > 0.05; // did not reach the centreline
+    });
+    expect(blocked.length).toBe(solid.length);
+  });
+
+  it('leaves the room it started in', () => {
+    // Room centre to room centre, on the floor with a real fit-out. A straight line between two
+    // offices will meet walls, and should — what it must not do is leave the walker where it began.
+    const rooms = demo.objects.filter(o => o.floorId === floorId && o.kind === 'room' && o.rings?.length);
+    const centre = (ring: Point[]): Point => [
+      ring.reduce((s, p) => s + p[0], 0) / ring.length,
+      ring.reduce((s, p) => s + p[1], 0) / ring.length,
+    ];
+    // A concave room's centroid can fall in its own notch, so start in one that contains its own
+    // middle — the point of the test is the walking, not the geometry of the first room in the list.
+    const home = rooms.find(o => spaceAt(demo, floorId, centre(o.rings![0]))?.id === o.id)!;
+    const start = centre(home.rings![0]);
+    const startSpace = spaceAt(demo, floorId, start)?.id;
+    expect(startSpace).toBeTruthy();
+    const elsewhere = rooms
+      .filter(o => o !== home)
+      .slice(0, 40)
+      .map(o => spaceAt(demo, floorId, march(start, centre(o.rings![0])))?.id)
+      .filter(id => id && id !== startSpace);
+    expect(elsewhere.length).toBeGreaterThan(0);
+  });
+});
+
+describe('the range the head can turn through', () => {
+  it('leaves room to look up as well as down', () => {
+    // MapLibre will not pitch past 85°, so "level" is as far up as the camera goes and the default
+    // has to sit below it — parked at the ceiling, dragging up does nothing at all, which is what
+    // made looking up feel broken rather than limited.
+    expect(REST_PITCH).toBeLessThan(MAX_PITCH);
+    expect(REST_PITCH).toBeGreaterThan(MIN_PITCH);
+    expect(MAX_PITCH).toBe(85);
+  });
+
+  it('keeps the whole range inside the zoom the map will give it', () => {
+    // Eye height is a zoom solved from the pitch, and looking down needs more zoom than looking
+    // level. If the steepest downward look solves past the map's maxZoom the eye silently rises off
+    // the floor, so the downward limit is set by the zoom ceiling, not by taste.
+    const tallWindow = 1600 * 1.5; // cameraToCenterDistance on a tall display
+    expect(eyeZoom(60, tallWindow, MIN_PITCH, EYE + 0.33)).toBeLessThan(MAX_MAP_ZOOM);
   });
 });
