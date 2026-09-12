@@ -4,7 +4,7 @@
 // in the host, never in library code. A host with live data also passes FloorViewer a `statuses`
 // array from its own StatusFeed — deliberately not modelled here, because what a reading
 // means is the host's business, not the toolkit's.
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { LiftPanel, useLiftController } from './LiftPanel';
 import {
@@ -22,19 +22,23 @@ import {
   X,
 } from 'lucide-react';
 import {
-  FloorViewer,
   parseExport,
   KerrosThemeProvider,
   useDarkMode,
   IndexedAssetRepository,
   LocalProjectRepository,
+  IndexedProjectRepository,
   type AssetRepository,
   type Barrier,
   type ProjectDocument,
   type ProjectSummary,
   type SiteObject,
   StructureView,
-} from '@kerros/viewer';
+} from '@kerros/viewer/host';
+// FloorViewer is the only thing here that draws a plan, and drawing a plan means maplibre and three
+// — 1.7 MB that the picker screen has no use for. The `/host` subpath above is the same facade
+// minus the renderer, so naming FloorViewer through a dynamic import is what keeps the two apart.
+const FloorViewer = lazy(() => import('@kerros/viewer').then(m => ({ default: m.FloorViewer })));
 import { mmlBasemap } from './mmlBasemap';
 import { cameraPose, parseViewLink, writeViewLink, type ViewLink } from './viewLink';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -242,28 +246,39 @@ function ViewerShell({
         </aside>
         <main className="canvas-column">
           <div className="canvas-body">
-            <FloorViewer
-              project={project}
-              assets={assets}
-              statuses={liftController.statuses}
-              basemap={basemap}
-              floorId={floorId}
-              onFloorChange={setFloorId}
-              selected={selected}
-              onSelect={setSelected}
-              threeD={threeD}
-              stack={stack}
-              walk={walk}
-              onWalkExit={() => chooseMode('3d')}
-              dark={dark}
-              onError={setError}
-              initialCamera={view?.camera}
-              onReady={map => {
-                mapRef.current = map;
-                map.on('moveend', () => writeHash());
-                writeHash(true);
-              }}
-            />
+            {/* The renderer arriving, not the map preparing a space — same spinner so the two waits
+                read as one, but its own class. `.map-loading` is MapCanvas saying it is not ready
+                yet, and a test that waits for the map has to be able to tell them apart. */}
+            <Suspense
+              fallback={
+                <div className="renderer-loading">
+                  <span className="loading-orbit" />
+                </div>
+              }
+            >
+              <FloorViewer
+                project={project}
+                assets={assets}
+                statuses={liftController.statuses}
+                basemap={basemap}
+                floorId={floorId}
+                onFloorChange={setFloorId}
+                selected={selected}
+                onSelect={setSelected}
+                threeD={threeD}
+                stack={stack}
+                walk={walk}
+                onWalkExit={() => chooseMode('3d')}
+                dark={dark}
+                onError={setError}
+                initialCamera={view?.camera}
+                onReady={map => {
+                  mapRef.current = map;
+                  map.on('moveend', () => writeHash());
+                  writeHash(true);
+                }}
+              />
+            </Suspense>
             <LiftPanel project={project} controller={liftController} onFloor={setFloorId} />
             <div className="canvas-top-left">
               <div className="view-switch">
@@ -322,7 +337,21 @@ function ViewerShell({
 
 function ViewerHome() {
   const [dark, toggleDark] = useDarkMode();
-  const projects = useMemo(() => new LocalProjectRepository(), []),
+  // Start fetching the renderer while the picker is on screen. Keeping it out of the eager bundle is
+  // what stopped it delaying first paint; it is also the only thing anyone does next, so waiting for
+  // the click to begin a 1.7 MB download would trade a slow start for a stare. Idle-scheduled, so it
+  // queues behind the picker's own work rather than competing with it.
+  useEffect(() => {
+    const warm = () => void import('@kerros/viewer');
+    const idle = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+    const handle = idle ? idle(warm) : window.setTimeout(warm, 400);
+    return () => {
+      const cancel = (window as unknown as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
+      if (idle && cancel) cancel(handle);
+      else window.clearTimeout(handle);
+    };
+  }, []);
+  const projects = useMemo(() => new IndexedProjectRepository(new LocalProjectRepository()), []),
     storedAssets = useMemo(() => new IndexedAssetRepository(), []);
   const [open, setOpen] = useState<{ project: ProjectDocument; assets: AssetRepository; view?: ViewLink } | null>(null);
   const [saved, setSaved] = useState<ProjectSummary[]>([]),

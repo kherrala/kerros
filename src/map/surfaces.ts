@@ -113,6 +113,8 @@ export class SurfaceBatch {
 }
 
 export function hitEntity(hit: THREE.Intersection): string | null {
+  if (hit.instanceId !== undefined && hit.object.userData.entityIds)
+    return hit.object.userData.entityIds[hit.instanceId] ?? null;
   if (hit.object.userData.entityId) return hit.object.userData.entityId;
   const vertex = (hit.faceIndex ?? -1) * 3;
   const spans = hit.object.userData.spans as Span[] | undefined;

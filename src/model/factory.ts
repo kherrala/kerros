@@ -38,6 +38,7 @@ export function createObject(kind: ObjectKind, position: Point, floorId: string 
     storage: [8, 6, 0.1],
     camera: [0.5, 0.5, 2.4],
     sensor: [0.35, 0.35, 0.25],
+    light: [1.2, 0.3, 2.8],
     alarm: [0.4, 0.4, 0.4],
     equipment: [1.4, 0.9, 1.4],
   };
@@ -56,5 +57,6 @@ export function createObject(kind: ObjectKind, position: Point, floorId: string 
     coverageAngle: kind === 'camera' ? 70 : undefined,
     coverageRange: kind === 'camera' ? 12 : undefined,
     servedFloorIds: kind === 'stairs' || kind === 'elevator' ? (floorId ? [floorId] : []) : undefined,
+    ...(kind === 'light' ? { light: { kelvin: 4000, intensity: 45, range: 12 } } : {}),
   };
 }

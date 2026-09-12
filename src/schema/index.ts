@@ -7,6 +7,7 @@ export type {
   RoofSection,
   Floor,
   InteriorLight,
+  LightFixture,
   Junction,
   Barrier,
   SiteObject,

@@ -1,7 +1,10 @@
 import * as THREE from 'three';
 import type { MaterialKind } from '../model/types';
 
-export type SurfaceFinish = MaterialKind | 'roof';
+/** `roof` and `ceiling` are finishes with no authorable material behind them: nobody writes "this
+ *  wall is made of roof". They exist because the renderer draws two surfaces the document never
+ *  names — the cap over a building, and the soffit walk mode puts over the storey you are in. */
+export type SurfaceFinish = MaterialKind | 'roof' | 'ceiling';
 
 // One repeat in real metres. Shared across colours, so an entire site needs only one set per finish.
 const SCALE: Record<SurfaceFinish, [number, number]> = {
@@ -14,6 +17,12 @@ const SCALE: Record<SurfaceFinish, [number, number]> = {
   grass: [3.2, 3.2],
   paving: [1.6, 1.6],
   roof: [2.4, 3.6],
+  // Four 600 mm modules across, which is the grid every suspended ceiling in every office is set out
+  // on. Getting this wrong is immediately obvious from underneath: the tiles are the one thing in a
+  // room whose real size everybody already knows.
+  ceiling: [2.4, 2.4],
+  carpet: [3, 3],
+  wallpaper: [1.2, 2.4],
 };
 const fract = (x: number) => x - Math.floor(x);
 const hash = (x: number, y: number) => fract(Math.sin(x * 127.1 + y * 311.7 + 74.7) * 43758.5453);
@@ -89,10 +98,50 @@ export function surfaceTextures(kind: SurfaceFinish) {
         if (seam) tone *= 0.63;
         relief = seam ? 0.22 : 0.6 + fibre * 0.065;
         roughness = kind === 'oak' ? 0.44 + weather * 0.18 : 0.72 + weather * 0.17;
+      } else if (kind === 'carpet') {
+        // Dense loop pile with broad wear; stains affect colour, not the height of the fibres.
+        const fibre = hash(x, Math.floor(y / 2));
+        tone = 0.84 + (weather - 0.5) * 0.2 + (fibre - 0.5) * 0.23;
+        relief = 0.45 + fibre * 0.3;
+        roughness = 0.98;
+      } else if (kind === 'wallpaper') {
+        // Small repeated ogees and vertical paper seams, all periodic at the metre-scaled tile edge.
+        const curve = Math.cos(v * Math.PI * 16) * 0.2;
+        const pattern = Math.abs(Math.sin((u * 8 + curve) * Math.PI));
+        const ink = Math.max(0, 1 - pattern / 0.22);
+        const seam = Math.min(u, 1 - u) < 0.004;
+        tone = 0.95 - ink * 0.13 - (seam ? 0.07 : 0) + (weather - 0.5) * 0.08;
+        relief = 0.5 + ink * 0.03 + (grain - 0.5) * 0.04;
+        roughness = 0.92;
       } else if (kind === 'grass') {
         tone *= 0.78 + weather * 0.32 + (grain - 0.5) * 0.18;
         relief = 0.3 + grain * 0.5;
         roughness = 1;
+      } else if (kind === 'ceiling') {
+        // Lay-in mineral fibre on an exposed T-bar grid. Three things make it read as a ceiling
+        // rather than as tiling: the grid is PALER than the tile (aluminium against fibre, the
+        // opposite way round from mortar and brick), the face is fissured rather than smooth, and
+        // the odd tile sits a shade off its neighbours because somebody lifted it and put it back.
+        // That last one is most of what makes a corridor of them look like somewhere real.
+        const cells = 4;
+        const cu = u * cells,
+          cv = v * cells;
+        const fu = fract(cu),
+          fv = fract(cv);
+        // 13 mm of tee across a 600 mm module.
+        const gap = 0.022;
+        const edge = Math.min(Math.min(fu, 1 - fu), Math.min(fv, 1 - fv)) / gap;
+        const face = smooth(Math.min(1, edge));
+        const lifted = hash(Math.floor(cu), Math.floor(cv));
+        const fissure = noise(u, v, 40) * 0.55 + grain * 0.45;
+        // The grid has to carry in COLOUR, not only in relief: a ceiling is lit from inside itself,
+        // and an emissive surface has almost no shading for a bump map to show up in. A tenth is
+        // enough to read as a grid from underneath without reading as tiling.
+        tone = (0.9 * face + 1.0 * (1 - face)) * (1 + (lifted - 0.5) * 0.05) + (fissure - 0.5) * 0.06;
+        // The tile face sits a few millimetres below the tee it rests in, so the grid is the high
+        // ground — which is what catches the light and draws the lines without any colour doing it.
+        relief = face * (0.42 + (fissure - 0.5) * 0.3) + (1 - face) * 0.86;
+        roughness = 0.93 - (1 - face) * 0.25;
       } else if (kind === 'roof') {
         const seam = Math.min(fract(u * 4), 1 - fract(u * 4));
         const raised = Math.max(0, 1 - seam / 0.016);

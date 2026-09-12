@@ -1,5 +1,6 @@
 import {
   Activity,
+  Lightbulb,
   ArrowDownToLine,
   ArrowUpRight,
   BellRing,
@@ -88,6 +89,7 @@ export function EntityIcon({
             parcel: LandPlot,
             rectangle: Square,
             sensor: Activity,
+            light: Lightbulb,
             alarm: Siren,
             equipment: Cpu,
             evacuation: ShieldAlert,

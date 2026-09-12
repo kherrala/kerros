@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
+import { lazy, Suspense, useEffect, useMemo, useRef, useState, type DragEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import {
   ArrowRight,
@@ -16,16 +16,17 @@ import {
 } from 'lucide-react';
 import { copyProject, type ProjectDocument, type ProjectSummary } from '@kerros/schema';
 import {
-  FloorEditor as SitePlanner,
-  SiteViewer,
   KerrosThemeProvider,
   useDarkMode,
   importProject,
   IndexedAssetRepository,
   LocalProjectRepository,
+  IndexedProjectRepository,
   type PlannerAdapters,
-} from '@kerros/editor';
+} from '@kerros/editor/host';
 import { createSilo } from './demo/silo';
+import { BACKROOMS_ID, createBackrooms, type BackroomsOptions } from './demo/backrooms';
+import { BackroomsCard } from './BackroomsCard';
 import { createDemo, newProject } from './demo/demo';
 import { mmlBasemap } from './mmlBasemap';
 import { importProjections } from './importProjections';
@@ -34,6 +35,13 @@ import { en } from './strings';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import '../src/styles.css';
 import './reset.css';
+
+// Nothing on the home screen draws a plan, and the two surfaces that do drag maplibre and three in
+// behind them — 1.7 MB the picker has no use for. The `/host` subpath above is the same facade minus
+// the renderer, so naming these two through a dynamic import is what keeps the two halves apart: the
+// renderer is fetched while the chosen project is being read out of storage.
+const SitePlanner = lazy(() => import('@kerros/editor').then(m => ({ default: m.FloorEditor })));
+const SiteViewer = lazy(() => import('@kerros/editor').then(m => ({ default: m.SiteViewer })));
 
 const DEMOS = [
   {
@@ -45,12 +53,26 @@ const DEMOS = [
 
 function Home() {
   const [dark, toggleDark] = useDarkMode();
+  // Start fetching the renderer while the picker is on screen. Keeping it out of the eager bundle is
+  // what stopped it delaying first paint; it is also the only thing anyone does next, so waiting for
+  // the click to begin a 1.7 MB download would trade a slow start for a stare. Idle-scheduled, so it
+  // queues behind the picker's own work rather than competing with it.
+  useEffect(() => {
+    const warm = () => void import('@kerros/editor');
+    const idle = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
+    const handle = idle ? idle(warm) : window.setTimeout(warm, 400);
+    return () => {
+      const cancel = (window as unknown as { cancelIdleCallback?: (id: number) => void }).cancelIdleCallback;
+      if (idle && cancel) cancel(handle);
+      else window.clearTimeout(handle);
+    };
+  }, []);
   // No `status` adapter here: this reference app models premises, it does not monitor them. A host
   // with live data supplies its own StatusFeed implementation (see the viewer/editor reference docs).
   // The MML basemap (and its API key) are the host's concern: the env read lives here, not in the library editor.
   const adapters = useMemo<PlannerAdapters>(
     () => ({
-      projects: new LocalProjectRepository(),
+      projects: new IndexedProjectRepository(new LocalProjectRepository()),
       assets: new IndexedAssetRepository(),
       basemap: import.meta.env.VITE_MML_API_KEY ? mmlBasemap(import.meta.env.VITE_MML_API_KEY) : undefined,
       importProjections,
@@ -76,7 +98,7 @@ function Home() {
   // new content via deep links and the picker forever. Purge outdated demo saves on startup.
   useEffect(() => {
     (async () => {
-      const current = new Set([createDemo().id, createSilo().id]);
+      const current = new Set([createDemo().id, createSilo().id, BACKROOMS_ID]);
       for (const summary of await adapters.projects.list().catch(() => []))
         if (summary.id.startsWith('demo-') && !current.has(summary.id))
           await adapters.projects.delete(summary.id).catch(() => {});
@@ -90,7 +112,7 @@ function Home() {
     if (!link.project) return;
     (async () => {
       const saved = await adapters.projects.load(link.project!).catch(() => null);
-      const generators = [createDemo(), createSilo()];
+      const generators = [createDemo(), createSilo(), createBackrooms()];
       // Old demo ids in bookmarks redirect to the current generation instead of dead-ending.
       const family = (id: string) => id.replace(/-\d+$/, '');
       const wanted = link.project!;
@@ -115,6 +137,22 @@ function Home() {
     const demo = createSilo();
     const existing = await adapters.projects.load(demo.id).catch(() => null);
     setOpen({ project: existing ?? demo, readOnly: false });
+  }
+  async function openBackrooms(options: BackroomsOptions) {
+    try {
+      const demo = createBackrooms(options);
+      const existing = await adapters.projects.load(demo.id).catch(() => null);
+      setOpen({
+        project: existing ?? demo,
+        readOnly: false,
+        // The Backrooms is the one sample whose whole point is being inside it — endless yellow rooms
+        // read as a floor plan from above and as somewhere you are lost from eye level. It opens in
+        // walk mode for the same reason a maze is not sold as a map of itself.
+        view: { floor: demo.initialFloorId, threeD: true, stack: false, walk: true },
+      });
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
   async function openSaved(id: string, readOnly = false) {
     try {
@@ -192,10 +230,23 @@ function Home() {
       onViewChange,
       onBack: back,
     } as const;
-    return open.readOnly ? (
-      <SiteViewer project={open.project} {...hostProps} />
-    ) : (
-      <SitePlanner project={open.project} {...hostProps} />
+    return (
+      // The renderer arriving, not the map preparing a space — same spinner so the two waits read as
+      // one, but its own class. `.map-loading` is MapCanvas saying it is not ready yet, and a test
+      // that waits for the map has to be able to tell them apart.
+      <Suspense
+        fallback={
+          <div className="renderer-loading">
+            <span className="loading-orbit" />
+          </div>
+        }
+      >
+        {open.readOnly ? (
+          <SiteViewer project={open.project} {...hostProps} />
+        ) : (
+          <SitePlanner project={open.project} {...hostProps} />
+        )}
+      </Suspense>
     );
   }
   return (
@@ -234,6 +285,7 @@ function Home() {
           </p>
         </section>
         <div className="home-grid">
+          <BackroomsCard onOpen={openBackrooms} />
           <button className="home-card demo" onClick={() => void openSilo()}>
             <span className="home-card-icon">
               <Layers3 size={26} />

@@ -23,6 +23,26 @@ The framework-free core: the data model and pure operations. No React, no MapLib
 
 Guards & ids: `isArea`, `isDevice`, `isOpening`, `uid`. The full list is exported as `OBJECT_KINDS`.
 
+### Materials and lights
+
+Objects and barriers accept `material`, including `carpet` (matte loop pile) and `wallpaper` (a repeated
+pattern with paper seams). Textures are generated locally and use metre-scaled UVs.
+
+A `light` object describes a ceiling panel. `width` and `depth` are its dimensions; `height` is its
+mounting height above the floor. Its required `light: LightFixture` settings are `kelvin` (1000–12000),
+`intensity` (0–10000 candela; zero switches it off), `range` (0–100 metres, excluding zero), and optional
+`flicker` (0–1, default zero). For example:
+
+```ts
+const panel = createObject('light', [6, 3], floorId, 'Fluorescent panel');
+panel.light = { kelvin: 4000, intensity: 55, range: 13, flicker: 0.8 };
+```
+
+The 2D plan shows the fitting footprint. In walk mode the renderer instances the panels and assigns
+shadow-casting point lights to the nearest four; distant fixtures remain visible but do not add
+unbounded lighting cost. Flicker is intermittent and deterministic per object ID. These local lights
+supplement the floor's existing `light: InteriorLight` ambient setting.
+
 ### Sloped areas
 
 Any area can be a ramp. Give it a `slope` and its plate is drawn as an inclined plane instead of a flat

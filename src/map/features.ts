@@ -35,6 +35,7 @@ export const COLORS: Record<string, string> = {
   storage: '#e0e2d8',
   evacuation: '#cfe6c6',
   sensor: '#8fb7d4',
+  light: '#eee6b4',
   alarm: '#e0524e',
   equipment: '#c3bda8',
 };
@@ -233,7 +234,7 @@ export function makeFeatures(
     if (o.rings) poly(o.rings, props);
     else if (['office', 'container', 'storage', 'elevator', 'stairs', 'turnstile'].includes(o.kind))
       poly(objectRings(o), props);
-    else if (o.kind === 'fixture') poly(objectRings(o), { ...props, kind: 'furniture' });
+    else if (o.kind === 'fixture' || o.kind === 'light') poly(objectRings(o), { ...props, kind: 'furniture' });
     else if (o.kind === 'landscape') {
       const circle: Point[] = [];
       for (let a = 0; a <= 360; a += 30) circle.push(add(o.position, rotate([o.width / 2, 0], a)));

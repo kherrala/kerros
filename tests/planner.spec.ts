@@ -111,10 +111,25 @@ async function savedProject(page: Page): Promise<ProjectDocument> {
   // debounce so "All changes saved" can never be the PREVIOUS save observed too early.
   await page.waitForTimeout(600);
   await expect(page.locator('.save-status')).toContainText('All changes saved');
-  return page.evaluate(() => {
-    const key = Object.keys(localStorage).find(key => key.startsWith('kerros:project:'))!;
-    return JSON.parse(localStorage.getItem(key)!);
-  });
+  return page.evaluate(
+    () =>
+      new Promise<ProjectDocument>((resolve, reject) => {
+        const open = indexedDB.open('kerros-projects', 1);
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result;
+          const req = db.transaction('projects').objectStore('projects').getAll();
+          req.onsuccess = () => {
+            db.close();
+            resolve(req.result[0]);
+          };
+          req.onerror = () => {
+            db.close();
+            reject(req.error);
+          };
+        };
+      }),
+  );
 }
 
 test('both populated sites render, switch floors, and open 3D without runtime errors', async ({ page }, testInfo) => {
@@ -360,7 +375,7 @@ test('save errors retain work and invalid imports do not replace the current pro
   await page.getByRole('button', { name: 'Cancel', exact: true }).click();
   expect((await savedProject(page)).id).toBe(before.id);
   await page.evaluate(() => {
-    Storage.prototype.setItem = () => {
+    IDBObjectStore.prototype.put = () => {
       throw new DOMException('Quota exceeded', 'QuotaExceededError');
     };
   });

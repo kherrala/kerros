@@ -314,6 +314,24 @@ export function validateProject(value: unknown): ProjectDocument {
       if (!['straight', 'switchback', 'dogleg', 'spiral', 'escalator'].includes(o.stairModel as string))
         fail('a stair model is straight, switchback, dogleg, spiral or escalator.');
     }
+    if (o.light !== undefined || o.kind === 'light') {
+      const lamp = o.light;
+      if (
+        o.kind !== 'light' ||
+        !object(lamp) ||
+        !finite(lamp.kelvin) ||
+        lamp.kelvin < 1000 ||
+        lamp.kelvin > 12000 ||
+        !finite(lamp.intensity) ||
+        lamp.intensity < 0 ||
+        lamp.intensity > 10000 ||
+        !finite(lamp.range) ||
+        lamp.range <= 0 ||
+        lamp.range > 100 ||
+        (lamp.flicker !== undefined && (!finite(lamp.flicker) || lamp.flicker < 0 || lamp.flicker > 1))
+      )
+        fail('a light needs a valid colour temperature, intensity, range and optional flicker.');
+    }
     if (o.watchedIds && (!Array.isArray(o.watchedIds) || o.watchedIds.some(id => !p.objects.some(x => x.id === id))))
       fail('unknown watched object.');
     if (o.watchedIds && !distinct(o.watchedIds)) fail('watched objects must be listed once each.');

@@ -28,6 +28,7 @@ export const OBJECT_KINDS = [
   'stairs',
   'poi',
   'fixture',
+  'light',
   'landscape',
   'sensor',
   'alarm',
@@ -35,7 +36,17 @@ export const OBJECT_KINDS = [
   'evacuation',
 ] as const;
 export type ObjectKind = (typeof OBJECT_KINDS)[number];
-export type MaterialKind = 'brick' | 'stone' | 'plaster' | 'timber' | 'oak' | 'tile' | 'grass' | 'paving';
+export type MaterialKind =
+  | 'brick'
+  | 'stone'
+  | 'plaster'
+  | 'timber'
+  | 'oak'
+  | 'tile'
+  | 'grass'
+  | 'paving'
+  | 'carpet'
+  | 'wallpaper';
 export type ModelKind =
   | 'bed'
   | 'sofa'
@@ -83,6 +94,14 @@ export interface Floor {
 export interface InteriorLight {
   kelvin: number;
   level: number;
+}
+/** A ceiling luminaire. Object height is the mounting height above the floor, intensity is candela,
+ * range is metres, and flicker is the optional 0..1 depth of intermittent ballast dimming. */
+export interface LightFixture {
+  kelvin: number;
+  intensity: number;
+  range: number;
+  flicker?: number;
 }
 export interface Building {
   id: string;
@@ -190,6 +209,7 @@ export interface SiteObject {
   watchedIds?: string[];
   material?: MaterialKind;
   model?: ModelKind;
+  light?: LightFixture;
   /** Host-defined subtype/category (e.g. 'meeting-room', 'speedgate', 'cold-store') for styling, filtering and event handlers. */
   category?: string;
   /** Arbitrary host metadata; ignored by the core, available to style hooks and event handlers. */
@@ -360,6 +380,7 @@ export type Tool =
   | 'split'
   | 'route'
   | 'sensor'
+  | 'light'
   | 'alarm'
   | 'equipment'
   | 'evacuation';

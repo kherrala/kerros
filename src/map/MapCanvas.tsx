@@ -40,7 +40,15 @@ import { neutralBasemap } from '../adapters/basemap';
 import { ambient, mixColor, type Sun, sunlight } from './lighting';
 import { EntityIcon } from '../components/Icons';
 import { draftFeatures, makeFeatures, navGraphFeatures, onFloor, visibleOnFloor, wallPieces } from './features';
-import { ROUTE_COLOR, ROUTE_EDGE, ROUTE_SOFT, routeArrowImage, routeFeatures, routeFlowGradient } from './route';
+import {
+  ROUTE_COLOR,
+  ROUTE_EDGE,
+  ROUTE_SOFT,
+  routeArrowImage,
+  routeFeatures,
+  routeFlowGradient,
+  routeWalks,
+} from './route';
 import { aimCenter, JourneyPlayer } from './journey';
 import type { Route } from '../model/navigation';
 import { LIFT, SceneLayer, SLAB } from './SceneLayer';
@@ -1507,9 +1515,14 @@ export function MapCanvas(props: MapCanvasProps) {
     const below = served.filter(f => f.elevation < here.elevation).slice(-1)[0] ?? null;
     return { shaft, up: only === 'down' ? null : above, down: only === 'up' ? null : below };
   };
+  // Deliberately NOT gated on `ready`. That flag waits for the basemap style, which is a network
+  // fetch — and on a slow or failing one the UI said Walk, the head-up display was there, and the
+  // camera was still a plan view with MapLibre's own drag and arrow-key panning live underneath it.
+  // Every symptom of "walk mode does nothing" came from that: the controller had never attached.
+  // The walker needs the map object and the document, and has both from the first commit.
   useEffect(() => {
     const m = map.current;
-    if (!m || !ready || !props.walk) return;
+    if (!m || !props.walk) return;
     const p = latest.current;
     const controller = new WalkController({
       onPose: (pose: WalkPose) => {
@@ -1562,7 +1575,7 @@ export function MapCanvas(props: MapCanvasProps) {
       setWalkHint(NO_HINT);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [ready, props.walk]);
+  }, [props.walk]);
   useEffect(() => {
     // Walk mode draws the active floor on the map's own ground plane (SceneLayer rebases it), so the
     // eye is the same height above it on every storey — only the walls change.
@@ -1597,7 +1610,11 @@ export function MapCanvas(props: MapCanvasProps) {
     });
   useEffect(() => {
     const m = map.current;
-    if (props.playing && m && !journey.current) {
+    // Walking, the route is walked rather than flown: see the follow effect below. The two cannot
+    // share a camera — the fly-over aims at the floor's real elevation, and walk mode has rebased the
+    // storey to the map's own ground plane, so the journey would ease the eye to a height the
+    // building is no longer at and look at nothing.
+    if (props.playing && m && !journey.current && !props.walk) {
       const route = latest.current.route;
       if (!route) {
         latest.current.onJourneyEnd?.();
@@ -1620,6 +1637,42 @@ export function MapCanvas(props: MapCanvasProps) {
     } else if (!props.playing && journey.current) journey.current.stop();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.playing]);
+  // Playing a route while walking it: the walker is carried along the path at eye level, the floor
+  // changes underneath at each flight, and the heading is eased rather than snapped so a corner
+  // reads as turning into it. Any movement key hands control back.
+  useEffect(() => {
+    const walker0 = walker.current;
+    if (!props.playing || !props.walk || !walker0) return;
+    const route = latest.current.route;
+    const runs = route ? routeWalks(route) : [];
+    if (!runs.length) {
+      latest.current.onJourneyEnd?.();
+      return;
+    }
+    let cancelled = false;
+    const step = async (index: number) => {
+      if (cancelled) return;
+      if (index >= runs.length) {
+        latest.current.onJourneyEnd?.();
+        return;
+      }
+      const run = runs[index];
+      if (run.floorId !== latest.current.floorId) {
+        latest.current.onRequestFloor?.(run.floorId);
+        // The walls the walker collides with and the storey it stands on both come from React state;
+        // starting to walk the next flight before the floor has actually changed walks the old one.
+        await waitForFloor(run.floorId);
+        if (cancelled) return;
+      }
+      walker.current?.follow(run.points, () => step(index + 1));
+    };
+    void step(0);
+    return () => {
+      cancelled = true;
+      walker.current?.cancelFollow();
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.playing, props.walk]);
   // A deep-linked camera must survive the mount-time 3D tilt-in; later mode switches animate normally.
   const firstTilt = useRef(true);
   useEffect(() => {
@@ -1709,8 +1762,11 @@ export function MapCanvas(props: MapCanvasProps) {
         duration: 600,
       });
     if (props.walk) {
-      // Walk mode owns the handlers, and turns them off. This effect runs in the same commit as the
-      // one that entered walk from 2D, so without this it hands dragRotate straight back.
+      // Walk mode owns the handlers and turns them off — said here as well as in the controller so
+      // that a walk which somehow fails to attach is inert rather than wrong. This effect also runs
+      // in the same commit as the one that entered walk from 2D, so without it the branch below
+      // would hand dragRotate straight back.
+      for (const h of ['dragPan', 'dragRotate', 'scrollZoom', 'keyboard', 'touchZoomRotate'] as const) m[h]?.disable();
     } else if (props.threeD) {
       m.dragRotate.enable();
       m.touchZoomRotate.enableRotation();

@@ -46,6 +46,7 @@ import { includeSceneDepth } from './projection';
 import { syncLightingCamera } from './projection';
 import type { SurfaceFinish } from './textures';
 import { ambient, FIXED, type Sun, sunlight } from './lighting';
+import { FixtureLights } from './FixtureLights';
 
 // Building geometry floats slightly above the basemap so slabs never z-fight with map tiles.
 // Each floor gets an opaque slab; rooms sit on top of it with enough clearance to stay artifact-free.
@@ -146,6 +147,7 @@ export class SceneLayer implements CustomLayerInterface {
   private growth = 1;
   private growthStart = 0;
   private materials = new MaterialLibrary();
+  private fixtureLights?: FixtureLights;
   private batch = new SurfaceBatch();
   private highlight = new THREE.Group();
   private selected: string | null = null;
@@ -1367,7 +1369,7 @@ export class SceneLayer implements CustomLayerInterface {
             ? this.materials.plate(color)
             : // Walking, the floor is the one surface that can say where the light is, and only
               // because you see it along rather than down onto it.
-              walk && indoorFinish && !ghosted
+              walk && indoorFinish && !ghosted && o.material !== 'carpet'
               ? this.materials.polished(this.materials.get(o.material ?? 'plaster', color))
               : undefined,
           !indoor,
@@ -1416,43 +1418,35 @@ export class SceneLayer implements CustomLayerInterface {
     // off, the floor runs away to the horizon and a shop floor reads as grey tarmac. The ceiling is
     // most of what makes an interior look like an interior from inside it. Cutaway keeps its open
     // top — looking down into a storey is the whole point of that view.
+    //
+    // Drawn per area rather than as one unioned lid, which is how it was first written and how the
+    // shell slab still is. polygon-clipping's sweep line gives up on a real office fit-out — the
+    // demo's 134-room level throws "Unable to find segment … in SweepLine tree" — and the union's
+    // only fallback is no ceiling at all, which is exactly what a storey full of rooms got. Each
+    // area's own rings already describe its shape, and withVoids already punches the stairwells
+    // through them; nesting keeps a room's ceiling a hair below the zone's, which is coplanar-safe
+    // and is also true of every fit-out inside a bigger space.
     if (walk && floorId && activeF) {
-      const areas = (index.objects.get(floorId) ?? []).filter(
-        o => o.rings?.length && (o.kind === 'room' || o.kind === 'zone'),
-      );
-      let lid: Ring[][] = [];
-      try {
-        const polygons = areas.map(o => [closeRing(o.rings![0])] as Ring[]);
-        if (polygons.length) {
-          lid = polygonClipping.union(polygons[0], ...polygons.slice(1)) as unknown as Ring[][];
-          // A stairwell is a hole in the ceiling as much as in the floor, and so is an atrium — both
-          // are what you look up through. The holes an area carries in its own rings are the second
-          // kind; the shaft voids are the first.
-          const holes = [
-            ...areas.flatMap(o => o.rings!.slice(1).map(closeRing)),
-            ...shaftVoids(project, floorId, index.primary),
-          ];
-          if (holes.length)
-            lid = polygonClipping.difference(lid as never, ...holes.map(v => [v] as never)) as unknown as Ring[][];
-        }
-      } catch {
-        lid = []; // degenerate footprint: an open ceiling beats a wrong one
-      }
-      // The structural slab sits at the top of the storey, so the soffit you see is a slab's depth
-      // below the next floor's datum.
       const soffit = this.rebase + activeF.height - SLAB;
-      for (const pg of lid)
+      // Lit by how much the floor's lamps are ON, not by how hard they are working. The room light
+      // dims as daylight comes in, and tying the soffit to that made the ceiling go dark at noon —
+      // the one time of day a room is unmistakably bright. A ceiling is the source, so it is the
+      // brightest plane in the room or it is not a ceiling.
+      const lit = this.materials.luminous('#f0f1ee', air.interior, 0.8 * (activeF.light?.level ?? 1), 'ceiling');
+      for (const o of index.objects.get(floorId) ?? []) {
+        if (!o.rings?.length || (o.kind !== 'room' && o.kind !== 'zone')) continue;
         this.surface(
-          pg,
-          soffit,
+          this.withVoids(project, o.rings, floorId, index.primary),
+          soffit - nestingLift(objectArea(o)),
           SLAB,
           '#f0f1ee',
-          `ceiling:${floorId}`,
+          `ceiling:${o.id}`,
           undefined,
           false,
           false,
-          this.materials.luminous('#f0f1ee', air.interior, 0.35 * Math.min(1, air.interiorLevel / 2)),
+          lit,
         );
+      }
     }
     // The level below brings its walls too, or its rooms read as floating colour.
     const allPieces = [...wallPieces(project, floorId, stack), ...(under ? wallPieces(project, under.id, false) : [])];
@@ -1596,6 +1590,11 @@ export class SceneLayer implements CustomLayerInterface {
       );
       this.cage.setBearing(this.map?.getBearing() ?? 0);
       this.scene.add(this.cage);
+    }
+    if (walk && floorId) {
+      const fixtures = (index.objects.get(floorId) ?? []).filter(o => o.kind === 'light' && o.light);
+      if (fixtures.length)
+        this.fixtureLights = new FixtureLights(this.scene, fixtures, pt => this.xy(pt), LIFT + SLAB, this.materials);
     }
     this.batch.finish(this.scene);
     if (!buried) {
@@ -1948,6 +1947,11 @@ export class SceneLayer implements CustomLayerInterface {
     }
     this.clipToWorld.copy(this.worldToClip).invert();
     syncLightingCamera(this.camera, this.worldToClip, this.clipToWorld);
+    if (this.fixtureLights) {
+      const { shadowsChanged, animate } = this.fixtureLights.update(this.camera.position, now / 1000);
+      if (shadowsChanged) this.renderer.shadowMap.needsUpdate = true;
+      if (animate) this.paintSoon();
+    }
     // Three caches the viewport from the canvas size at construction; after the map container
     // resizes (inspector opening, fullscreen) it would keep drawing into the old rectangle,
     // shearing the scene off the basemap. Re-sync to the shared canvas every frame (pixelRatio 1).
@@ -2040,6 +2044,7 @@ export class SceneLayer implements CustomLayerInterface {
     return raycaster.intersectObjects(this.pickables, false).map(hitEntity).find(Boolean) ?? null;
   }
   private disposeScene() {
+    this.fixtureLights = undefined;
     this.cage.dispose();
     this.markerCache.clear();
     this.occlusionCache.clear();

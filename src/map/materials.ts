@@ -41,16 +41,22 @@ export class MaterialLibrary {
    *  material renders it as the darkest thing in the room — which is the opposite of what a ceiling
    *  full of fittings looks like from beneath. Emissive is the honest fix: the ceiling is not lit,
    *  it is the thing doing the lighting, and `tint` is whatever the floor's lamps are. */
-  luminous(color: string, tint: string, strength: number) {
-    const key = `luminous:${color}:${tint}:${strength.toFixed(2)}`;
+  luminous(color: string, tint: string, strength: number, finish?: SurfaceFinish) {
+    const key = `luminous:${color}:${tint}:${strength.toFixed(2)}:${finish ?? ''}`;
     if (!this.materials.has(key)) {
-      const material = new THREE.MeshStandardMaterial({
-        color,
-        roughness: 0.9,
-        side: THREE.DoubleSide,
-        emissive: new THREE.Color(tint),
-        emissiveIntensity: strength,
-      });
+      // Built on the finish's own material when there is one, so the ceiling keeps its tile grid and
+      // its fissured face and gains the emission on top — a lit ceiling is still a ceiling, and a
+      // flat glowing plane overhead is the one surface a room cannot have.
+      const material = finish
+        ? this.get(finish, color).clone()
+        : new THREE.MeshStandardMaterial({ color, roughness: 0.9, side: THREE.DoubleSide });
+      material.emissive = new THREE.Color(tint);
+      material.emissiveIntensity = strength;
+      // The emission follows the finish's own map. Flat emission over a patterned surface washes the
+      // pattern out — and on a ceiling it is also wrong: the light comes through the tiles, not
+      // through the metal grid holding them up.
+      material.emissiveMap = material.map;
+      material.side = THREE.DoubleSide;
       material.userData.shared = true;
       this.materials.set(key, material);
     }

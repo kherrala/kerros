@@ -134,6 +134,7 @@ const PLACE_TOOLS: Tool[] = [
   'storage',
   'poi',
   'sensor',
+  'light',
   'alarm',
   'equipment',
 ];
@@ -1228,7 +1229,7 @@ export function SitePlanner({
       // Chrome shortcuts work in every mode; single letters stay free because tools use their own set.
       // While walking, only the keys that change mode are ours — the rest belong to the walker.
       if (!cmd) {
-        if (walkRef.current && !['t', '1', '2', '3', '['.toLowerCase(), ']'].includes(e.key.toLowerCase())) return;
+        if (walkRef.current && !['t', '1', '2', '3', '4', '[', ']'].includes(e.key.toLowerCase())) return;
         const key = e.key.toLowerCase();
         if (e.key === '?') {
           setHelpOpen(true);
@@ -1243,6 +1244,10 @@ export function SitePlanner({
           return;
         }
         if (e.key === '3') {
+          chooseMode('walk');
+          return;
+        }
+        if (e.key === '4') {
           enterLive();
           return;
         }
@@ -1897,7 +1902,7 @@ export function SitePlanner({
                   onClick={() => chooseMode('walk')}
                 >
                   <Footprints size={14} />
-                  Walk{nextView === 'walk' && keyHint('T')}
+                  Walk{viewMode !== 'walk' && keyHint('3')}
                 </button>
               </div>
               {threeD && !walk && (
@@ -2149,7 +2154,7 @@ export function SitePlanner({
                     </div>
                     <div>
                       <h3>Sensors &amp; areas</h3>
-                      {(['sensor', 'equipment', 'evacuation'] as Tool[]).map(t => (
+                      {(['light', 'sensor', 'equipment', 'evacuation'] as Tool[]).map(t => (
                         <button key={t} onClick={() => chooseTool(t)}>
                           <EntityIcon kind={t} />
                           {en.tools[t]}
@@ -2673,12 +2678,13 @@ export function SitePlanner({
             </p>
             <div className="shortcut-grid">
               {[
-                ['1 · 2 · 3', 'Viewer · Editor · Live'],
-                ['T', '2D / 3D'],
+                ['1 · 2 · 4', 'Viewer · Editor · Live'],
+                ['3', 'Walk through at eye level'],
+                ['T', '2D / 3D / Walk'],
                 ['X', 'Cutaway / all floors'],
                 ['⇧ ↑ / ⇧ ↓', 'Floor up / down'],
                 ['⇧ ← / ⇧ →', 'Rotate map'],
-                ['↑ ↓ ← →', 'Pan map'],
+                ['↑ ↓ ← →', 'Pan map · walk and turn'],
                 ['⇧ W / ⇧ S', 'Tilt 3D camera'],
                 ['N', 'Dark / light mode'],
                 ['B', 'Side panel'],

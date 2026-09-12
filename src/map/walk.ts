@@ -19,6 +19,16 @@ export const EYE = 1.7;
 export const BODY = 0.28;
 export const WALK_SPEED = 1.4; // m/s, an unhurried indoor pace
 export const RUN_SPEED = 3.4; // Shift: covering a department without waiting for it
+/** Following a route on its own. Brisker than a stroll, because nobody watches a demonstration at
+ *  1.4 m/s, and well short of the 4 m/s the fly-over uses — at eye level that is a sprint. */
+export const TOUR_SPEED = 2.4;
+/** How fast the head can swing while a route is driving. A corner taken at the full rate still
+ *  reads as a turn rather than as a cut, and anything quicker is the sharp turn this replaced. */
+export const TURN_RATE = 120;
+/** How far up the path to look while following it. Aiming at a point ahead rather than at the
+ *  segment you are on is what makes the camera begin its turn before the corner instead of at it —
+ *  it is also what a person does, which is why it looks right. */
+export const LOOK_AHEAD = 2.6;
 /** How far the head turns. 85° is MapLibre's hard ceiling and is as level as its camera goes, so
  *  "look up" can only mean "back towards level" — and the resting pitch has to sit below the ceiling
  *  or dragging up does nothing at all. Below 60° the zoom solved for eye height runs past what the
@@ -150,6 +160,52 @@ export function stride(keys: ReadonlySet<string>, heading: number, dt: number): 
   };
 }
 
+/** Where you are after walking `travelled` metres along a polyline, and which way the path is
+ *  heading `ahead` metres further on. Clamped at both ends, and `done` once the path runs out. */
+export function alongPath(
+  points: Point[],
+  travelled: number,
+  ahead = LOOK_AHEAD,
+): { at: Point; heading: number; done: boolean; left: number } {
+  const seg: number[] = [];
+  let total = 0;
+  for (let i = 1; i < points.length; i++) {
+    const d = Math.hypot(points[i][0] - points[i - 1][0], points[i][1] - points[i - 1][1]);
+    seg.push(d);
+    total += d;
+  }
+  const pick = (distance: number): Point => {
+    let left = clamp(distance, 0, total);
+    for (let i = 0; i < seg.length; i++) {
+      if (left <= seg[i] || i === seg.length - 1) {
+        const t = seg[i] > 1e-9 ? clamp(left / seg[i], 0, 1) : 0;
+        return [
+          points[i][0] + (points[i + 1][0] - points[i][0]) * t,
+          points[i][1] + (points[i + 1][1] - points[i][1]) * t,
+        ];
+      }
+      left -= seg[i];
+    }
+    return points[points.length - 1];
+  };
+  const at = pick(travelled);
+  // The aim point is capped at the end of the path, and the point it is measured FROM is held a
+  // hair short of the end — otherwise the two coincide on the last step, the direction collapses to
+  // nothing and the walker finishes facing plan north instead of facing the way they arrived.
+  const from = pick(Math.min(travelled, total - 1e-3));
+  const aim = pick(Math.min(total, travelled + ahead));
+  const dx = aim[0] - from[0],
+    dy = aim[1] - from[1];
+  const heading = Math.hypot(dx, dy) < 1e-6 ? 0 : ((((Math.atan2(dx, dy) * 180) / Math.PI) % 360) + 360) % 360;
+  return { at, heading, done: travelled >= total, left: Math.max(0, total - travelled) };
+}
+
+/** Turn `from` towards `to` by at most `step` degrees, the short way round. */
+export function easeHeading(from: number, to: number, step: number): number {
+  const delta = ((((to - from + 540) % 360) + 360) % 360) - 180;
+  return (((from + clamp(delta, -step, step)) % 360) + 360) % 360;
+}
+
 /* ------------------------------------------------------------------ controller */
 
 export interface WalkTerrain {
@@ -198,6 +254,9 @@ export class WalkController {
   private handlers: [Handler, boolean][] = [];
   private running = false;
   private drag: Point = [0, 0];
+  private path: Point[] | null = null;
+  private travelled = 0;
+  private arrive?: () => void;
   position: Point = [0, 0];
   heading = 0;
   pitch = REST_PITCH;
@@ -234,6 +293,7 @@ export class WalkController {
   detach() {
     const map = this.map;
     this.running = false;
+    this.cancelFollow();
     cancelAnimationFrame(this.frame);
     this.keys.clear();
     if (!map) return;
@@ -255,6 +315,29 @@ export class WalkController {
   setTerrain(terrain: WalkTerrain) {
     this.terrain = terrain;
     if (this.running) this.apply();
+  }
+
+  /** Walk a path on its own, as far as it goes on this floor, then call `onArrive`. Taking any
+   *  control cancels it: a tour you cannot interrupt is a video. */
+  follow(points: Point[], onArrive: () => void) {
+    const pts = points.filter((p, i) => !i || Math.hypot(p[0] - points[i - 1][0], p[1] - points[i - 1][1]) > 0.01);
+    if (pts.length < 2) return onArrive();
+    this.path = pts;
+    this.travelled = 0;
+    this.arrive = onArrive;
+    const start = alongPath(pts, 0);
+    this.position = start.at;
+    this.heading = start.heading;
+    if (this.running) this.apply();
+  }
+
+  cancelFollow() {
+    this.path = null;
+    this.arrive = undefined;
+  }
+
+  get following() {
+    return !!this.path;
   }
 
   /** Put the walker somewhere — arriving at a new floor, or jumping to a route's start. */
@@ -347,6 +430,12 @@ export class WalkController {
     this.frame = requestAnimationFrame(this.tick);
     const dt = Math.min((now - this.last) / 1000, 0.1); // a backgrounded tab must not teleport you
     this.last = now;
+    if (this.path) {
+      // Touching a movement key takes the tour back off the route; dragging to look around does not,
+      // because looking about you while the route carries you on is the whole point of watching it.
+      if (this.keys.size) this.cancelFollow();
+      else return this.advance(dt);
+    }
     if (!this.keys.size) return;
     const moved = stride(this.keys, this.heading, dt);
     this.heading = moved.heading;
@@ -354,6 +443,23 @@ export class WalkController {
       this.position = unstick([this.position[0] + moved.step[0], this.position[1] + moved.step[1]], this.terrain.walls);
     this.apply();
   };
+
+  /** One frame of being carried along a route. The heading is rate-limited towards a point further
+   *  up the path rather than snapped to the segment underfoot, which is what turns a corner into a
+   *  turn instead of a cut. */
+  private advance(dt: number) {
+    if (!this.path) return;
+    this.travelled += TOUR_SPEED * dt;
+    const step = alongPath(this.path, this.travelled);
+    this.position = step.at;
+    this.heading = easeHeading(this.heading, step.heading, TURN_RATE * dt);
+    this.apply();
+    if (step.done) {
+      const arrived = this.arrive;
+      this.cancelFollow();
+      arrived?.();
+    }
+  }
 
   /** One camera write per frame: pitch decides the zoom, the zoom decides how far ahead to aim. */
   private apply() {

@@ -44,6 +44,7 @@ export const en = {
     enclose: 'Space from walls',
     route: 'Route path',
     sensor: 'Sensor',
+    light: 'Ceiling light',
     alarm: 'Alarm point',
     equipment: 'Equipment',
     evacuation: 'Evacuation zone',

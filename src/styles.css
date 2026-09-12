@@ -1542,8 +1542,10 @@
   gap: 14px;
   padding: 7px 14px;
   border-radius: 999px;
-  background: rgba(20, 26, 43, 0.6);
-  color: rgba(244, 245, 250, 0.86);
+  background: #141a2b;
+  color: #fff;
+  border: 1px solid #687087;
+  font-size: 13px;
   white-space: nowrap;
 }
 .walk-status:empty {
@@ -1570,8 +1572,8 @@
   gap: 16px;
   padding: 6px 14px;
   border-radius: 999px;
-  background: rgba(20, 26, 43, 0.42);
-  color: rgba(244, 245, 250, 0.76);
+  background: #141a2b;
+  color: #f4f5fa;
   white-space: nowrap;
   transition: opacity 0.25s;
 }
@@ -1631,7 +1633,8 @@
   box-shadow: var(--shadow-md);
   z-index: 30;
 }
-.map-loading {
+.map-loading,
+.renderer-loading {
   position: absolute;
   inset: 0;
   display: flex;
@@ -2559,7 +2562,8 @@
   background: var(--panel);
   color: var(--accent-ink);
 }
-.dark .map-loading {
+.dark .map-loading,
+.dark .renderer-loading {
   background: var(--bg);
 }
 .dark .modal::backdrop {

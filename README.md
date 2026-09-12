@@ -15,8 +15,15 @@ npm run build      # type-check + production bundle
 ```
 
 Open one of the demo workspaces (Stockmann Helsinki — a real eight-floor department store, or
-The Silo — a fictional hundred-level shaft), create a blank site, or import a portable project
-JSON. Projects autosave to `localStorage`; reference drawings live in IndexedDB.
+The Silo — a fictional hundred-level shaft), generate a Backrooms office complex, create a blank
+site, or import a portable project JSON. Projects and reference drawings autosave to IndexedDB;
+older projects saved in `localStorage` remain readable.
+
+The **Backrooms · Offices** sample has a live plan preview, a repeatable seed, and 144–216 m floor
+sizes. Its three office levels contain hundreds of connected rooms each, carpet and wallpaper
+materials, and flickering fluorescent panels in walk mode. Room labels stay in the walk caption;
+nearby wayfinding markers are hidden by walls. The procedural layout and office themes live in
+`app/demo/officeLayout.ts` and `app/demo/backrooms.ts`. Spa and other level families are not yet included.
 
 ### MML basemap
 
@@ -127,8 +134,10 @@ interface PlannerAdapters {
 }
 ```
 
-The bundled implementations are `LocalProjectRepository` (localStorage) and
-`IndexedAssetRepository` (IndexedDB); a host application replaces them with server-backed ones,
+The bundled implementations are `LocalProjectRepository` (localStorage), `IndexedProjectRepository`
+and `IndexedAssetRepository` (IndexedDB). The reference app uses
+`new IndexedProjectRepository(new LocalProjectRepository())` to keep older saves accessible while
+allowing large generated documents. A host application replaces these with server-backed ones,
 supplies its own `StatusFeed` if it has live data to show, and passes its own MapLibre style
 (e.g. an MML vector style with custom themes) via `basemap`.
 

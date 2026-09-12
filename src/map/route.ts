@@ -116,6 +116,30 @@ export function routeFeatures(
   return { type: 'FeatureCollection', features };
 }
 
+/** The route as something to be walked: its contiguous same-floor stretches, in travel order, in
+ *  plan metres. A flight is a break rather than a stretch — you do not walk up a lift shaft — so each
+ *  run ends where the route leaves the floor, and the floor it ends on is the one to switch to.
+ *
+ *  This is the same decomposition the flow features use, kept apart from GeoJSON because walking a
+ *  route wants plan coordinates and a map layer wants degrees. */
+export function routeWalks(route: Route): { floorId: string | null; points: Point[] }[] {
+  const runs: { floorId: string | null; points: Point[] }[] = [];
+  let run: { floorId: string | null; points: Point[] } | null = null;
+  for (const leg of route.legs) {
+    if (leg.edge.kind === 'stairs' || leg.edge.kind === 'elevator') {
+      run = null;
+      continue;
+    }
+    const fid = leg.from.floorId === leg.to.floorId ? leg.from.floorId : (leg.from.floorId ?? leg.to.floorId);
+    if (!run || run.floorId !== fid) {
+      run = { floorId: fid, points: [leg.from.position] };
+      runs.push(run);
+    }
+    run.points.push(leg.to.position);
+  }
+  return runs.filter(r => r.points.length > 1);
+}
+
 /** A band of light travelling along the path, as a line-gradient over `line-progress`.
  *
  *  Built from stops at fixed, strictly ascending positions with the band expressed as an alpha

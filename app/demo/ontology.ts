@@ -4,6 +4,7 @@
 // Deliberately derived rather than hand-written: the vertical cores come from the landings already on
 // the plan, and the portals are read off the doors. If a demo grows a floor, this follows.
 import { inferOpenBoundaries, inferPortals } from '../../src/model/inference';
+import { servedFloors } from '../../src/model/vertical';
 import { uid, type ProjectDocument, type SiteObject, type Zone } from '../../src/model/types';
 
 /** How a shaft's landings reach each other. A lift ride is direct, a stair passes every level on the
@@ -26,8 +27,11 @@ function cores(project: ProjectDocument): Zone[] {
   }
   const out: Zone[] = [];
   for (const members of groups.values()) {
-    // A single landing is not a shaft; it connects to nothing above or below it.
-    if (members.length < 2) continue;
+    // A single landing is not a shaft — unless it says otherwise. A plan drawn sheet by sheet gives
+    // one landing per storey and they group; a plan that draws the core once and lists the floors it
+    // serves makes exactly the same claim in one object, and dropping it left every lift in the
+    // Stockmann demo out of the structure panel because it was authored the second way.
+    if (members.length < 2 && servedFloors(project, members[0]).length < 2) continue;
     out.push({
       id: uid(),
       name: members[0].name,

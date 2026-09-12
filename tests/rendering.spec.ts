@@ -56,7 +56,9 @@ test('architectural materials render through daylight, dusk, and cutaway views',
   );
   expect(calls).toBeLessThan(180); // Roof seams and repeated furniture must stay batched.
   await page.getByRole('button', { name: 'Map settings', exact: true }).click();
-  await page.getByRole('switch', { name: 'Evening lighting' }).click();
+  // Sunlight is a three-way choice now (Auto follows the site's own clock), not a toggle: pin it to
+  // Dusk so the shot is of dusk rather than of whatever hour the suite happens to run at.
+  await page.getByRole('radio', { name: 'Dusk', exact: true }).click();
   await page.getByRole('button', { name: 'Close map settings' }).click();
   await settled();
   await page.screenshot({ path: testInfo.outputPath('evening.png') });

@@ -514,6 +514,32 @@ export function Inspector(props: Props) {
                     </select>
                   </label>
                 )}
+                {object.kind === 'light' && object.light && (
+                  <>
+                    <h3>Ceiling light</h3>
+                    <div className="field-grid">
+                      {(
+                        [
+                          ['Colour temperature', 'kelvin', 'K', 1000, 12000],
+                          ['Light intensity', 'intensity', 'cd', 0, 10000],
+                          ['Light range', 'range', 'm', 0.1, 100],
+                          ['Flicker depth', 'flicker', '', 0, 1],
+                        ] as const
+                      ).map(([label, key, suffix, min, max]) => (
+                        <Field
+                          key={key}
+                          label={label}
+                          value={object.light![key] ?? 0}
+                          type="number"
+                          suffix={suffix}
+                          min={min}
+                          max={max}
+                          onChange={v => update({ light: { ...object.light!, [key]: Number(v) } })}
+                        />
+                      ))}
+                    </div>
+                  </>
+                )}
                 {object.kind === 'camera' && (
                   <>
                     <h3>Illustrative coverage</h3>

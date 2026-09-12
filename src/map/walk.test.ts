@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import { rectangle } from '../model/geometry';
 import {
+  alongPath,
   BODY,
+  easeHeading,
   EYE,
   eyeZoom,
   MAX_MAP_ZOOM,
@@ -161,10 +163,15 @@ describe('walking the building that is actually drawn', () => {
     .map(p => p.ring);
   const junctions = new Map(demo.junctions.map(j => [j.id, j.position]));
 
-  /** Walk from `from` towards `to` in controller-sized steps, reporting where you end up. */
+  /** Walk from `from` towards `to` in controller-sized steps, reporting where you end up.
+   *
+   *  A frame at 60 Hz is 23 mm, which over a sixty-metre office floor against a thousand wall pieces
+   *  is a quarter of a million circle-rectangle tests per march. The step is capped at 8 cm — still
+   *  far finer than the 0.28 m body, so nothing tunnels — because a test that takes half a minute
+   *  gets deleted rather than fixed. */
   const march = (from: Point, to: Point) => {
     const span = Math.hypot(to[0] - from[0], to[1] - from[1]);
-    const steps = Math.max(1, Math.ceil(span / (WALK_SPEED / 60))); // one frame at 60 Hz
+    const steps = Math.max(1, Math.ceil(span / 0.08));
     const dx = (to[0] - from[0]) / steps,
       dy = (to[1] - from[1]) / steps;
     let at = from;
@@ -241,7 +248,7 @@ describe('walking the building that is actually drawn', () => {
     expect(startSpace).toBeTruthy();
     const elsewhere = rooms
       .filter(o => o !== home)
-      .slice(0, 40)
+      .slice(0, 12)
       .map(o => spaceAt(demo, floorId, march(start, centre(o.rings![0])))?.id)
       .filter(id => id && id !== startSpace);
     expect(elsewhere.length).toBeGreaterThan(0);
@@ -264,5 +271,76 @@ describe('the range the head can turn through', () => {
     // the floor, so the downward limit is set by the zoom ceiling, not by taste.
     const tallWindow = 1600 * 1.5; // cameraToCenterDistance on a tall display
     expect(eyeZoom(60, tallWindow, MIN_PITCH, EYE + 0.33)).toBeLessThan(MAX_MAP_ZOOM);
+  });
+});
+
+describe('being carried along a route', () => {
+  /** An L: 10 m north, then 10 m east. */
+  const corner: Point[] = [
+    [0, 0],
+    [0, 10],
+    [10, 10],
+  ];
+
+  it('walks the path at the distance asked for', () => {
+    expect(alongPath(corner, 0).at).toEqual([0, 0]);
+    expect(alongPath(corner, 5).at[1]).toBeCloseTo(5, 6);
+    expect(alongPath(corner, 15).at[0]).toBeCloseTo(5, 6);
+    expect(alongPath(corner, 15).at[1]).toBeCloseTo(10, 6);
+  });
+
+  it('stops at the end rather than running off it', () => {
+    const past = alongPath(corner, 500);
+    expect(past.at).toEqual([10, 10]);
+    expect(past.done).toBe(true);
+    expect(past.left).toBe(0);
+    expect(alongPath(corner, 5).done).toBe(false);
+  });
+
+  it('starts turning before the corner, not at it', () => {
+    // The whole reason the aim point runs ahead of the walker. Two metres short of the turn the
+    // heading already has some east in it; on the straight before that it does not.
+    const early = alongPath(corner, 4).heading; // well back on the straight
+    const approaching = alongPath(corner, 9).heading; // a metre short of the corner
+    expect(early).toBeCloseTo(0, 1); // due plan-north
+    expect(approaching).toBeGreaterThan(10);
+    expect(approaching).toBeLessThan(90);
+  });
+
+  it('finishes facing the way the path finishes', () => {
+    // The aim point is capped at the end, so the last stretch is walked looking along it rather than
+    // spinning as the look-ahead runs out of path to look at.
+    expect(alongPath(corner, 19.9).heading).toBeCloseTo(90, 0);
+    expect(alongPath(corner, 20).heading).toBeCloseTo(90, 0);
+  });
+
+  it('survives a path with a doubled point in it', () => {
+    const doubled: Point[] = [
+      [0, 0],
+      [0, 0],
+      [0, 6],
+    ];
+    expect(alongPath(doubled, 3).at[1]).toBeCloseTo(3, 6);
+    expect(Number.isFinite(alongPath(doubled, 3).heading)).toBe(true);
+  });
+});
+
+describe('easing the head round', () => {
+  it('turns the short way round the circle', () => {
+    expect(easeHeading(350, 10, 90)).toBeCloseTo(10, 6); // forwards through 0, not 340° backwards
+    expect(easeHeading(10, 350, 90)).toBeCloseTo(350, 6);
+  });
+
+  it('never turns faster than it is allowed to', () => {
+    // This is the difference between a turn and a cut, and it is the whole complaint about the
+    // camera snapping at corners.
+    expect(easeHeading(0, 170, 30)).toBeCloseTo(30, 6);
+    expect(easeHeading(0, 190, 30)).toBeCloseTo(330, 6);
+  });
+
+  it('settles exactly on the target rather than oscillating past it', () => {
+    let h = 0;
+    for (let i = 0; i < 40; i++) h = easeHeading(h, 95, 10);
+    expect(h).toBeCloseTo(95, 6);
   });
 });
