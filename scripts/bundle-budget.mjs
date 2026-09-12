@@ -17,7 +17,7 @@
 // Run with `make budget`. Deliberately not part of `make check`: it needs a library build, and the
 // point of `make check` is that it is quick enough to run before every commit.
 import { execFileSync } from 'node:child_process';
-import { mkdirSync, readFileSync, rmSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, readdirSync, rmSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve } from 'node:path';
 import { build } from 'vite';
@@ -160,15 +160,34 @@ for (const [page, ceiling] of Object.entries(PAGES)) {
   if (over) failures.push(`${page}: ${kB.toFixed(1)} kB before first paint, budget ${ceiling} kB`);
 }
 
+// And the invariant behind the reference apps' own split: the map chunk must not reach three. The
+// page budgets above cannot see this — `map` is not eager, it arrives when a project is opened — so
+// a three-using module quietly rejoining it would cost every flat plan half a megabyte with nothing
+// failing. This is the check that notices.
+const built = readdirSync(join(root, 'dist/assets'));
+const mapChunk = built.find(f => /^map-.*\.js$/.test(f));
+if (!mapChunk) failures.push('dist/assets has no map chunk — the chunking rules have moved');
+else if (/from *"\.\/three-[^"]*"/.test(readFileSync(join(root, 'dist/assets', mapChunk), 'utf8')))
+  failures.push(`${mapChunk} imports three: a module under src/map/ that uses three is not in the scene chunk`);
+
 rmSync(OUT, { recursive: true, force: true });
 if (!failures.length) {
   console.log('\n  within budget\n');
   process.exit(0);
 }
 console.error('\n  over budget:\n%s\n', failures.map(f => `    ${f}`).join('\n'));
-console.error(
-  '  A light import that pulls maplibre-gl or three means something in the facade re-exports a\n' +
-    '  component statically. Reach it with lazy(() => import(…)) instead, or take the names from the\n' +
-    '  /host subpath, which cannot reach the renderer by construction.\n',
-);
+// Advice, only where it applies: the two failures this script exists to catch have different causes
+// and telling someone to lazy-load a facade when their chunking rule slipped is worse than silence.
+if (failures.some(f => /pulls (maplibre-gl|three)/.test(f)))
+  console.error(
+    '  A light import that pulls maplibre-gl or three means something in the facade re-exports a\n' +
+      '  component statically. Reach it with lazy(() => import(…)) instead, or take the names from the\n' +
+      '  /host subpath, which cannot reach the renderer by construction.\n',
+  );
+if (failures.some(f => /imports three/.test(f)))
+  console.error(
+    '  Everything under src/map/ that touches three belongs in the `scene` chunk in vite.config.ts,\n' +
+      '  ahead of the blanket src/map/ rule — otherwise it rides along with the map and a plan shown\n' +
+      '  flat pays for a renderer it never runs.\n',
+  );
 process.exit(1);

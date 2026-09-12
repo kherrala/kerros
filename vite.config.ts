@@ -18,6 +18,22 @@ const CHUNKS: ReadonlyArray<readonly [marker: string, chunk: string]> = [
   // nothing in `src/model` imports back into it, so the two split cleanly; keeping them apart means
   // a change to the document model does not invalidate the renderer's cache entry, and the build
   // table finally names what it is serving.
+  // The 3D renderer, ahead of the blanket `/src/map/` rule below. Every module here is reachable
+  // only through SceneLayer, and SceneLayer only through the dynamic import in MapCanvas — so left
+  // in `map` they would drag three.js in with the map itself, and a plan shown flat would pay for a
+  // renderer it never runs. The reference apps happen to open in 3D, but they are the reference:
+  // what they demonstrate is what a host copying them gets.
+  //
+  // A list rather than a pattern, because "uses three" is not something a path can say. `make budget`
+  // fails if the `map` chunk acquires three again, which is what makes the list safe to keep.
+  ['/src/map/SceneLayer', 'scene'],
+  ['/src/map/FixtureLights', 'scene'],
+  ['/src/map/UndergroundContext', 'scene'],
+  ['/src/map/architecture', 'scene'],
+  ['/src/map/materials', 'scene'],
+  ['/src/map/projection', 'scene'],
+  ['/src/map/surfaces', 'scene'],
+  ['/src/map/textures', 'scene'],
   ['/src/map/', 'map'],
   ['/src/model/', 'model'],
   ['/src/schema/', 'model'],
