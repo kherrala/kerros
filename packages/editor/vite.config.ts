@@ -5,7 +5,17 @@ import { defineConfig } from 'vite';
 // heavyweight rendering dependencies stay external (declared as peer/regular deps below).
 export default defineConfig({
   build: {
-    lib: { entry: resolve(__dirname, '../../src/editor/index.ts'), formats: ['es'], fileName: () => 'index.js' },
+    // Two entries: the facade, and the map-free `./host` subpath a consumer imports when it only
+    // wants persistence or theming. Their shared closure lands in a chunk both of them import, so
+    // importing one after the other costs nothing twice.
+    lib: {
+      entry: {
+        index: resolve(__dirname, '../../src/editor/index.ts'),
+        host: resolve(__dirname, '../../src/editor/host.ts'),
+      },
+      formats: ['es'],
+      fileName: (_format, entry) => `${entry}.js`,
+    },
     outDir: 'dist', emptyOutDir: true, sourcemap: true,
     rollupOptions: { external: [/^react/, /^maplibre-gl/, /^three(\/|$)/, 'lucide-react', 'polygon-clipping', 'proj4', 'pdfjs-dist'] },
   },

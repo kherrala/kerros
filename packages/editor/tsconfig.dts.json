@@ -21,7 +21,8 @@
     ]
   },
   "include": [
-    "../../src/editor/index.ts"
+    "../../src/editor/index.ts",
+    "../../src/editor/host.ts"
   ],
   "exclude": [
     "../../src/**/*.test.ts",

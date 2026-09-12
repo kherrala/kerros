@@ -21,7 +21,8 @@
     ]
   },
   "include": [
-    "../../src/viewer/index.ts"
+    "../../src/viewer/index.ts",
+    "../../src/viewer/host.ts"
   ],
   "exclude": [
     "../../src/**/*.test.ts",

@@ -6,6 +6,28 @@ The full authoring editor + adapters. Re-exports everything from [`@kerros/viewe
 import '@kerros/editor/styles.css';
 ```
 
+## Entry points
+
+| Import | What it is |
+| --- | --- |
+| `@kerros/editor` | The whole facade, `FloorEditor` and `SiteViewer` included. |
+| `@kerros/editor/host` | The same facade minus the two components that draw a plan: persistence, theming, `StructureView`, the schema. |
+| `@kerros/editor/styles.css` | The stylesheet (MapLibre's, then Kerros'). |
+
+Drawing a plan means `maplibre-gl` and `three`, and `maplibre-gl` ships as a side-effectful bundle
+that no tree-shake will take back out once it is in the module graph — so a screen that only lists
+saved projects pays about 1.7 MB for a renderer it never mounts. Take what that screen needs from
+`/host` and name the editor itself through a dynamic import, and the renderer is fetched when a
+project is actually opened:
+
+```tsx
+import { KerrosThemeProvider, useDarkMode, IndexedProjectRepository } from '@kerros/editor/host';
+const FloorEditor = lazy(() => import('@kerros/editor').then(m => ({ default: m.FloorEditor })));
+```
+
+Both entry points export the same names where they overlap, so nothing breaks by importing from
+either one; the split exists only so that a host can choose when the renderer arrives.
+
 ## Components
 
 - **`FloorEditor`** — the authoring editor. See [The editor](../guide/editor). Its sidebar includes the
@@ -26,6 +48,8 @@ import '@kerros/editor/styles.css';
 ## Adapters
 
 - `LocalProjectRepository` — `ProjectRepository` over `localStorage`.
+- `IndexedProjectRepository(previous?)` — `ProjectRepository` over IndexedDB for large documents;
+  optionally reads existing saves from another repository. New IndexedDB saves take precedence.
 - `IndexedAssetRepository` — `AssetRepository` over IndexedDB.
 - `ProjectRepository`, `AssetRepository`, `StatusFeed` — the interfaces to implement for your own backend.
 

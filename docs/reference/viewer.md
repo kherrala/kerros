@@ -6,6 +6,27 @@ Read-only floor viewer + the live-status contract. Re-exports everything from [`
 import '@kerros/viewer/styles.css';
 ```
 
+## Entry points
+
+| Import | What it is |
+| --- | --- |
+| `@kerros/viewer` | The whole facade, `FloorViewer` included. |
+| `@kerros/viewer/host` | The same facade minus `FloorViewer`: persistence, theming, status helpers, `StructureView`, the schema. |
+| `@kerros/viewer/styles.css` | The stylesheet (MapLibre's, then Kerros'). |
+
+`FloorViewer` reaches `maplibre-gl` and `three`, and `maplibre-gl` ships as a side-effectful bundle
+that no tree-shake will take back out once it is in the module graph — so a picker screen pays about
+1.7 MB for a renderer it never mounts. Take what that screen needs from `/host` and name the viewer
+itself through a dynamic import:
+
+```tsx
+import { KerrosThemeProvider, useDarkMode, parseExport } from '@kerros/viewer/host';
+const FloorViewer = lazy(() => import('@kerros/viewer').then(m => ({ default: m.FloorViewer })));
+```
+
+Both entry points export the same names where they overlap, so nothing breaks by importing from
+either one; the split exists only so that a host can choose when the renderer arrives.
+
 ## Components
 
 - **`FloorViewer`** — the 2D/3D read-only viewer. See [The viewer](../guide/viewer) for the full prop list.
@@ -45,4 +66,4 @@ import '@kerros/viewer/styles.css';
 
 ## Persistence
 
-`LocalProjectRepository`, `IndexedAssetRepository` — browser-generic adapters (a read-only viewer host still needs to load saved projects).
+`LocalProjectRepository`, `IndexedProjectRepository`, `IndexedAssetRepository` — browser-generic adapters (a read-only viewer host still needs to load saved projects).

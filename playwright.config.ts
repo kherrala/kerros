@@ -5,7 +5,11 @@ export default defineConfig({
   fullyParallel: false,
   workers: 1,
   timeout: 60_000,
-  expect: { timeout: 10_000 },
+  // 30 s, not 10: opening a project now fetches the renderer as a dynamic import, and on a cold dev
+  // server that first request is where Vite transforms maplibre and three. It is a one-off cost of
+  // the build shape rather than of the app, and it lands on whichever assertion first waits for the
+  // map. Every assertion here still fails if the thing it waits for never arrives.
+  expect: { timeout: 30_000 },
   reporter: 'list',
   use: {
     ...devices['Desktop Chrome'],

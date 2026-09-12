@@ -31,6 +31,12 @@
       ],
       "@kerros/editor": [
         "src/editor/index.ts"
+      ],
+      "@kerros/viewer/host": [
+        "src/viewer/host.ts"
+      ],
+      "@kerros/editor/host": [
+        "src/editor/host.ts"
       ]
     }
   },

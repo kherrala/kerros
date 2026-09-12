@@ -20,6 +20,10 @@
       "types": "./dist/types/viewer/index.d.ts",
       "import": "./dist/index.js"
     },
+    "./host": {
+      "types": "./dist/types/viewer/host.d.ts",
+      "import": "./dist/host.js"
+    },
     "./styles.css": "./dist/styles.css"
   },
   "scripts": {
