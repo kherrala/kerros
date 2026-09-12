@@ -166,7 +166,7 @@ export class SceneLayer implements CustomLayerInterface {
   private sun?: THREE.DirectionalLight;
   /** The two lights that are not the sun, kept so the scene can be re-lit without being rebuilt. */
   private skyLight?: THREE.HemisphereLight;
-  private roomLight?: THREE.AmbientLight;
+  private roomLight?: THREE.HemisphereLight;
   private route: Route | null = null;
   private routeStep: number | null = null;
   private routeGroup: THREE.Group | null = null;
@@ -271,6 +271,7 @@ export class SceneLayer implements CustomLayerInterface {
     this.skyLight?.groundColor.set(air.ground);
     if (this.skyLight) this.skyLight.intensity = air.hemisphere;
     this.roomLight?.color.set(air.interior);
+    this.roomLight?.groundColor.set(air.interiorBounce);
     if (this.roomLight) this.roomLight.intensity = air.interiorLevel;
     const beam = sunlight(sun);
     if (this.sun) {
@@ -1166,7 +1167,8 @@ export class SceneLayer implements CustomLayerInterface {
     // The building's own lighting, which does not care what the sun is doing. Offices, shop floors
     // and garages burn their lights around the clock, and Kerros draws buildings from the inside —
     // so a storey in section at midnight is lit by this and stays readable, while outside goes dark.
-    const room = new THREE.AmbientLight(air.interior, air.interiorLevel);
+    const room = new THREE.HemisphereLight(air.interior, air.interiorBounce, air.interiorLevel);
+    room.position.set(0, 0, 1);
     this.scene.add(room);
     this.roomLight = room;
     const beam = sunlight(sun);

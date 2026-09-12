@@ -19,15 +19,15 @@ import type { Point } from '../model/types';
  *  `sunlight` for why the beam is no longer the thing lighting the model. */
 const SUN_PEAK = 2.3;
 
-/** What a fully lit interior surface sits at, all sources together, held across the day so the same
- *  storey reads the same at noon and at midnight — see `ambient`.
+/** What a fully lit FLOOR sits at, all sources together, held across the day so the same storey
+ *  reads the same at noon and at midnight — see `ambient`.
  *
- *  Set so that a plate comes back at about the lightness it was authored at: a floor written as a
- *  pale grey should read as a pale grey, and at 2.05 it was coming back a good deal darker than the
- *  colour anybody picked for it. An open-plan storey is the case that shows it — nothing inside to
- *  cast a highlight, and for most of a Nordic day the whole floor stands in the shadow of its own
- *  façade, so what you see is this number and nothing else. */
-const TARGET_INTERIOR = 2.4;
+ *  Set so a plate comes back at about the lightness it was authored at: a floor written as a pale
+ *  grey should read as a pale grey. A cutaway is mostly floor — an open-plan storey has nothing in
+ *  it to catch a highlight, and for most of a Nordic day the whole plate stands in the shadow of its
+ *  own façade — so this number is very nearly what you see, and it has to be generous for the
+ *  drawing to look like the inside of a working building rather than the inside of a cupboard. */
+const TARGET_INTERIOR = 3.1;
 
 const RAD = Math.PI / 180;
 const DEG = 180 / Math.PI;
@@ -296,8 +296,16 @@ export function ambient(sun: Sun, light: InteriorLight = DEFAULT_LIGHT) {
     /** The image-based environment, for specular life on glass and metal. */
     environment,
     /** The building's own lights: colour and strength, both from the floor, neither following the
-     *  sun. A level that says nothing is lit by a fluorescent ceiling, because most levels are. */
+     *  sun. A level that says nothing is lit by a fluorescent ceiling, because most levels are.
+     *
+     *  A ceiling, which is to say it comes from ABOVE. Drawn as light arriving equally from every
+     *  direction it lit the underside of a landing as brightly as the floor under it, and to get a
+     *  floor bright enough it had to be turned up until the walls glowed — so the floor takes the
+     *  full value and a wall about half of it, which is what a room of downlights actually does. */
     interior: kelvinColor(light.kelvin),
+    /** What comes back UP off the floor: the same lamps, much weaker, which is the half of the
+     *  picture that keeps a soffit from going black. */
+    interiorBounce: blend(kelvinColor(light.kelvin), '#000000', 0.6),
     // The ceiling makes up the difference between what the sky is giving and what a lit interior is
     // supposed to sit at — which is what a real building does. A workplace is designed to a lux
     // level and modern lighting control holds it there, dimming as the sun comes round and coming up
