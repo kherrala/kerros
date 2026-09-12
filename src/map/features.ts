@@ -275,7 +275,7 @@ export function makeFeatures(
         });
       }
     }
-    if (o.kind === 'stairs')
+    if (o.kind === 'stairs') {
       for (let i = 0; i < 10; i++)
         line(
           [
@@ -284,6 +284,23 @@ export function makeFeatures(
           ],
           { color: '#9ba0ab', decoration: true },
         );
+      // An escalator is a stair that goes one way, and a plan that does not say which way is missing
+      // the first thing anyone needs from it. The arrow runs the way it carries you — the feed's
+      // direction if it has been reversed, the object's otherwise — and greys out when it stops,
+      // because a stopped escalator carries nobody anywhere.
+      if (o.stairModel === 'escalator') {
+        const status = statuses?.get(o.feedId ?? '');
+        const running = status?.running ?? true;
+        const way = (status?.travel ?? o.travel ?? 'up') === 'down' ? -1 : 1;
+        // Along the run, which is the depth axis — the same axis the 3D flight climbs.
+        const at = (t: number, across = 0) => add(o.position, rotate([across, t * way], o.rotation));
+        const reach = o.depth / 2 - 0.25;
+        const head = Math.min(0.9, o.depth / 5);
+        const arrow = { color: running ? '#4d5f8f' : '#a2a7b0', decoration: true, escalator: true };
+        line([at(-reach), at(reach)], arrow);
+        for (const side of [-1, 1]) line([at(reach - head, (side * Math.min(o.width, head)) / 2.2), at(reach)], arrow);
+      }
+    }
     // The coverage toggle shows every camera's field of view; selecting a camera always shows its own.
     if ((coverage || o.id === selected) && o.kind === 'camera') {
       const points: Point[] = [o.position];

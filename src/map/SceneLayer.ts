@@ -775,11 +775,18 @@ export class SceneLayer implements CustomLayerInterface {
         base: base + step.base,
         height: face,
       });
+      // Which way the machine runs, and whether it is running at all. The object says which way it
+      // was built to carry you; a feed may say it has been reversed for the evening peak, and may
+      // say it has been stopped — and a stopped escalator is a stair, so its steps stand still.
+      const reading = this.statuses?.get(o.feedId ?? '');
+      const way = (reading?.travel ?? o.travel ?? 'up') === 'down' ? -1 : 1;
+      const running = reading?.running ?? true;
       // Standing on one storey there are at most two flights in view, so they can move. In the
       // stacked view there are all of them, on every level of the building at once — dozens of bands
       // asking for a repaint every frame to animate something a few pixels wide — so there the band
-      // is welded into the batch with everything else and simply stands still.
-      if (this.stack) {
+      // is welded into the batch with everything else and simply stands still. A stopped escalator
+      // takes the same path: nothing to animate, so nothing asks for a frame.
+      if (this.stack || !running) {
         for (const step of band) {
           const piece = tread(step);
           this.surface(piece.rings, piece.base, piece.height, color, o.id);
@@ -798,9 +805,6 @@ export class SceneLayer implements CustomLayerInterface {
         // rather than a slab: it is the head housing the band runs into. A descending band is the
         // same picture upside down, so its spare waits in the head housing instead.
         //
-        // Which way the machine runs is said the way the demo says it — in the name, which is also
-        // where the ontology reads it from. A flight that says nothing carries you up.
-        const way = /\bdown\b/i.test(o.name ?? '') ? -1 : 1;
         const spare = way > 0 ? { at: -going / 2, base: -face } : { at: deck + going / 2, base: rise + riser - face };
         const group = this.parts([spare, ...band].map(tread), color, false);
         // One step's travel, in scene space, taken by projecting two plan points rather than by
@@ -1040,8 +1044,8 @@ export class SceneLayer implements CustomLayerInterface {
     const evening = sun.evening;
     const liftSignature = statuses
       ? [...statuses.values()]
-          .filter(r => r.carFloorId !== undefined || r.open !== undefined)
-          .map(r => `${r.feedId}:${r.carFloorId ?? ''}:${r.open ?? ''}`)
+          .filter(r => r.carFloorId !== undefined || r.open !== undefined || r.running !== undefined || r.travel)
+          .map(r => `${r.feedId}:${r.carFloorId ?? ''}:${r.open ?? ''}:${r.running ?? ''}:${r.travel ?? ''}`)
           .sort()
           .join('|')
       : '';

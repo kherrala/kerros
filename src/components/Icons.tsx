@@ -20,6 +20,7 @@ import {
   LandPlot,
   LogOut,
   MapPin,
+  MoveDownRight,
   MoveUpRight,
   Package,
   PanelTop,
@@ -37,10 +38,13 @@ export function EntityIcon({
   kind,
   size = 17,
   symbol,
+  travel,
 }: {
   kind: ObjectKind | Tool | 'wall' | 'fence';
   size?: number;
   symbol?: SiteObject['symbol'];
+  /** An escalator's direction, so a descending one is not drawn with an arrow pointing up. */
+  travel?: SiteObject['travel'];
 }) {
   const custom = useKerrosTheme().icons?.[kind === 'poi' && symbol ? symbol : kind];
   if (custom) {
@@ -73,7 +77,7 @@ export function EntityIcon({
             reader: KeyRound,
             camera: Camera,
             elevator: ArrowUpRight,
-            stairs: MoveUpRight,
+            stairs: travel === 'down' ? MoveDownRight : MoveUpRight,
             office: Building2,
             container: Container,
             storage: Package,

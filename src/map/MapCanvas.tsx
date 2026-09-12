@@ -1812,7 +1812,12 @@ export function MapCanvas(props: MapCanvasProps) {
                 else props.onClick(objectPosition(props.project, o), o.id);
               }}
             >
-              <EntityIcon kind={o.kind} size={o.kind === 'door' ? 14 : 17} symbol={o.symbol} />
+              <EntityIcon
+                kind={o.kind}
+                size={o.kind === 'door' ? 14 : 17}
+                symbol={o.symbol}
+                travel={status?.travel ?? o.travel}
+              />
               {o.feedId && <i className={`status-dot ${statusTone(status)}`} />}
               <span className="marker-tooltip">{o.name}</span>
             </button>

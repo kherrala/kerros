@@ -1697,7 +1697,7 @@ export function SitePlanner({
                       className={`object-row list-object ${selected === o.id ? 'active' : ''}`}
                       onClick={() => select(o.id, true)}
                     >
-                      <EntityIcon kind={o.kind} symbol={o.symbol} />
+                      <EntityIcon kind={o.kind} symbol={o.symbol} travel={o.travel} />
                       <span>
                         {o.name}
                         <small>{o.kind}</small>

@@ -29,7 +29,7 @@ import { coverageOf } from '../model/coverage';
 import { spaceAt } from '../model/spaces';
 import { statusLabel, statusTone } from '../adapters/status';
 import { EntityIcon } from './Icons';
-import { Field, Toggle } from './controls';
+import { Choice, Field, Toggle } from './controls';
 import { DEFAULT_LIGHT, kelvinColor, LAMPS, lampFor } from '../map/lighting';
 
 interface Props {
@@ -288,7 +288,7 @@ export function Inspector(props: Props) {
             <div className="object-title">
               <div className={`object-avatar ${object ? statusTone(status) : ''}`}>
                 {object ? (
-                  <EntityIcon kind={object.kind} size={25} symbol={object.symbol} />
+                  <EntityIcon kind={object.kind} size={25} symbol={object.symbol} travel={object.travel} />
                 ) : barrier ? (
                   <EntityIcon kind={barrier.kind} size={25} />
                 ) : (
@@ -573,6 +573,27 @@ export function Inspector(props: Props) {
                     <p className="helper">
                       Left to fit, a run too steep for its footprint is drawn as the stair that turns.
                     </p>
+                    {object.stairModel === 'escalator' && (
+                      <>
+                        <Choice
+                          label="Carries you"
+                          description="An escalator runs one way — routing rides it that way and walks round to come back"
+                          value={object.travel ?? 'up'}
+                          options={[
+                            { value: 'up', label: 'Up', title: 'From the lower landing to the upper' },
+                            { value: 'down', label: 'Down', title: 'From the upper landing to the lower' },
+                          ]}
+                          onChange={travel => update({ travel })}
+                        />
+                        {object.feedId && (
+                          <p className="helper">
+                            {statuses.get(object.feedId)?.running === false
+                              ? 'Stopped right now — the plan draws its steps standing still.'
+                              : 'Running. A feed may stop it or reverse it; the direction above is how it was built.'}
+                          </p>
+                        )}
+                      </>
+                    )}
                   </>
                 )}
                 {editing && object.kind === 'elevator' && (

@@ -19,9 +19,15 @@ import type { Point } from '../model/types';
  *  `sunlight` for why the beam is no longer the thing lighting the model. */
 const SUN_PEAK = 2.3;
 
-/** What a fully lit interior surface sits at, all sources together. Held across the day so the same
- *  storey reads the same at noon and at midnight — see `ambient`. */
-const TARGET_INTERIOR = 2.05;
+/** What a fully lit interior surface sits at, all sources together, held across the day so the same
+ *  storey reads the same at noon and at midnight — see `ambient`.
+ *
+ *  Set so that a plate comes back at about the lightness it was authored at: a floor written as a
+ *  pale grey should read as a pale grey, and at 2.05 it was coming back a good deal darker than the
+ *  colour anybody picked for it. An open-plan storey is the case that shows it — nothing inside to
+ *  cast a highlight, and for most of a Nordic day the whole floor stands in the shadow of its own
+ *  façade, so what you see is this number and nothing else. */
+const TARGET_INTERIOR = 2.4;
 
 const RAD = Math.PI / 180;
 const DEG = 180 / Math.PI;
