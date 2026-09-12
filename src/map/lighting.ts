@@ -27,7 +27,7 @@ const SUN_PEAK = 2.3;
  *  it to catch a highlight, and for most of a Nordic day the whole plate stands in the shadow of its
  *  own façade — so this number is very nearly what you see, and it has to be generous for the
  *  drawing to look like the inside of a working building rather than the inside of a cupboard. */
-const TARGET_INTERIOR = 3.1;
+const TARGET_INTERIOR = 4.2;
 
 const RAD = Math.PI / 180;
 const DEG = 180 / Math.PI;

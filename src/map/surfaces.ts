@@ -1,28 +1,42 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
+/** The scene renders on two layers. Everything is on OUTSIDE-or-INSIDE: the sun and the sky light
+ *  both, but the building's own ceiling lighting is on INSIDE alone, so turning the lamps up to read
+ *  a shop floor does not also floodlight the pavement at midnight. */
+export const INSIDE = 0,
+  OUTSIDE = 1;
+
 interface Span {
   id: string;
   start: number;
   count: number;
 }
+interface Entry {
+  geometry: THREE.BufferGeometry;
+  id: string;
+}
 
 /** Batch static surfaces by material, retaining triangle ownership for picking/highlights. */
 export class SurfaceBatch {
-  private pending = new Map<THREE.Material, { geometry: THREE.BufferGeometry; id: string }[]>();
+  private pending = new Map<string, { material: THREE.Material; outdoor: boolean; entries: Entry[] }>();
   private meshes: THREE.Mesh[] = [];
 
-  add(geometry: THREE.BufferGeometry, material: THREE.Material, id: string) {
-    const entries = this.pending.get(material) ?? [];
-    entries.push({ geometry, id });
-    this.pending.set(material, entries);
+  /** `outdoor` puts the surface on the OUTSIDE layer, out of reach of the interior lighting. It is
+   *  part of the bucket key as well as a property of the mesh: two surfaces that share a material
+   *  but not a side of the wall cannot be merged into one mesh, because a mesh sits on one layer. */
+  add(geometry: THREE.BufferGeometry, material: THREE.Material, id: string, outdoor = false) {
+    const key = `${material.uuid}|${outdoor ? 'out' : 'in'}`;
+    const bucket = this.pending.get(key) ?? { material, outdoor, entries: [] };
+    bucket.entries.push({ geometry, id });
+    this.pending.set(key, bucket);
   }
 
   /** Fold a built object tree (a furniture group, a roof) into the batch, baking each mesh's world
    *  transform into its geometry. makeFixture emits one mesh per box, so a demo with a few hundred
    *  cars and columns was contributing thousands of draw calls and as many buffer uploads; merged by
    *  material they cost a handful. Instanced children are left alone — they are already batched. */
-  addObject(root: THREE.Object3D, id: string) {
+  addObject(root: THREE.Object3D, id: string, outdoor = false) {
     root.updateMatrixWorld(true);
     const leftovers: THREE.Object3D[] = [];
     root.traverse(o => {
@@ -41,13 +55,13 @@ export class SurfaceBatch {
       if (!material) return;
       const geometry = o.geometry.clone();
       geometry.applyMatrix4(o.matrixWorld);
-      this.add(geometry, material, id);
+      this.add(geometry, material, id, outdoor);
     });
     return leftovers;
   }
 
   finish(scene: THREE.Scene) {
-    for (const [material, entries] of this.pending) {
+    for (const { material, outdoor, entries } of this.pending.values()) {
       const geometries = entries.map(({ geometry }) => (geometry.index ? geometry.toNonIndexed() : geometry));
       const spans: Span[] = [];
       let start = 0;
@@ -58,6 +72,7 @@ export class SurfaceBatch {
       });
       const geometry = mergeGeometries(geometries)!;
       const mesh = new THREE.Mesh(geometry, material);
+      if (outdoor) mesh.layers.set(OUTSIDE);
       mesh.userData.spans = spans;
       mesh.castShadow = mesh.receiveShadow = !material.transparent;
       if (material.transparent && !material.depthWrite) mesh.raycast = () => {};

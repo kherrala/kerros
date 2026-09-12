@@ -39,7 +39,7 @@ import { EXTERIOR_PRESETS } from '../model/materials';
 import type { MapStyleOptions } from '../theme';
 import { exteriorWalls } from './exteriors';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { hitEntity, metricUVs, SurfaceBatch } from './surfaces';
+import { hitEntity, metricUVs, OUTSIDE, SurfaceBatch } from './surfaces';
 import { excavationRings, floorIndex, MAX_CAGE_LEVELS, undergroundView } from './underground';
 import { UndergroundCage, undergroundPit } from './UndergroundContext';
 import { includeSceneDepth } from './projection';
@@ -121,7 +121,11 @@ export class SceneLayer implements CustomLayerInterface {
   private map?: MapLibreMap;
   private renderer?: THREE.WebGLRenderer;
   private scene = new THREE.Scene();
-  private camera = new THREE.Camera();
+  private camera = (() => {
+    const camera = new THREE.Camera();
+    camera.layers.enableAll(); // the scene is split across layers for lighting, not for visibility
+    return camera;
+  })();
   private worldToClip = new THREE.Matrix4();
   private clipToWorld = new THREE.Matrix4();
   private transform = new THREE.Matrix4();
@@ -428,6 +432,9 @@ export class SceneLayer implements CustomLayerInterface {
     // hovering a millimetre above the slab rather than standing on it.
     ao = false,
     override?: THREE.MeshStandardMaterial,
+    // Out of doors, and so out of reach of the building's own ceiling lighting. The parcel, the
+    // landscaping, a fence: lit by the sky and nothing else, whatever the lamps inside are doing.
+    outdoor = false,
   ) {
     const shape = new THREE.Shape(rings[0].map(p => new THREE.Vector2(...this.xy(p))));
     shape.holes = rings.slice(1).map(r => new THREE.Path(r.map(p => new THREE.Vector2(...this.xy(p)))));
@@ -464,7 +471,7 @@ export class SceneLayer implements CustomLayerInterface {
         : material
           ? this.materials.get(material, color)
           : this.materials.solid(color));
-    this.batch.add(geometry, ao && !ghost ? this.materials.shaded(surfaceMaterial) : surfaceMaterial, id);
+    this.batch.add(geometry, ao && !ghost ? this.materials.shaded(surfaceMaterial) : surfaceMaterial, id, outdoor);
   }
   /** A sloped area (garage ramp, loading incline): the plate's own footprint, but each vertex lifted
    *  to its elevation along the slope axis, then given thickness along -Z so the deck reads solid
@@ -1162,6 +1169,7 @@ export class SceneLayer implements CustomLayerInterface {
     this.scene.environmentIntensity = air.environment;
     const sky = new THREE.HemisphereLight(air.sky, air.ground, air.hemisphere);
     sky.position.set(0, 0, 1);
+    sky.layers.enableAll();
     this.scene.add(sky);
     this.skyLight = sky;
     // The building's own lighting, which does not care what the sun is doing. Offices, shop floors
@@ -1177,8 +1185,10 @@ export class SceneLayer implements CustomLayerInterface {
     // A dim, cool fill from the opposite quarter. Real interiors and streets bounce light back into
     // the shadow side; without it every unlit façade collapses to the same dead tone.
     const fill = new THREE.DirectionalLight(evening ? '#7f90bd' : '#cfe0f2', evening ? 0.16 : 0.18);
+    fill.layers.enableAll();
     fill.position.set(evening ? -80 : 85, evening ? 60 : 55, 45);
     this.scene.add(fill);
+    light.layers.enableAll();
     light.castShadow = true;
     light.shadow.mapSize.set(2048, 2048);
     light.shadow.bias = -0.00015;
@@ -1276,7 +1286,7 @@ export class SceneLayer implements CustomLayerInterface {
         // Fold the fixture's boxes into the shared batch rather than adding a group of loose meshes:
         // each one was its own draw call and its own buffer upload, and a floor of parked cars or
         // desks runs to thousands of them.
-        for (const leftover of this.batch.addObject(fixture, o.id)) this.scene.add(leftover);
+        for (const leftover of this.batch.addObject(fixture, o.id, o.floorId === null)) this.scene.add(leftover);
         continue;
       }
       if (o.rings && o.slope) {
@@ -1312,6 +1322,7 @@ export class SceneLayer implements CustomLayerInterface {
           ghosted,
           false,
           lidsOverBelow && indoorFinish ? this.materials.plate(color) : undefined,
+          !indoor,
         );
       } else if (['stairs', 'elevator', 'turnstile', 'door', 'gate', 'window'].includes(o.kind)) {
         if (!ghosted) this.opening(project, o, z);
@@ -1324,6 +1335,9 @@ export class SceneLayer implements CustomLayerInterface {
           o.id,
           ghosted ? undefined : o.material,
           ghosted,
+          false,
+          undefined,
+          o.floorId === null,
         );
       }
     }
@@ -1376,6 +1390,9 @@ export class SceneLayer implements CustomLayerInterface {
         // Only where a wall actually starts at its floor. A piece that begins part-way up — the strip
         // over a door, say — has no junction to darken and would just get a dirty smear.
         p.base < 0.01,
+        undefined,
+        // A fence or a garden wall stands out of doors and is lit like the ground it stands on.
+        p.floorId === null,
       );
       // The inside of an outside wall is a room's wall, and rooms are plastered. A facade's stone or
       // brick is its OUTER face; wrapping it round the solid put masonry inside every room, so a
@@ -1401,7 +1418,7 @@ export class SceneLayer implements CustomLayerInterface {
       for (const b of project.buildings)
         if (b.roof && (!stack || !activeF || b.id !== activeF.buildingId)) {
           const roof = makeRoof(b.roof, pt => this.xy(pt), b.id, this.materials);
-          for (const leftover of this.batch.addObject(roof, b.id)) this.scene.add(leftover);
+          for (const leftover of this.batch.addObject(roof, b.id, true)) this.scene.add(leftover);
         }
     // Only the lower envelope is needed beneath a cutaway. Keep its authored façade and glazing;
     // interior partitions and duplicate ceiling plates were both hidden work and sources of seams.
@@ -1509,6 +1526,7 @@ export class SceneLayer implements CustomLayerInterface {
           }),
         );
         ground.position.set(center.x, center.y, 0.012);
+        ground.layers.set(OUTSIDE);
         ground.receiveShadow = true;
         ground.raycast = () => {};
         this.scene.add(ground);
@@ -1831,6 +1849,7 @@ export class SceneLayer implements CustomLayerInterface {
         const length = near.distanceTo(target);
         const clearance = (this.present(z) - this.present(z - 0.25)) * this.scene.scale.z;
         const ray = new THREE.Raycaster(near, target.clone().sub(near).normalize(), 0, Math.max(0, length - clearance));
+        ray.layers.enableAll();
         visible = !ray
           .intersectObjects(this.pickables, false)
           .some(hit => hit.object instanceof THREE.Mesh && hitEntity(hit) !== o.id);
@@ -1852,6 +1871,7 @@ export class SceneLayer implements CustomLayerInterface {
     const near = new THREE.Vector3(x, y, -1).applyMatrix4(this.clipToWorld),
       far = new THREE.Vector3(x, y, 1).applyMatrix4(this.clipToWorld);
     const raycaster = new THREE.Raycaster(near, far.sub(near).normalize());
+    raycaster.layers.enableAll();
     return raycaster.intersectObjects(this.pickables, false).map(hitEntity).find(Boolean) ?? null;
   }
   private disposeScene() {

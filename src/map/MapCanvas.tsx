@@ -284,6 +284,13 @@ export function MapCanvas(props: MapCanvasProps) {
   // Basemap buildings adopted into the project or standing under a project parcel are excluded
   // from the generic city massing — the project's own model renders there instead.
   const cityHidden = useRef('');
+  // Accumulated, never rebuilt from scratch. The set is discovered by querying the tiles that happen
+  // to be loaded, and tiles come and go: rebuilt each pass, a footprint identified a moment ago as
+  // standing under the project's own parcel would be forgotten the moment its tile unloaded, the
+  // filter would widen again, and the city massing would be drawn back over the model — which, since
+  // an extrusion writes depth, swallows the floor plate whole and leaves a building with a hole in
+  // it. Once a footprint is known to be ours it stays ours. Cleared with the style.
+  const cityIds = useRef(new Set<string | number>());
   const refreshCityFilter = () => {
     const m = map.current,
       p = latest.current;
@@ -292,9 +299,8 @@ export function MapCanvas(props: MapCanvasProps) {
     if (!p.threeD || !p.cityBuildings || undergroundView(p.project, p.floorId, p.stack).buried) return;
     const source = (m.getLayer('kerros-city-3d') as unknown as { source: string }).source;
     const parcels = p.project.objects.filter(o => o.kind === 'parcel' && o.rings);
-    const ids = new Set<string | number>(
-      p.project.buildings.flatMap(b => (b.sourceId !== undefined ? [b.sourceId] : [])),
-    );
+    const ids = cityIds.current;
+    for (const b of p.project.buildings) if (b.sourceId !== undefined) ids.add(b.sourceId);
     for (const f of m.querySourceFeatures(source, { sourceLayer: fp.sourceLayer })) {
       const fid = f.properties?.[fp.idField] as string | number | undefined;
       if (fid === undefined || ids.has(fid)) continue;
@@ -1047,6 +1053,7 @@ export function MapCanvas(props: MapCanvasProps) {
     m.on('style.load', () => {
       styleReady.current = true;
       cityHidden.current = '';
+      cityIds.current = new Set();
       if (!m.getLayer('kerros-3d')) scene.current = null;
       sync();
       setReady(true);
