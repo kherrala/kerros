@@ -13,6 +13,7 @@ import {
   Box,
   Building2,
   CircleAlert,
+  Footprints,
   Layers3,
   Leaf,
   Moon,
@@ -67,19 +68,36 @@ function ViewerShell({
   const liftController = useLiftController(project);
   const [threeD, setThreeD] = useState(view?.threeD ?? true),
     [stack, setStack] = useState(view?.stack ?? false),
+    [walk, setWalk] = useState(view?.walk ?? false),
     [error, setError] = useState('');
+  const viewMode: 'walk' | '3d' | '2d' = walk ? 'walk' : threeD ? '3d' : '2d';
+  const chooseMode = (next: 'walk' | '3d' | '2d') => {
+    setWalk(next === 'walk');
+    setThreeD(next !== '2d');
+    if (next === 'walk') setStack(false);
+  };
   // The host keeps the URL fragment in sync with the view (project, floor, mode, camera) so a
   // refresh or a shared link restores exactly what is on screen — a sample deep-link integration.
   const mapRef = useRef<import('maplibre-gl').Map | null>(null);
-  const viewRef = useRef({ floorId, threeD, stack });
-  viewRef.current = { floorId, threeD, stack };
-  const writeHash = () => {
+  const viewRef = useRef({ floorId, threeD, stack, walk });
+  viewRef.current = { floorId, threeD, stack, walk };
+  // Walking writes a camera every animation frame and each write is a history.replaceState, so while
+  // it is on only the mode change itself is published — with the pose you set off from.
+  const writeHash = (force = false) => {
     const m = mapRef.current;
     if (!m) return;
     const v = viewRef.current;
-    writeViewLink({ project: project.id, floor: v.floorId, threeD: v.threeD, stack: v.stack, camera: cameraPose(m) });
+    if (v.walk && !force) return;
+    writeViewLink({
+      project: project.id,
+      floor: v.floorId,
+      threeD: v.threeD,
+      stack: v.stack,
+      walk: v.walk,
+      camera: cameraPose(m),
+    });
   };
-  useEffect(writeHash, [floorId, threeD, stack]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => writeHash(true), [floorId, threeD, stack, walk]); // eslint-disable-line react-hooks/exhaustive-deps
   // Env reads live in the host entrypoint, not in the FloorViewer library.
   const basemap = useMemo(
     () => (import.meta.env.VITE_MML_API_KEY ? mmlBasemap(import.meta.env.VITE_MML_API_KEY) : undefined),
@@ -235,27 +253,37 @@ function ViewerShell({
               onSelect={setSelected}
               threeD={threeD}
               stack={stack}
+              walk={walk}
+              onWalkExit={() => chooseMode('3d')}
               dark={dark}
               onError={setError}
               initialCamera={view?.camera}
               onReady={map => {
                 mapRef.current = map;
-                map.on('moveend', writeHash);
-                writeHash();
+                map.on('moveend', () => writeHash());
+                writeHash(true);
               }}
             />
             <LiftPanel project={project} controller={liftController} onFloor={setFloorId} />
             <div className="canvas-top-left">
               <div className="view-switch">
-                <button className={!threeD ? 'active' : ''} onClick={() => setThreeD(false)}>
+                <button className={viewMode === '2d' ? 'active' : ''} onClick={() => chooseMode('2d')}>
                   2D
                 </button>
-                <button className={threeD ? 'active' : ''} onClick={() => setThreeD(true)}>
+                <button className={viewMode === '3d' ? 'active' : ''} onClick={() => chooseMode('3d')}>
                   <Box size={14} />
                   3D
                 </button>
+                <button
+                  className={viewMode === 'walk' ? 'active' : ''}
+                  title="Walk through the building at eye level"
+                  onClick={() => chooseMode('walk')}
+                >
+                  <Footprints size={14} />
+                  Walk
+                </button>
               </div>
-              {threeD && (
+              {threeD && !walk && (
                 <button className={`stack-button ${stack ? 'active' : ''}`} onClick={() => setStack(!stack)}>
                   <Layers3 size={15} />
                   {stack ? 'All floors' : 'Cutaway'}

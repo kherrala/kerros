@@ -63,6 +63,8 @@ export const LIFT = 0.15;
 export const SLAB = 0.18;
 const ROOM = 0.05,
   GROUND = 0.06;
+/** Milliseconds between frames of a permanent animation — 24 fps, a step band's own rate. */
+const LOOP_FRAME = 42;
 const wallBase = (floorId: string | null) => (floorId ? LIFT + SLAB : GROUND);
 
 /** An escalator step: 0.4 m of going and a 0.2 m face, the world over. These are properties of the
@@ -415,6 +417,16 @@ export class SceneLayer implements CustomLayerInterface {
       this.shadowsMoved = true;
     }
     return moving;
+  }
+  /** Ask for a repaint at the loop rate rather than at once, coalescing the requests so a dozen
+   *  escalators still only cost one frame between them. */
+  private loopTimer?: ReturnType<typeof setTimeout>;
+  private paintSoon() {
+    if (this.loopTimer) return;
+    this.loopTimer = setTimeout(() => {
+      this.loopTimer = undefined;
+      this.map?.triggerRepaint();
+    }, LOOP_FRAME);
   }
   private present(z: number) {
     return this.stack && this.buried ? this.presentedElevation(z) : z;
@@ -1093,6 +1105,8 @@ export class SceneLayer implements CustomLayerInterface {
     this.voidCache.clear();
     this.disposeScene();
     // The groups went with the scene; where their parts had got to did not.
+    clearTimeout(this.loopTimer);
+    this.loopTimer = undefined;
     this.rigs = [];
     this.project = project;
     this.stack = stack;
@@ -1172,7 +1186,11 @@ export class SceneLayer implements CustomLayerInterface {
     // that same plate fills the lower half of the frame and clips to white. A clipped floor has no
     // contrast left to give: it is the flat grey field you see when you stand in one. Stopping down
     // is what an eye does on the way through the door, and it hands the range back to the floor.
-    if (this.renderer) this.renderer.toneMappingExposure = walk ? 0.62 : 0.9;
+    // Standing inside, the eye is adapted to the inside. The exposure that keeps a plan legible from
+    // above is set against the basemap — a small pale plate over a pale map — and at eye level that
+    // same plate fills the lower half of the frame and clips to white. A clipped floor has no
+    // contrast left to give: it is the flat grey field you see when you stand in one.
+    if (this.renderer) this.renderer.toneMappingExposure = walk ? 0.68 : 0.9;
     this.scene.environment = this.environmentMap(evening);
     this.scene.environmentRotation.set(Math.PI / 2, 0, 0);
     this.scene.environmentIntensity = air.environment;
@@ -1184,7 +1202,16 @@ export class SceneLayer implements CustomLayerInterface {
     // The building's own lighting, which does not care what the sun is doing. Offices, shop floors
     // and garages burn their lights around the clock, and Kerros draws buildings from the inside —
     // so a storey in section at midnight is lit by this and stays readable, while outside goes dark.
-    const room = new THREE.HemisphereLight(air.interior, air.interiorBounce, air.interiorLevel);
+    // A ceiling light lands most of itself on the floor, so the floor comes out the brightest plane
+    // in the room — which is true of the light and false of the picture, because a real floor is the
+    // darkest one. Looking down into a cutaway that does not matter; the plate is a small patch in a
+    // big frame. At eye level it is half the frame, and it blew out. Walking, the lamps come down and
+    // the luminous ceiling carries the reading of a lit interior instead.
+    const room = new THREE.HemisphereLight(
+      air.interior,
+      air.interiorBounce,
+      walk ? air.interiorLevel * 0.45 : air.interiorLevel,
+    );
     room.position.set(0, 0, 1);
     this.scene.add(room);
     this.roomLight = room;
@@ -1386,11 +1413,15 @@ export class SceneLayer implements CustomLayerInterface {
         const polygons = areas.map(o => [closeRing(o.rings![0])] as Ring[]);
         if (polygons.length) {
           lid = polygonClipping.union(polygons[0], ...polygons.slice(1)) as unknown as Ring[][];
-          // A stairwell is a hole in the ceiling as much as in the floor, and it is the hole you
-          // look up through on your way to the storey above.
-          const voids = shaftVoids(project, floorId, index.primary);
-          if (voids.length)
-            lid = polygonClipping.difference(lid as never, ...voids.map(v => [v] as never)) as unknown as Ring[][];
+          // A stairwell is a hole in the ceiling as much as in the floor, and so is an atrium — both
+          // are what you look up through. The holes an area carries in its own rings are the second
+          // kind; the shaft voids are the first.
+          const holes = [
+            ...areas.flatMap(o => o.rings!.slice(1).map(closeRing)),
+            ...shaftVoids(project, floorId, index.primary),
+          ];
+          if (holes.length)
+            lid = polygonClipping.difference(lid as never, ...holes.map(v => [v] as never)) as unknown as Ring[][];
         }
       } catch {
         lid = []; // degenerate footprint: an open ceiling beats a wrong one
@@ -1813,7 +1844,14 @@ export class SceneLayer implements CustomLayerInterface {
     this.lastFrame = now;
     if (this.rigs.length && this.animate(elapsed)) {
       if (this.shadowsMoved) this.renderer.shadowMap.needsUpdate = true;
-      this.map?.triggerRepaint();
+      // A moving part asks for the next frame, and asking every frame pins a scene of a thousand
+      // draw calls at the display's refresh rate for as long as one escalator is running. Measured,
+      // the rig itself costs nothing — the cost is the repaint it demands. A step band travels half
+      // a metre a second, so it reads as continuous well under 60 Hz; the settling rigs (a lift car,
+      // a door leaf) are short and keep the full rate. Repainting on a timer rather than immediately
+      // is what hands the idle frames back.
+      if (this.shadowsMoved) this.map?.triggerRepaint();
+      else this.paintSoon();
     }
     if (this.growth < 1) {
       this.growth = Math.min(1, (performance.now() - this.growthStart) / 550);

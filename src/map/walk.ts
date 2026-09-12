@@ -131,6 +131,9 @@ export interface WalkCallbacks {
   onExit(): void;
 }
 
+const HANDLERS = ['dragPan', 'dragRotate', 'scrollZoom', 'keyboard', 'touchZoomRotate', 'doubleClickZoom'] as const;
+type Handler = (typeof HANDLERS)[number];
+
 const KEYS: Record<string, string> = {
   KeyW: 'ahead',
   ArrowUp: 'ahead',
@@ -154,6 +157,7 @@ export class WalkController {
   private frame = 0;
   private last = 0;
   private dragging = false;
+  private handlers: [Handler, boolean][] = [];
   private running = false;
   private drag: Point = [0, 0];
   position: Point = [0, 0];
@@ -172,9 +176,11 @@ export class WalkController {
     this.pitch = clamp(start.pitch ?? MAX_PITCH, MIN_PITCH, MAX_PITCH);
     this.running = true;
     // MapLibre's own handlers would fight every jumpTo we make, and its keyboard handler eats the
-    // very keys we walk with.
-    for (const h of ['dragPan', 'dragRotate', 'scrollZoom', 'keyboard', 'touchZoomRotate', 'doubleClickZoom'] as const)
-      map[h]?.disable();
+    // very keys we walk with. Remember which were on rather than re-enabling a fixed list on the way
+    // out: the host has its own opinions about dragRotate and doubleClickZoom, and handing back a
+    // different map than we were given is how a mode leaves damage behind it.
+    this.handlers = HANDLERS.map(h => [h, map[h]?.isEnabled() ?? false]);
+    for (const [h] of this.handlers) map[h]?.disable();
     const canvas = map.getCanvas();
     canvas.addEventListener('pointerdown', this.grab);
     canvas.addEventListener('pointermove', this.look);
@@ -204,8 +210,8 @@ export class WalkController {
     window.removeEventListener('keyup', this.up, true);
     window.removeEventListener('blur', this.release);
     canvas.style.cursor = '';
-    for (const h of ['dragPan', 'scrollZoom', 'keyboard', 'touchZoomRotate', 'doubleClickZoom'] as const)
-      map[h]?.enable();
+    for (const [h, was] of this.handlers) if (was) map[h]?.enable();
+    this.handlers = [];
     this.map = undefined;
   }
 
@@ -261,11 +267,12 @@ export class WalkController {
     if (!this.dragging) return;
     const [px, py] = this.drag;
     this.drag = [e.clientX, e.clientY];
-    // Drag the world, not the camera: pull left and the view swings left with your hand, which is
-    // what taking hold of a scene means and the opposite of a mouse-look delta.
-    this.heading = (((this.heading - (e.clientX - px) * LOOK_SPEED) % 360) + 360) % 360;
-    // Dragging down looks up. Up is a SMALLER pitch: 90 is level with the horizon and 0 is straight
-    // down, so the sign is inverted relative to the usual "pitch up" reading.
+    // Mouse-look, not map-drag: the view follows the hand. Drag right and you turn right, drag up
+    // and you look up — the same way round on both axes, which is the half of it that was wrong when
+    // horizontal dragged the world and vertical dragged the head.
+    this.heading = (((this.heading + (e.clientX - px) * LOOK_SPEED) % 360) + 360) % 360;
+    // Looking up is a LARGER pitch: 85 is as level as MapLibre's camera goes and 0 is straight down,
+    // so the sign is inverted relative to the usual "pitch up" reading.
     this.pitch = clamp(this.pitch - (e.clientY - py) * LOOK_SPEED, MIN_PITCH, MAX_PITCH);
     this.apply();
   };

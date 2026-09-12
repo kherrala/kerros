@@ -1553,6 +1553,13 @@
   color: #fff;
   font-weight: 600;
 }
+/* The route's next instruction leads the bar: it is the reason you are walking. */
+.walk-status em {
+  order: -1;
+  color: #fff;
+  font-style: normal;
+  font-weight: 600;
+}
 .walk-keys {
   position: absolute;
   left: 50%;

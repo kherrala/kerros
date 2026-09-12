@@ -23,6 +23,7 @@ import {
   barrierEnds,
   segmentProjection,
   closeRing,
+  distance,
   drawingCorners,
   objectArea,
   objectPosition,
@@ -43,10 +44,10 @@ import { routeArrowImage, routeFeatures } from './route';
 import { aimCenter, JourneyPlayer } from './journey';
 import type { Route } from '../model/navigation';
 import { LIFT, SceneLayer, SLAB } from './SceneLayer';
-import { EYE, HEAD_ROOM, unstick, WalkController, type WalkPose } from './walk';
+import { EYE, HEAD_ROOM, MIN_PITCH, unstick, WalkController, type WalkPose } from './walk';
 import { inSpace, spaceAt, spacePoint } from '../model/spaces';
 import { servedFloors } from '../model/vertical';
-import { undergroundView } from './underground';
+import { floorIndex, undergroundView } from './underground';
 import { loadBasemap } from './loadBasemap';
 
 // Cadastral parcels come from a host-declared vector tilejson (see BasemapVectorSchema.cadastre):
@@ -176,8 +177,10 @@ interface WalkHint {
   up: string | null;
   down: string | null;
   where: string;
+  /** The next thing the active route asks you to do, and how far off it is. */
+  next: string;
 }
-const NO_HINT: WalkHint = { looking: false, up: null, down: null, where: '' };
+const NO_HINT: WalkHint = { looking: false, up: null, down: null, where: '', next: '' };
 
 export function MapCanvas(props: MapCanvasProps) {
   const container = useRef<HTMLDivElement>(null),
@@ -1384,7 +1387,22 @@ export function MapCanvas(props: MapCanvasProps) {
   const startPoint = (m: GLMap): Point => {
     const p = latest.current;
     const c = m.getCenter();
-    const here = toLocal([c.lng, c.lat], p.project.origin);
+    // The map's centre is the point the camera looks AT. At walking pitch that is twenty-odd metres
+    // ahead of whoever is looking, so a walk pose restored from a deep link would put the walker a
+    // room further on than the one they left. Undo the aim shift when the pose is already a walk
+    // pose; a plan camera looking down from above has no walker to recover and needs no correction.
+    const pitch = m.getPitch();
+    const back = pitch >= MIN_PITCH ? (EYE + LIFT + SLAB) * Math.tan((pitch * Math.PI) / 180) : 0;
+    const bearing = (m.getBearing() * Math.PI) / 180;
+    const aim = toLocal([c.lng, c.lat], p.project.origin);
+    const spin = ((p.project.origin[2] ?? 0) * Math.PI) / 180;
+    // Plan frame, not compass: plan +Y points at the site bearing, so a compass heading is that much
+    // rotated when it is written down in the plan's own axes.
+    const here: Point = [aim[0] - back * Math.sin(bearing - spin), aim[1] - back * Math.cos(bearing - spin)];
+    // A route in play is where the walk is meant to begin: its first node on this floor, which is
+    // the door you came in by or the point the last flight left off at.
+    const onRoute = p.route?.nodes.find(n => n.floorId === p.floorId);
+    if (onRoute) return onRoute.position;
     if (!p.floorId || spaceAt(p.project, p.floorId, here)) return here;
     const spaces = p.project.objects
       .filter(o => o.floorId === p.floorId && isSpace(o.kind) && o.rings?.length)
@@ -1397,12 +1415,40 @@ export function MapCanvas(props: MapCanvasProps) {
     }
     return here;
   };
+  /** What the route asks for next, from where the walker is standing. This is the whole reason walk
+   *  mode is the right mode for indoor navigation: the route is already drawn on the floor by
+   *  SceneLayer, and standing on it, the only thing left to say is which way and how far. */
+  const guide = (at: Point): string => {
+    const p = latest.current;
+    const route = p.route;
+    if (!route?.nodes.length) return '';
+    let nearest = -1,
+      best = Number.POSITIVE_INFINITY;
+    route.nodes.forEach((n, i) => {
+      if (n.floorId !== p.floorId) return;
+      const d = distance(n.position, at);
+      if (d < best) {
+        best = d;
+        nearest = i;
+      }
+    });
+    if (nearest < 0) return '';
+    // The one after the one you are closest to: standing ON a node, the useful instruction is the
+    // next one, not the one you have already reached.
+    const next = route.nodes[nearest + 1] ?? route.nodes[nearest];
+    const step = route.steps.find(s => s.nodeIds.includes(next.id));
+    const metres = Math.round(distance(next.position, at));
+    return step ? `${metres} m · ${step.text}` : `${metres} m along the route`;
+  };
   /** The shaft the walker is standing in and where it could take them. */
   const climb = (at: Point) => {
     const p = latest.current;
-    const shaft = p.project.objects.find(
-      o => o.floorId === p.floorId && (o.kind === 'stairs' || o.kind === 'elevator') && inSpace(o, at),
-    );
+    // `reaching` matters: a stair is filed under the floor it starts from, so at the top of a flight
+    // the only object under your feet is one that belongs to the storey below. Without it, F does
+    // nothing at exactly the place you most want to press it.
+    const index = floorIndex(p.project);
+    const standing = [...(index.objects.get(p.floorId) ?? []), ...(index.reaching.get(p.floorId ?? '') ?? [])];
+    const shaft = standing.find(o => (o.kind === 'stairs' || o.kind === 'elevator') && inSpace(o, at));
     const here = p.project.floors.find(f => f.id === p.floorId);
     if (!shaft || !here) return { shaft: null, up: null, down: null };
     const served = servedFloors(p.project, shaft);
@@ -1418,22 +1464,30 @@ export function MapCanvas(props: MapCanvasProps) {
     const p = latest.current;
     const controller = new WalkController({
       onPose: (pose: WalkPose) => {
+        // Where you are changes every frame; what is there does not, and looking it up means a scan
+        // of every object on the floor. Throttle the lookup — never the drag flag, which fires once
+        // on mouse-up and would otherwise leave the legend dimmed until the next keystroke.
         const now = performance.now();
-        if (now - hintAt.current < 150) return; // the pose changes every frame; what it means does not
-        hintAt.current = now;
-        const { up, down } = climb(pose.position);
-        const room = spaceAt(latest.current.project, latest.current.floorId, pose.position);
-        const next: WalkHint = {
-          looking: pose.looking,
-          up: up?.name ?? null,
-          down: down?.name ?? null,
-          where: room?.name ?? '',
-        };
+        const fresh = now - hintAt.current >= 150;
+        if (!fresh && pose.looking === hintRef.current.looking) return;
+        const { up, down } = fresh ? climb(pose.position) : { up: null, down: null };
+        const room = fresh ? spaceAt(latest.current.project, latest.current.floorId, pose.position) : null;
+        if (fresh) hintAt.current = now;
+        const next: WalkHint = fresh
+          ? {
+              looking: pose.looking,
+              up: up?.name ?? null,
+              down: down?.name ?? null,
+              where: room?.name ?? '',
+              next: guide(pose.position),
+            }
+          : { ...hintRef.current, looking: pose.looking };
         if (
           next.looking !== hintRef.current.looking ||
           next.up !== hintRef.current.up ||
           next.down !== hintRef.current.down ||
-          next.where !== hintRef.current.where
+          next.where !== hintRef.current.where ||
+          next.next !== hintRef.current.next
         ) {
           hintRef.current = next;
           setWalkHint(next);
@@ -1602,14 +1656,17 @@ export function MapCanvas(props: MapCanvasProps) {
         bearing: siteBearing(props.project) + (props.threeD ? -12 : 0),
         duration: 600,
       });
-    if (props.threeD) {
+    if (props.walk) {
+      // Walk mode owns the handlers, and turns them off. This effect runs in the same commit as the
+      // one that entered walk from 2D, so without this it hands dragRotate straight back.
+    } else if (props.threeD) {
       m.dragRotate.enable();
       m.touchZoomRotate.enableRotation();
     } else {
       m.dragRotate.disable();
       m.touchZoomRotate.disableRotation();
     } // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.threeD]);
+  }, [props.threeD, props.walk]);
   useEffect(() => {
     const m = map.current;
     if (!m) return;
@@ -2252,6 +2309,7 @@ export function MapCanvas(props: MapCanvasProps) {
       {props.walk && (
         <div className="walk-hud">
           <div className="walk-status">
+            {walkHint.next && <em>{walkHint.next}</em>}
             {walkHint.where && <b>{walkHint.where}</b>}
             {walkHint.up && (
               <span>
