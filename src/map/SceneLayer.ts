@@ -1357,7 +1357,13 @@ export class SceneLayer implements CustomLayerInterface {
           ghosted ? undefined : (o.material ?? (indoorFinish ? 'plaster' : undefined)),
           ghosted,
           false,
-          lidsOverBelow && indoorFinish ? this.materials.plate(color) : undefined,
+          lidsOverBelow && indoorFinish
+            ? this.materials.plate(color)
+            : // Walking, the floor is the one surface that can say where the light is, and only
+              // because you see it along rather than down onto it.
+              walk && indoorFinish && !ghosted
+              ? this.materials.polished(this.materials.get(o.material ?? 'plaster', color))
+              : undefined,
           !indoor,
         );
       } else if (['stairs', 'elevator', 'turnstile', 'door', 'gate', 'window'].includes(o.kind)) {

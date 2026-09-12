@@ -56,6 +56,21 @@ export class MaterialLibrary {
     }
     return this.materials.get(key)!;
   }
+  /** A polished twin of a finish, for the floor you are standing on in walk mode. Seen from above a
+   *  floor is a flat patch of its own colour and matte is right; seen along at eye level it is the
+   *  one surface in the room that shows you where the light is, because a grazing angle is where
+   *  reflectance lives. The roughness map still multiplies through, so the polish keeps the finish's
+   *  own variation instead of turning the plate into a mirror. */
+  polished(base: THREE.MeshStandardMaterial, roughness = 0.5): THREE.MeshStandardMaterial {
+    const key = `polished:${base.uuid}:${roughness}`;
+    if (!this.materials.has(key)) {
+      const material = base.clone();
+      material.roughness = roughness;
+      material.userData.shared = true;
+      this.materials.set(key, material);
+    }
+    return this.materials.get(key)!;
+  }
   /** A vertex-coloured twin of an existing material, so geometry can carry baked shading without
    *  doubling the palette. Cached per source material: everything drawn with the twin must supply a
    *  colour attribute, since a merge needs matching attributes across all its geometries. */
