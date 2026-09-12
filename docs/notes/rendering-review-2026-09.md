@@ -8,6 +8,31 @@ Findings below came from seven independent reviewers reading the engine against 
 Stockmann demo. Each names a file, the failure, and the proposed fix. They are ordered by
 severity. Unticked items are not yet done.
 
+## Closed
+
+Every item in this review is now fixed. The list below is kept as the record of what was wrong and
+where, because the same mistakes are easy to make again.
+
+The work landed over several passes. The last one verified each remaining item against the code
+before touching it, and found that most of the low-severity tail had already been swept up by the
+earlier structural fixes — the escalator comb plates, the flight pitch, the oversized escalator
+voids and the doubled entresol slab were all closed by then, and the 3D edit handles had been
+gated with the rest. What genuinely remained:
+
+- **One depth mapping.** `present()` now applies whenever the view is buried rather than only in
+  the stack, and the scene is built in the authored frame so `relative()` and the shaft offsets
+  share that one mapping by construction instead of by a second formula. A `sceneElevation` helper
+  states it once, and the excavation, its strata and the cage all go through it. This is a no-op
+  above about 96 m of depth, which is why Stockmann looks identical; a synthetic project reaching
+  -400 m pins it.
+- **Ramps belong to both ends.** A sloped zone is filed on one level, so the deck it arrives at
+  never drew it. A ramp is now claimed by the levels its slope ends at — not every storey the
+  incline crosses, which would run the Mannerheimintie driveway through the food hall — and the
+  deck it leaves is cut, because the ramp dives under that plate the moment it starts falling.
+- Two repairs that cut exposed: a surface with no rings after clipping threw and took a whole
+  storey with it, and the void pre-filter tested corners rather than bounding boxes, so a long
+  ramp crossing an aisle at right angles missed it entirely and the plate bridged the trench.
+
 ## Status after the fix pass
 
 Four agents worked the list in disjoint files. Everything below marked **fixed** landed in the

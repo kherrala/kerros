@@ -46,7 +46,7 @@ import type { MapStyleOptions } from '../theme';
 import { exteriorWalls } from './exteriors';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hitEntity, metricUVs, OUTSIDE, SurfaceBatch } from './surfaces';
-import { excavationRings, floorIndex, MAX_CAGE_LEVELS, undergroundView } from './underground';
+import { excavationRings, floorIndex, MAX_CAGE_LEVELS, type UndergroundView, undergroundView } from './underground';
 import { UndergroundCage, undergroundPit } from './UndergroundContext';
 import { includeSceneDepth } from './projection';
 import { syncLightingCamera } from './projection';
@@ -86,6 +86,18 @@ const HEAD_CLEAR = 0.35;
  *  stacked view is already drawn at authored elevations, so there it is nothing. */
 export const sceneGround = (stack: boolean, rebase: number, activeElevation: number) =>
   stack ? 0 : rebase - activeElevation;
+
+/** Where an authored elevation ends up on screen, once the view's depth mapping has had its say.
+ *
+ *  `undergroundView` compresses a shaft deeper than 96 m so a 400 m one can be looked at, and its
+ *  header asks every consumer to share that one transform. They did not: the stack compressed its
+ *  geometry vertex by vertex while a single-floor cutaway rebased to the compressed depth and then
+ *  added raw deltas to it, which put a level 140 m under the one in focus 44 m into the sky. This is
+ *  the mapping the plate, the flights climbing through it, the excavation's strata and the cage all
+ *  go through. A walk is the one view it has nothing to say to: inside one storey there is no depth
+ *  to compress, and the storey has been moved onto the map's ground plane anyway. */
+export const sceneElevation = (view: UndergroundView, walk: boolean, z: number) =>
+  walk ? z - (view.active?.elevation ?? 0) : view.elevation(z);
 
 /** The underside of a walked storey's ceiling, above the storey's own datum.
  *
@@ -154,6 +166,51 @@ const LOOP_FRAME = 42;
 /** The one rig id the route owns, so a rebuild can drop its own and leave every other alone. */
 const ROUTE_RIG = 'route:track';
 const wallBase = (floorId: string | null) => (floorId ? LIFT + SLAB : GROUND);
+
+/** Do two rings come near enough each other to be worth clipping? Bounding boxes, which is coarse on
+ *  purpose: a box that overlaps where the shapes do not costs one clip that gives the area back
+ *  unchanged. What it replaces — a corner-in-ring test each way — was enough while every void was a
+ *  shaft landing inside one area, and wrong for a ramp, which is a forty-metre strip crossing the
+ *  aisles at right angles with no corner of anything inside anything. Those aisles kept their whole
+ *  plate and bridged the trench cut under them. */
+const boxesMeet = (a: Ring, b: Ring) => {
+  const span = (ring: Ring, axis: 0 | 1) => {
+    let lo = Infinity,
+      hi = -Infinity;
+    for (const p of ring) {
+      if (p[axis] < lo) lo = p[axis];
+      if (p[axis] > hi) hi = p[axis];
+    }
+    return [lo, hi];
+  };
+  for (const axis of [0, 1] as const) {
+    const [alo, ahi] = span(a, axis),
+      [blo, bhi] = span(b, axis);
+    if (ahi < blo || bhi < alo) return false;
+  }
+  return true;
+};
+
+/** Does this ramp join the level at `elevation`? A sloped zone spans two decks and is filed on one of
+ *  them, so the other has to claim it or the deck a car arrives at draws no way onto it. Its ends are
+ *  what it joins — not every storey the incline passes through on the way. */
+export const rampJoins = (o: SiteObject, elevation: number) =>
+  !!o.slope && [o.slope.low, o.slope.high].some(end => Math.abs(end - elevation) < 0.01);
+
+/** The plan hole a deck's own driveway needs: the ramp that sets off from this level, and so is under
+ *  this level's plate from the moment it starts falling.
+ *
+ *  Only that one. A ramp arriving from the deck above lies OVER this plate and wants no hole — cut
+ *  one and the storey gets a forty-metre trench with nothing under it — and a driveway that merely
+ *  passes this elevation a hundred metres away beneath the street has nothing to do with this floor,
+ *  which is how a slot for the Mannerheimintie ramp came to be cut through the shop. */
+export const rampVoids = (project: ProjectDocument, floorId: string): Ring[] => {
+  const level = project.floors.find(f => f.id === floorId);
+  if (!level) return [];
+  return project.objects
+    .filter(o => o.floorId === floorId && o.slope && o.rings?.length && Math.abs(o.slope.high - level.elevation) < 0.01)
+    .map(o => closeRing(o.rings![0]));
+};
 
 /** An escalator step: 0.4 m of going and a 0.2 m face, the world over. These are properties of the
  *  machine rather than of the drawing — a manufacturer's step is the same step in every building —
@@ -544,8 +601,12 @@ export class SceneLayer implements CustomLayerInterface {
       this.map?.triggerRepaint();
     }, LOOP_FRAME);
   }
+  /** One vertex, mapped by the view's depth transform — see sceneElevation. Geometry is built at
+   *  the elevations the document authored, so this is the last thing that touches a z before it
+   *  reaches the buffer. It ran in the stacked view only, which left a deep cutaway drawing its
+   *  plate at the compressed depth and everything around it at the real one. */
   private present(z: number) {
-    return this.stack && this.buried ? this.presentedElevation(z) : z;
+    return this.buried && !this.walking ? this.presentedElevation(z) : z;
   }
   private surface(
     rings: Point[][],
@@ -564,6 +625,10 @@ export class SceneLayer implements CustomLayerInterface {
     // landscaping, a fence: lit by the sky and nothing else, whatever the lamps inside are doing.
     outdoor = false,
   ) {
+    // An area a void has swallowed whole — a parking bay lying under the ramp that runs over it — has
+    // no plate left to draw, and asking for the first of no rings took the rest of the storey down
+    // with it.
+    if (!rings.length) return;
     const shape = new THREE.Shape(rings[0].map(p => new THREE.Vector2(...this.xy(p))));
     shape.holes = rings.slice(1).map(r => new THREE.Path(r.map(p => new THREE.Vector2(...this.xy(p)))));
     const geometry =
@@ -587,7 +652,7 @@ export class SceneLayer implements CustomLayerInterface {
       }
       geometry.setAttribute('color', new THREE.BufferAttribute(shades, 3));
     }
-    if (this.stack && this.buried && this.depthScale < 1) {
+    if (this.buried && !this.walking && this.depthScale < 1) {
       const positions = geometry.getAttribute('position');
       for (let i = 0; i < positions.count; i++) positions.setZ(i, this.present(positions.getZ(i)));
       geometry.computeVertexNormals();
@@ -789,12 +854,16 @@ export class SceneLayer implements CustomLayerInterface {
     }
     return null;
   }
-  /** An area's rings with the shafts that climb through its level cut out of them.
+  /** An area's rings with the shafts that climb through its level, and the ramps that drive through
+   *  it, cut out of them.
    *
    *  `through` says which plate is being cut: a floor is open where something arrives up through it,
    *  a ceiling where something sets off up through it. They are not the same holes — the bottom of a
    *  run departs without arriving and the top arrives without departing — and on a criss-cross
    *  escalator bank they are at opposite ends of the same box.
+   *
+   *  `wells` is whether a stairwell may be punched at all — a hole onto a storey nobody is drawing
+   *  is worse than no hole. A ramp is not subject to it: what is under a ramp's hole is the ramp.
    *
    *  Cheap when there is nothing to cut, which is the usual case: a floor with no shaft through it
    *  gets its own rings back untouched, and one with a shaft pays a clip only for the areas the
@@ -805,17 +874,24 @@ export class SceneLayer implements CustomLayerInterface {
     floorId: string,
     primary: Set<string>,
     through: 'floor' | 'ceiling' = 'floor',
+    wells = true,
   ): Ring[] {
-    const key = `${floorId}|${through}`;
+    const key = `${floorId}|${through}|${wells}`;
     let voids = this.voidCache.get(key);
     if (!voids) {
       // Above ground nothing under the street is drawn, flights included, so a hole cut for one
       // would open onto the basemap with nothing coming up through it.
-      voids = shaftVoids(project, floorId, primary, { through, lowest: this.buried ? -Infinity : -0.01 });
+      voids = wells ? shaftVoids(project, floorId, primary, { through, lowest: this.buried ? -Infinity : -0.01 }) : [];
+      // A driveway is a hole in a deck as surely as a stairwell is. The ramp off P1 dives under the
+      // plate it is filed on the moment it starts falling, so drawn whole that plate is a lid over
+      // it and the ramp was invisible from the deck it leaves. Where ramp and deck meet they are
+      // level with each other, so the ramp fills exactly what it cuts. Floors only: nothing drives
+      // up out of the storey overhead into the ceiling.
+      if (through === 'floor') voids = [...voids, ...rampVoids(project, floorId)];
       this.voidCache.set(key, voids);
     }
     if (!voids.length || !rings.length) return rings;
-    const hits = voids.filter(v => v.some(p => pointInRing(p, rings[0])) || rings[0].some(p => pointInRing(p, v)));
+    const hits = voids.filter(v => boxesMeet(v, rings[0]));
     if (!hits.length) return rings;
     try {
       const cut = polygonClipping.difference(
@@ -1298,7 +1374,11 @@ export class SceneLayer implements CustomLayerInterface {
     this.buried = buried;
     this.depthScale = view.depthScale;
     this.presentedElevation = view.elevation;
-    this.rebase = stack || walk ? 0 : view.focusElevation;
+    // The datum a cutaway builds its geometry about: the level in focus, at the depth the DOCUMENT
+    // gives it, because present() is what maps a depth for the screen and it wants authored metres
+    // to work on. Rebasing to the compressed depth here and then adding raw deltas to it was the
+    // two-mappings bug: the plate landed where the camera aims and everything referred to it did not.
+    this.rebase = stack || walk ? 0 : (activeF?.elevation ?? 0);
     // What an authored elevation has to be shifted by to land in the frame the rest of the scene is
     // drawn in — see sceneGround. Zero in every view but a walk, which is the one that moves the
     // level in focus away from where the document put it.
@@ -1462,12 +1542,17 @@ export class SceneLayer implements CustomLayerInterface {
     const punchWells = (fid: string) =>
       stack ||
       view.levels.some(f => f.elevation < (floors.get(fid)?.elevation ?? 0) && f.id !== fid && drawnLevels.has(f.id));
-    /** Height of a floor relative to the one in focus — 0 for the active level, negative below it.
-     *  Out of doors is grade, which is `ground` away from the floor being walked. */
+    /** Where a floor's geometry is built, before present() maps it for the screen: the elevation the
+     *  document authored in a cutaway, and the height above the walked storey in a walk. Out of doors
+     *  is grade, which is `ground` away from the floor being walked. */
     const relative = (fid: string | null) =>
       fid
         ? this.rebase + ((floors.get(fid)?.elevation ?? activeF?.elevation ?? 0) - (activeF?.elevation ?? 0))
         : ground;
+    /** Where an authored depth is shown, for the geometry that is placed outright rather than built
+     *  and then presented: the excavation face and the cage. Same mapping present() puts the model
+     *  through, or the soil and the plate standing in it disagree about how deep the storey is. */
+    const shown = (z: number) => sceneElevation(view, walk, z);
     const visibleObjects = stack
       ? project.objects
       : // Deduplicated: a shaft filed under the storey below reaches this one, and the carried
@@ -1488,6 +1573,18 @@ export class SceneLayer implements CustomLayerInterface {
               // never saw it, and the garage came out with no mouth at the kerb.
               ...(floorId === null
                 ? project.objects.filter(o => o.slope && Math.max(o.slope.high, o.slope.low) >= -0.01)
+                : []),
+              // A ramp is a floor that is two floors. It is filed on the deck it leaves, so the deck
+              // it arrives at drew nothing: from P2 the ramp down from P1 stopped existing, and a
+              // car came up out of a plate with no way onto it. Both decks it joins, then — the
+              // levels its own slope starts and ends at, rather than every storey the incline passes
+              // through. The driveway out to Mannerheimintie crosses -4.2, -6.6 and -9 a hundred
+              // metres away under the street, and it has nothing to do with any of them.
+              ...(activeF
+                ? project.objects.filter(
+                    o =>
+                      rampJoins(o, activeF.elevation) && floors.get(o.floorId ?? '')?.buildingId === activeF.buildingId,
+                  )
                 : []),
             ].map(o => [o.id, o] as const),
           ).values(),
@@ -1551,7 +1648,7 @@ export class SceneLayer implements CustomLayerInterface {
           this.materials,
           evening,
         );
-        if (stack && buried && z < 0) {
+        if (buried && !walk && z < 0) {
           const base = fixture.position.z,
             height = Math.max(o.height, 0.01);
           fixture.position.z = this.present(base);
@@ -1584,8 +1681,8 @@ export class SceneLayer implements CustomLayerInterface {
         this.surface(
           // A stairwell is a hole in the floor you are standing on, too. Added as holes in the
           // area's own rings so the plate keeps its shape and loses only the shaft.
-          indoor && o.floorId && punchWells(o.floorId)
-            ? this.withVoids(project, o.rings, o.floorId, index.primary)
+          indoor && o.floorId
+            ? this.withVoids(project, o.rings, o.floorId, index.primary, 'floor', punchWells(o.floorId))
             : o.rings,
           base,
           height,
@@ -1790,24 +1887,22 @@ export class SceneLayer implements CustomLayerInterface {
       const outline = index.outlines.get(activeF?.id ?? view.levels[0]?.id ?? '');
       const excavation = excavationRings(project, view.levels);
       const rings = excavation.length ? excavation : outline?.rings?.[0] ? [openRing(outline.rings[0])] : [];
-      const split = view.focusElevation;
+      const split = shown(activeF?.elevation ?? 0);
       // The cut has to reach whatever the view actually draws below the floor in focus — the shelled
       // storey under it, and any ramp running down off the plate — or the ramp ends in mid-air and
       // the deck below stands inside bedrock. An arbitrary six metres did neither. The stacked view
       // already cuts to the bottom of the deepest level.
       const reach = Math.min(
         split,
-        belowShell ? view.elevation(belowShell.elevation) : split,
+        belowShell ? shown(belowShell.elevation) : split,
         ...(index.objects.get(floorId ?? '') ?? [])
           .filter(o => o.slope)
-          .map(o => view.elevation(Math.min(o.slope!.low, o.slope!.high))),
+          .map(o => shown(Math.min(o.slope!.low, o.slope!.high))),
       );
-      const bottom = stack
-        ? view.elevation(view.levels.reduce((z, f) => Math.min(z, f.elevation), 0)) - 2.5
-        : reach - 2.5;
+      const bottom = stack ? shown(view.levels.reduce((z, f) => Math.min(z, f.elevation), 0)) - 2.5 : reach - 2.5;
       // Every below-grade slab leaves a stratum line on the cut face, so levels you are not standing
       // on still read in section.
-      const strata = view.levels.filter(f => f.elevation < 0).map(f => view.elevation(f.elevation));
+      const strata = view.levels.filter(f => f.elevation < 0).map(f => shown(f.elevation));
       for (const local of rings) {
         // A little breathing room avoids coplanar soil and exterior walls.
         const ring = local.map(pt => this.xy(pt));
@@ -1834,7 +1929,7 @@ export class SceneLayer implements CustomLayerInterface {
         const envelope = index.outlines.get(fl.id);
         if (!envelope) continue;
         const ring = openRing(envelope.rings![0]);
-        rings.push(ring.map(pt => new THREE.Vector3(...this.xy(pt), view.elevation(fl.elevation) + LIFT)));
+        rings.push(ring.map(pt => new THREE.Vector3(...this.xy(pt), shown(fl.elevation) + LIFT)));
         // The corners the cage stands on are the building's, so they come from its widest storey —
         // and never from a mezzanine, which is a gallery inside a storey and not the storey. Taken
         // from the first level above instead, Herkku caged a hundred-and-ten-metre building in the
@@ -1849,8 +1944,8 @@ export class SceneLayer implements CustomLayerInterface {
       this.cage.configure(
         rings,
         columns,
-        view.focusElevation + LIFT,
-        topFl ? view.elevation(topFl.elevation + topFl.height) : 0,
+        shown(activeF.elevation) + LIFT,
+        topFl ? shown(topFl.elevation + topFl.height) : 0,
         evening,
       );
       this.cage.setBearing(this.map?.getBearing() ?? 0);

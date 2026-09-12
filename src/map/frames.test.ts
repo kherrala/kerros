@@ -1,8 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { LIFT, sceneGround, SLAB, shellPlate, walkSoffit } from './SceneLayer';
+import { LIFT, rampJoins, rampVoids, sceneElevation, sceneGround, SLAB, shellPlate, walkSoffit } from './SceneLayer';
 import { EYE } from './walk';
 import { createDemo } from '../../app/demo/demo';
 import { ringArea } from '../model/geometry';
+import { DEPTH_CAP, undergroundView } from './underground';
+import { addFloor, newProject } from '../model/testFixtures';
+import { createObject } from '../model/factory';
+import { flights } from '../model/vertical';
 
 const demo = createDemo();
 const floor = (id: string) => demo.floors.find(f => f.id === id)!;
@@ -65,5 +69,95 @@ describe('shell plates', () => {
     const plates = shellPlate(demo, 'floor-ground');
     expect(plates.length).toBeGreaterThan(0);
     expect(plates.length).toBeLessThan(8);
+  });
+});
+
+/** A mine rather than a building: four levels reaching 400 m down, which is the only shape that makes
+ *  the depth mapping do anything. Stockmann's deepest deck is 21 m and is drawn where it was authored. */
+function deepShaft() {
+  const p = newProject();
+  const ids = [p.floors[0].id, addFloor(p, 'l-120', -120), addFloor(p, 'l-260', -260), addFloor(p, 'l-400', -400)];
+  const lift = createObject('elevator', [0, 0], ids[3], 'Cage winder');
+  lift.servedFloorIds = ids;
+  p.objects.push(lift);
+  return { p, ids, lift };
+}
+
+describe('one depth mapping, however deep the shaft', () => {
+  it('draws the plate, the lift that climbs to it and the cage around it on the same scale', () => {
+    const { p, lift } = deepShaft();
+    const view = undergroundView(p, 'l-400', false);
+    expect(view.buried && view.compressed).toBe(true);
+    // Where the plate is drawn is where the camera is aimed: MapCanvas reads focusElevation, the cage
+    // stands its columns on it, and the model goes through sceneElevation to reach the same number.
+    expect(sceneElevation(view, false, -400)).toBeCloseTo(view.focusElevation);
+    // A 400 m shaft is shown as a 96 m one — that is what the mapping is for — and every landing on
+    // the way stays underground and in order. Rebasing the view to the compressed depth and then
+    // adding the authored 140 m between -400 and -260 put that landing 44 m into the sky.
+    expect(view.focusElevation + (-260 - -400)).toBeGreaterThan(0);
+    const landings = flights(p, lift).map(f => sceneElevation(view, false, f.to.elevation));
+    expect(landings).toEqual([...landings].sort((a, b) => a - b));
+    for (const z of landings) expect(z).toBeLessThanOrEqual(0);
+    expect(sceneElevation(view, false, -400)).toBeGreaterThan(-DEPTH_CAP - 0.01);
+    // And it is a compression, not a translation: the 140 authored metres between two landings come
+    // out as a fraction of themselves. The cage's rings and the excavation's strata are drawn at the
+    // same fraction because they are put through this same function.
+    const gap = sceneElevation(view, false, -260) - sceneElevation(view, false, -400);
+    expect(gap).toBeGreaterThan(0);
+    expect(gap).toBeLessThan(140);
+  });
+
+  it('leaves a shallow basement at the depth the document gave it', () => {
+    const view = undergroundView(demo, 'floor-p3', false);
+    expect(view.compressed).toBe(false);
+    expect(sceneElevation(view, false, -21)).toBe(-21);
+  });
+
+  it('measures a walked storey from the walker instead, where there is no depth to compress', () => {
+    const { p } = deepShaft();
+    const view = undergroundView(p, 'l-400', false);
+    expect(sceneElevation(view, true, -400)).toBe(0);
+    // The storey above is its own 140 m up, not a compressed 34: inside one building you walk in
+    // authored metres.
+    expect(sceneElevation(view, true, -260)).toBe(140);
+  });
+});
+
+describe('a ramp belongs to both decks it joins', () => {
+  const ramps = demo.objects.filter(o => o.slope);
+  const named = (name: string) => ramps.find(o => o.name === name)!;
+
+  it('is claimed by the deck it lands on as well as the one it leaves', () => {
+    const inter = named('Ramp P1 \u2192 P2');
+    expect(inter.floorId).toBe('floor-p1'); // filed on the deck it leaves, and only that one
+    expect(rampJoins(inter, floor('floor-p1').elevation)).toBe(true);
+    expect(rampJoins(inter, floor('floor-p2').elevation)).toBe(true);
+    // The storey between is not a deck this ramp reaches, and P3 is a deck it never touches.
+    expect(rampJoins(inter, floor('floor-p3').elevation)).toBe(false);
+  });
+
+  it('leaves the storeys its incline merely passes alone', () => {
+    // The driveway out to Mannerheimintie falls 12.6 m under the street, crossing -4.2, -6.6 and -9
+    // a hundred metres from the building. Drawn on those it would lay tarmac through the food hall.
+    const street = named('Entry ramp \u00b7 Mannerheimintie');
+    for (const id of ['floor-b1', 'floor-b1a', 'floor-basement'])
+      expect(rampJoins(street, floor(id).elevation), id).toBe(false);
+  });
+});
+
+describe('the hole a driveway needs in its deck', () => {
+  it('opens the plate the ramp dives under, which is the deck it sets off from', () => {
+    expect(rampVoids(demo, 'floor-p1').length).toBe(1); // the P1 -> P2 ramp, and not the street ones
+    expect(rampVoids(demo, 'floor-p2').length).toBe(1);
+  });
+
+  it('leaves the deck a ramp arrives at whole, because the ramp lands on top of it', () => {
+    // A hole here would be a forty-metre trench in P3 with nothing under it.
+    expect(rampVoids(demo, 'floor-p3')).toEqual([]);
+  });
+
+  it('never slots the shop for a driveway that surfaces at grade', () => {
+    // Both street ramps reach 0, which is the ground floor's elevation; neither is on its plate.
+    expect(rampVoids(demo, 'floor-ground')).toEqual([]);
   });
 });

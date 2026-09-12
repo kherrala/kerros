@@ -23,6 +23,7 @@ export function undergroundView(project: ProjectDocument, floorId: string | null
   const compressed = depthScale < 1 && (stack || (active?.elevation ?? 0) < -SHALLOW_DEPTH);
   return { active, levels, buried, depthScale, elevation, focusElevation, compressed };
 }
+export type UndergroundView = ReturnType<typeof undergroundView>;
 
 /** The excavated volume's plan outline(s). A below-grade complex is rarely just the tower footprint:
  * parking decks sprawl past it and driveway ramps reach out to the street. Scoping the pit to a single

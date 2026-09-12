@@ -2072,10 +2072,13 @@ export function MapCanvas(props: MapCanvasProps) {
     const o = props.project.objects.find(o => o.id === props.focusId);
     // Through the depth aim: the object's plan position is on the ground, and the storey it belongs
     // to is drawn metres under it, so centring on the raw coordinate leaves a basement object well
-    // off to one side of the frame.
+    // up the frame — the miss runs along the view axis, not across it. The object's OWN floor, with
+    // no fallback to the storey being viewed: out of doors is drawn at grade whichever level is
+    // open, so a parcel or an entrance picked while the garage is up wants no aim at all, and
+    // borrowing P3's put it a good fifteen metres up the frame.
     if (m && o)
       m.easeTo({
-        center: floorAim(m, props.project, objectPosition(props.project, o), o.floorId ?? props.floorId, props),
+        center: floorAim(m, props.project, objectPosition(props.project, o), o.floorId, props),
         duration: 500,
       });
   }, [props.focusId]); // eslint-disable-line react-hooks/exhaustive-deps
