@@ -204,10 +204,14 @@ const STK_ESCALATORS: [string, number, number, number][] = [
   ['Escalator up', 6, 20, 0],
   ['Escalator down', 11, 20, 0],
 ];
+// Clear of the escalator bank and sized like the feature stair it is. At 2.2 m across and two
+// metres from the escalators' flank, the spirals were a pair of fire-escape ladders crowding the
+// spine; a department store's spiral is a 3.6 m drum you can pass someone on, standing on its own.
 const STK_SPIRALS: Point[] = [
-  [13, -11],
-  [13, 19],
+  [16.5, -11],
+  [16.5, 19],
 ];
+const STK_SPIRAL_SIZE = 3.6;
 // name, elevation, colour, ground-floor sub-departments, isOffice
 // Every storey shares one brightness: an elevation-graded ladder read as the lower floors being
 // badly lit rather than lower, and a visitor stepping between levels expects the same daylight.
@@ -425,8 +429,8 @@ function createCampus(): ProjectDocument {
   );
   for (const [i, pt] of STK_SPIRALS.entries()) {
     const s = createObject('stairs', pt, 'floor-entresol', `Spiral stair ${i + 1}`);
-    s.width = 2.2;
-    s.depth = 2.2;
+    s.width = STK_SPIRAL_SIZE;
+    s.depth = STK_SPIRAL_SIZE;
     s.servedFloorIds = ['floor-ground', 'floor-entresol', 'floor-01'];
     p.objects.push(s);
   }
@@ -551,8 +555,8 @@ function createCampus(): ProjectDocument {
       }
       for (const [i, pt] of STK_SPIRALS.entries()) {
         const s = createObject('stairs', pt, f, `Spiral stair ${i + 1}`);
-        s.width = 2.2;
-        s.depth = 2.2;
+        s.width = STK_SPIRAL_SIZE;
+        s.depth = STK_SPIRAL_SIZE;
         s.stairModel = 'spiral';
         s.servedFloorIds = all;
         p.objects.push(s);
