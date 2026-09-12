@@ -14,18 +14,23 @@ import '@kerros/viewer/styles.css';
 | `@kerros/viewer/host` | The same facade minus `FloorViewer`: persistence, theming, status helpers, `StructureView`, the schema. |
 | `@kerros/viewer/styles.css` | The stylesheet (MapLibre's, then Kerros'). |
 
-`FloorViewer` reaches `maplibre-gl` and `three`, and `maplibre-gl` ships as a side-effectful bundle
-that no tree-shake will take back out once it is in the module graph — so a picker screen pays about
-1.7 MB for a renderer it never mounts. Take what that screen needs from `/host` and name the viewer
-itself through a dynamic import:
+`FloorViewer` reaches `maplibre-gl` and `three` — about 1.7 MB that a picker screen has no use for.
+The package is published one file per module, so a bundler follows only what you actually name:
+importing `KerrosThemeProvider` from either entry point costs the same, and neither pulls the
+renderer.
 
 ```tsx
-import { KerrosThemeProvider, useDarkMode, parseExport } from '@kerros/viewer/host';
+import { KerrosThemeProvider, useDarkMode, parseExport } from '@kerros/viewer';
 const FloorViewer = lazy(() => import('@kerros/viewer').then(m => ({ default: m.FloorViewer })));
 ```
 
-Both entry points export the same names where they overlap, so nothing breaks by importing from
-either one; the split exists only so that a host can choose when the renderer arrives.
+The `lazy()` is still yours to write — tree-shaking decides what is in the bundle, not when it
+arrives, and mounting the viewer is what makes the renderer worth fetching.
+
+`/host` exports the same names minus `FloorViewer`. It is now a statement rather than a workaround:
+import from it and the renderer *cannot* end up in that module's graph, by construction, whatever a
+future refactor does to the barrel. Reach for it when you want that guaranteed, and use the main
+entry otherwise.
 
 ## Components
 

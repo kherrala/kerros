@@ -14,19 +14,24 @@ import '@kerros/editor/styles.css';
 | `@kerros/editor/host` | The same facade minus the two components that draw a plan: persistence, theming, `StructureView`, the schema. |
 | `@kerros/editor/styles.css` | The stylesheet (MapLibre's, then Kerros'). |
 
-Drawing a plan means `maplibre-gl` and `three`, and `maplibre-gl` ships as a side-effectful bundle
-that no tree-shake will take back out once it is in the module graph — so a screen that only lists
-saved projects pays about 1.7 MB for a renderer it never mounts. Take what that screen needs from
-`/host` and name the editor itself through a dynamic import, and the renderer is fetched when a
-project is actually opened:
+Drawing a plan means `maplibre-gl` and `three` — about 1.7 MB that a screen listing saved projects
+has no use for. The package is published one file per module, so a bundler follows only what you
+actually name: importing `KerrosThemeProvider` from either entry point costs the same, and neither
+pulls the renderer.
 
 ```tsx
-import { KerrosThemeProvider, useDarkMode, IndexedProjectRepository } from '@kerros/editor/host';
+import { KerrosThemeProvider, useDarkMode, IndexedProjectRepository } from '@kerros/editor';
 const FloorEditor = lazy(() => import('@kerros/editor').then(m => ({ default: m.FloorEditor })));
 ```
 
-Both entry points export the same names where they overlap, so nothing breaks by importing from
-either one; the split exists only so that a host can choose when the renderer arrives.
+That measures at 98 kB for the light names against 4.5 MB for `FloorEditor`, from the same barrel.
+The `lazy()` is still yours to write — tree-shaking decides what is in the bundle, not when it
+arrives, and mounting the editor is what makes the renderer worth fetching.
+
+`/host` exports the same names minus the two components that draw a plan. It is now a statement
+rather than a workaround: import from it and the renderer *cannot* end up in that module's graph, by
+construction, whatever a future refactor does to the barrel. Reach for it when you want that
+guaranteed — a shared module a hundred screens import, say — and use the main entry otherwise.
 
 ## Components
 
