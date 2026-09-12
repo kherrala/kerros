@@ -390,19 +390,49 @@ export function makeFixture(
       group.add(light);
     }
   } else if (o.model === 'car') {
-    box(group, w, d, 0.48, 0, 0, 0.35, paint);
-    box(group, w * 0.82, d * 0.48, 0.5, 0, -0.1, 0.83, paint);
+    // A car is built along its long axis whichever of width and depth the author made the long
+    // one: the garage draws its cars 4.5 wide and 1.85 deep, pointing down the bay, and a model
+    // that took depth for length put the cabin along the side, the glass on the flanks and the
+    // wheels face-on like discs. Local X is the length from here on.
+    const car = new THREE.Group();
+    const length = Math.max(w, d),
+      width = Math.min(w, d);
+    if (d > w) car.rotation.z = Math.PI / 2;
+    group.add(car);
     const glass = materials.glass(evening);
-    box(group, w * 0.83, 0.025, 0.4, 0, -d * 0.26, 0.88, glass);
-    box(group, w * 0.83, 0.025, 0.4, 0, d * 0.22, 0.88, glass);
-    for (const x of [-w * 0.48, w * 0.48])
-      for (const y of [-d * 0.32, d * 0.32]) {
-        const wheel = new THREE.Mesh(new THREE.CylinderGeometry(0.31, 0.31, 0.17, 16), dark);
-        wheel.rotation.z = Math.PI / 2;
-        wheel.position.set(x, y, 0.33);
-        group.add(wheel);
+    // Body: a lower shell with a slightly narrower bonnet and boot on top, so the profile steps
+    // rather than slabs, and a cabin set back from the nose with a raked windscreen and rear glass.
+    box(car, length, width, 0.42, 0, 0, 0.3, paint);
+    box(car, length * 0.96, width * 0.94, 0.2, 0, 0, 0.72, paint);
+    const cabinLength = length * 0.46,
+      cabinAt = -length * 0.06;
+    box(car, cabinLength, width * 0.86, 0.5, cabinAt, 0, 0.9, paint);
+    for (const side of [-1, 1]) {
+      const pane = box(car, cabinLength * 0.9, 0.03, 0.34, cabinAt, (side * width * 0.86) / 2, 0.98, glass);
+      pane.rotation.x = side * -0.12;
+    }
+    const screen = box(car, 0.03, width * 0.8, 0.44, cabinAt + cabinLength / 2, 0, 0.98, glass);
+    screen.rotation.y = 0.55;
+    const rear = box(car, 0.03, width * 0.8, 0.4, cabinAt - cabinLength / 2, 0, 0.98, glass);
+    rear.rotation.y = -0.6;
+    // Wheels: axles across the car, with a lighter hub so a wheel reads as a wheel from the side.
+    const tyre = new THREE.CylinderGeometry(0.32, 0.32, 0.2, 18),
+      hub = new THREE.CylinderGeometry(0.17, 0.17, 0.21, 12);
+    for (const x of [-length * 0.34, length * 0.34])
+      for (const y of [-width * 0.42, width * 0.42]) {
+        const wheel = new THREE.Mesh(tyre, dark);
+        wheel.position.set(x, y, 0.32);
+        car.add(wheel);
+        const cap = new THREE.Mesh(hub, metal);
+        cap.position.set(x, y, 0.32);
+        car.add(cap);
       }
-    for (const x of [-w * 0.31, w * 0.31]) box(group, 0.32, 0.04, 0.14, x, d / 2, 0.58, white);
+    // Lamps at both ends, and a plate.
+    for (const y of [-width * 0.32, width * 0.32]) {
+      box(car, 0.04, 0.3, 0.12, length / 2, y, 0.62, white);
+      box(car, 0.04, 0.26, 0.1, -length / 2, y, 0.6, materials.solid('#a83a30'));
+    }
+    box(car, 0.03, 0.44, 0.11, -length / 2 - 0.005, 0, 0.42, white);
   } else if (o.model === 'chimney') {
     box(group, w, d, h, 0, 0, 0, materials.get('brick', o.color ?? '#c0b8a7'));
     box(group, w + 0.16, d + 0.16, 0.12, 0, 0, h, metal);

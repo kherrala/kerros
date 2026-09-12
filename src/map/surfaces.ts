@@ -21,12 +21,25 @@ interface Entry {
 export class SurfaceBatch {
   private pending = new Map<string, { material: THREE.Material; outdoor: boolean; entries: Entry[] }>();
   private meshes: THREE.Mesh[] = [];
+  /** Side of the square cells the batch is cut into, in scene metres; 0 batches a whole material
+   *  into one mesh. Looking down on a floor from above, every part of it is in the frame and one
+   *  mesh per material is the cheapest way to draw it. Standing on it, most of it is behind you or
+   *  round a corner, and a lamp's shadow reaches twelve metres — but a mesh is culled whole or not
+   *  at all, and one floor-sized mesh is never culled. Cut into cells, the frustum and every
+   *  shadow pass keep only the cells they can see. */
+  chunk = 0;
 
   /** `outdoor` puts the surface on the OUTSIDE layer, out of reach of the interior lighting. It is
    *  part of the bucket key as well as a property of the mesh: two surfaces that share a material
    *  but not a side of the wall cannot be merged into one mesh, because a mesh sits on one layer. */
   add(geometry: THREE.BufferGeometry, material: THREE.Material, id: string, outdoor = false) {
-    const key = `${material.uuid}|${outdoor ? 'out' : 'in'}`;
+    let cell = '';
+    if (this.chunk > 0) {
+      geometry.computeBoundingBox();
+      const box = geometry.boundingBox!;
+      cell = `|${Math.floor((box.min.x + box.max.x) / 2 / this.chunk)},${Math.floor((box.min.y + box.max.y) / 2 / this.chunk)}`;
+    }
+    const key = `${material.uuid}|${outdoor ? 'out' : 'in'}${cell}`;
     const bucket = this.pending.get(key) ?? { material, outdoor, entries: [] };
     bucket.entries.push({ geometry, id });
     this.pending.set(key, bucket);

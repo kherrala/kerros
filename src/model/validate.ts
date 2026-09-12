@@ -18,8 +18,8 @@ import {
 } from './geometry';
 import { navEdges, navNodes } from './navigation';
 import { EXTERIOR_PRESETS } from './materials';
-import { OBJECT_KINDS, isOpening, isSpace } from './types';
-import type { Point, ProjectDocument, Ring, SiteObject } from './types';
+import { AMBIENCE_PRESETS, OBJECT_KINDS, isOpening, isSpace } from './types';
+import type { Ambience, Point, ProjectDocument, Ring, SiteObject } from './types';
 
 /** How far from the site origin a coordinate may sit, in metres. A guard against corrupt data, not a
  *  modelling limit: no site is 100 km across, but a NaN that became 1e15 through arithmetic would
@@ -258,6 +258,12 @@ export function validateProject(value: unknown): ProjectDocument {
     )
   )
     fail('a floor names a light that is not a lamp.');
+  const badAmbience = (a: Ambience | undefined) =>
+    a !== undefined &&
+    (!AMBIENCE_PRESETS.includes(a.preset) ||
+      (a.level !== undefined && (!finite(a.level) || a.level < 0 || a.level > 1)));
+  if (p.floors.some(f => badAmbience(f.ambience)) || p.objects.some(o => badAmbience(o.ambience)))
+    fail('an ambience names a preset that does not exist, or a level outside 0..1.');
   if (p.initialFloorId !== undefined && p.initialFloorId !== null && !p.floors.some(f => f.id === p.initialFloorId))
     fail('initialFloorId names a floor that does not exist.');
   if (p.buildings.some(b => b.exteriorPreset !== undefined && !Object.hasOwn(EXTERIOR_PRESETS, b.exteriorPreset)))

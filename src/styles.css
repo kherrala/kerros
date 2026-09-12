@@ -1302,6 +1302,22 @@
   font-weight: 500;
   color: #4d5266;
 }
+/* In 3D the label stands over a shaded, textured floor with walls crossing behind it, and dark ink
+   with a white halo dissolved into it. White letters with a black stroke read against anything:
+   the stroke is painted under the fill so it thickens the glyph outward and never eats the letter. */
+.map-wrap.perspective .space-label {
+  color: #fff;
+  --label-halo: #000;
+  -webkit-text-stroke: 2.5px #000;
+  paint-order: stroke fill;
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.7);
+}
+.map-wrap.perspective .space-label small {
+  color: #f1f3f8;
+}
+.map-wrap.perspective .space-label.outdoor {
+  color: #fff;
+}
 .space-label.outdoor {
   font-size: 12px;
   letter-spacing: 0.04em;
@@ -1593,6 +1609,9 @@
   font-size: 11px;
   color: #f4f5fa;
   text-align: center;
+}
+.map-scale[hidden] {
+  display: none;
 }
 .map-scale {
   position: absolute;
@@ -3658,4 +3677,95 @@
   align-items: center;
   gap: 7px;
   white-space: nowrap;
+}
+/* The person, kept apart from the camera: where the last walk ended, drawn on the plan with the way
+   they were facing. --turn is the facing relative to the map's rotation, set by reposition(). */
+.avatar-marker {
+  pointer-events: auto;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--accent, #4f46e5);
+  color: #fff;
+  border: 2px solid #fff;
+  box-shadow: var(--shadow-md);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 12;
+  cursor: pointer;
+}
+.avatar-marker i {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 0;
+  height: 0;
+  border-left: 18px solid transparent;
+  border-right: 18px solid transparent;
+  border-bottom: 34px solid rgba(79, 70, 229, 0.28);
+  transform-origin: 50% 100%;
+  transform: translate(-50%, -100%) rotate(var(--turn, 0deg));
+  pointer-events: none;
+}
+.avatar-marker:hover {
+  transform: translate(-50%, -50%) scale(1.15);
+}
+.map-navigator .pegman {
+  cursor: grab;
+  color: var(--accent, #4f46e5);
+  touch-action: none;
+}
+.map-navigator .pegman.lifted {
+  cursor: grabbing;
+  color: var(--ink-soft);
+}
+.pegman-ghost {
+  position: absolute;
+  z-index: 30;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+  color: var(--accent, #4f46e5);
+  filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.35));
+}
+/* The place picker's browse mode: levels first, then the places on one. */
+.place-level,
+.place-back {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 13px;
+  font-weight: 500;
+}
+.place-level small {
+  margin-left: auto;
+  color: var(--ink-faint);
+  font-weight: 400;
+}
+.place-level:hover,
+.place-back:hover {
+  background: var(--panel-soft);
+}
+.place-back {
+  color: var(--ink-soft);
+  border-bottom: 1px solid var(--line);
+  position: sticky;
+  top: 0;
+  background: var(--panel);
+  z-index: 1;
+}
+.place-group {
+  padding: 7px 10px 3px;
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+.place-option.here {
+  color: var(--accent-ink);
+  border-bottom: 1px solid var(--line);
 }

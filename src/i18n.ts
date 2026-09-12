@@ -70,6 +70,12 @@ export const en = {
     unreachable: 'No route found',
     unreachableHint: 'These places are not connected by the drawn route network.',
     pick: 'Choose a start and a destination to see directions.',
+    here: 'Where you are',
+    hereHint: 'Where the walk left you',
+    levels: 'Browse by level',
+    allLevels: 'All levels',
+    places: 'places',
+    more: 'Scroll for more…',
   },
   map: {
     basemapUnavailable: 'Basemap unavailable. Your plan is still available; choose Plan background.',

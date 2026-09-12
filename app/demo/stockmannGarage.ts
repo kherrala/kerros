@@ -49,10 +49,14 @@ const BAY_DEEP = 5,
 // Enough aisle modules to fill the deck north-to-south; bays that fall outside a deck are dropped, so
 // the smaller lower decks simply end up with shorter rows.
 const AISLES = [-2 * MODULE, -MODULE, 0, MODULE, 2 * MODULE];
-const CONCRETE = '#626873',
-  MARKING = '#666c77',
-  LANE = '#585e69',
-  RAMP_DECK = '#454a53';
+// Concrete, in daylight-grey rather than the blue-black the decks used to be: the plate is the one
+// surface you see most of from inside the garage, and lit by its own lamps it has to read as
+// concrete, not as a void. The lanes are the same concrete worn darker, the bays a little lighter
+// where the paint is.
+const CONCRETE = '#8f918e',
+  MARKING = '#9c9e9a',
+  LANE = '#7d7f7c',
+  RAMP_DECK = '#6c6e6b';
 
 const add = (a: Point, b: Point): Point => [a[0] + b[0], a[1] + b[1]];
 const scale = (v: Point, k: number): Point => [v[0] * k, v[1] * k];
@@ -181,6 +185,18 @@ export function stockmannGarage(p: ProjectDocument): void {
         LANE,
       );
       lane.symbol = 'driveway';
+      // Strip lights down the middle of every drive lane, one every eight metres, which is what
+      // lights a garage. Without them the walk had nothing to light the deck by and it read as a
+      // black floor under a bright lid.
+      for (let e = lo + 4; e < hi - 2; e += 8) {
+        const lamp = createObject('light', at(c, e, aisle), deck.id, `Aisle ${a + 1} light`);
+        lamp.width = 1.5;
+        lamp.depth = 0.25;
+        lamp.height = 3.1;
+        lamp.rotation = heading(EAST);
+        lamp.light = { kelvin: 4200, intensity: 40, range: 14, flicker: e % 24 === 0 ? 0.35 : 0 };
+        p.objects.push(lamp);
+      }
       for (const side of [-1, 1] as const) {
         const bandSouth = aisle + side * (AISLE / 2 + BAY_DEEP / 2);
         const band: SiteObject[] = [];
@@ -204,6 +220,9 @@ export function stockmannGarage(p: ProjectDocument): void {
             special === 'ev' ? '#4f7f6a' : special === 'accessible' ? '#4a6a90' : MARKING,
           );
           stall.symbol = 'parking';
+          // A bay is part of its deck, and says so: the deck's outline is the deck, not the deck
+          // and every bay on it — which is what the excavation and the exterior-wall test read.
+          stall.parentId = plate.id;
           if (special) stall.category = special;
           band.push(stall);
           // Roughly half the bays are taken; cars nose in toward the aisle.

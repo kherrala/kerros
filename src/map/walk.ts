@@ -1,27 +1,32 @@
-// First-person walk mode: drives the MapLibre camera as if it were a person standing on the active
-// floor. MapLibre has no eye — it has a ground point it looks AT, a pitch and a zoom — so "standing
-// two metres up" is a zoom solved from the pitch, and "looking ahead" is the centre pushed forward
-// along the bearing. Both halves already existed (MapCanvas.fit() measures the altitude that way,
-// journey.ts/aimCenter shifts a centre for elevation); this module inverts them and adds the part a
-// map has never needed: a body that cannot walk through a wall.
+// First-person walk mode: the MapLibre camera becomes a person standing on the active floor, driven
+// the way every first-person game drives one — W A S D and the arrows to move, the mouse to aim.
+//
+// MapLibre has no eye of its own: it has a ground point it looks AT, a pitch, and a zoom. Where the
+// eye ends up is a consequence of the three, and solving them by hand with the wrong tile size is
+// how the previous walk came to stand at half its own height. eyeCamera() is that solve done the
+// way MapLibre's own calculateCameraOptionsFromCameraLngLatAltRotation() does it — the same mercator
+// arithmetic, the same zoom formula — so this module only has to say where the person is and which
+// way they face, plus the geometry a map has never needed: a body that cannot walk through a wall.
 //
 // Deliberately free of React and of the document model: it takes plan-coordinate wall rectangles and
-// gives back a pose, so the geometry is testable without a GL context.
-import type { Map as GLMap } from 'maplibre-gl';
+// gives back a pose, so everything below the controller is testable without a GL context.
+import maplibregl, { type Map as GLMap } from 'maplibre-gl';
 import type { Origin, Point, Ring } from '../model/types';
 import { toLngLat } from '../model/geometry';
-import { aimCenter } from './journey';
 
 /** Eye above the slab it stands on. A constant, not the floor's height: a mezzanine and a hall are
  *  different rooms but the same visitor. */
 export const EYE = 1.7;
 /** Shoulder radius. Generous enough that you do not clip a corner, tight enough for a 0.9 m door. */
 export const BODY = 0.28;
-export const WALK_SPEED = 1.4; // m/s, an unhurried indoor pace
-export const RUN_SPEED = 3.4; // Shift: covering a department without waiting for it
-/** Following a route on its own. Brisker than a stroll, because nobody watches a demonstration at
- *  1.4 m/s, and well short of the 4 m/s the fly-over uses — at eye level that is a sprint. */
-export const TOUR_SPEED = 2.4;
+/** Faster than anyone walks a corridor, because on a screen the corridor is the size of a hand and
+ *  a literal 1.4 m/s reads as wading. Games settle around 3–4 m/s for the same reason. */
+export const WALK_SPEED = 3;
+export const RUN_SPEED = 6; // Shift: covering a department without waiting for it
+/** Following a route on its own. A touch over walking pace, because nobody watches a demonstration
+ *  dawdle, and short of the run — a tour is for looking about you, and at eye level 6 m/s is a
+ *  sprint. */
+export const TOUR_SPEED = 3.5;
 /** How fast the head can swing while a route is driving. A corner taken at the full rate still
  *  reads as a turn rather than as a cut, and anything quicker is the sharp turn this replaced. */
 export const TURN_RATE = 120;
@@ -29,24 +34,50 @@ export const TURN_RATE = 120;
  *  segment you are on is what makes the camera begin its turn before the corner instead of at it —
  *  it is also what a person does, which is why it looks right. */
 export const LOOK_AHEAD = 2.6;
-/** How far the head turns. 85° is MapLibre's hard ceiling and is as level as its camera goes, so
- *  "look up" can only mean "back towards level" — and the resting pitch has to sit below the ceiling
- *  or dragging up does nothing at all. Below 60° the zoom solved for eye height runs past what the
- *  map will give, which would quietly lift the eye off the floor. */
-export const MIN_PITCH = 60,
-  MAX_PITCH = 85;
-/** Where the head rests: a few degrees off level, so there is somewhere to look in both directions
- *  and enough of the near floor in frame that walking reads as walking. */
-export const REST_PITCH = 80;
-/** The map's zoom ceiling, which is what bounds MIN_PITCH: looking down needs more zoom than looking
- *  level, and a solve that hits the ceiling lifts the eye off the floor without saying so. Kept here
- *  rather than in MapCanvas so the two cannot drift apart. */
-export const MAX_MAP_ZOOM = 26;
-export const LOOK_SPEED = 0.22; // degrees per pixel dragged
-export const TURN_SPEED = 90; // degrees per second for Q/E and arrow turning
+/** Pitch is MapLibre's: 0 looks straight down at the ground, 90 is level with it. The head can drop
+ *  to 55° below level — enough to read a floor marking at your feet — and rise to a degree short of
+ *  level. Not level itself: at 90° the point the map looks at leaves the ground, and MapLibre then
+ *  has to invent a target in the sky, which pulls its zoom (and every zoom-gated layer) down to
+ *  what a satellite would use. At 89° the target is a hundred-odd metres up the corridor, the
+ *  horizon is a degree above the middle of the frame, and nothing has to be invented. */
+export const MIN_PITCH = 35,
+  MAX_PITCH = 89;
+/** Where the head rests: a few degrees below level, so the near floor is in frame and walking reads
+ *  as walking, with room to look up from. */
+export const REST_PITCH = 86;
+/** The plan camera's zoom ceiling, and the one the walk raises it to while it has the map. MapLibre
+ *  puts its camera at the eye by choosing a zoom for the ground point the eye looks at, and jumpTo
+ *  clamps that zoom to the ceiling without a word — a ceiling the solve can hit is a ceiling that
+ *  silently lifts the eye off the floor. A 2 m eye looking 55° down on a 4K display at the equator
+ *  needs 26.6, so the walk's ceiling is 28. Kept here so MapCanvas and the solve agree. */
+export const MAX_MAP_ZOOM = 26,
+  WALK_ZOOM = 28;
+/** The most device pixels per CSS pixel the walk will draw. A retina display asks for two, which
+ *  is four times the pixels of one, and at eye level every one of them is lit by the sun, the sky
+ *  and four lamps with shadows: a dense floor measured at 11 frames a second at two and 35 at one.
+ *  A plan is read; a walk is watched, and a watched picture has to move. 1.25 keeps most of the
+ *  crispness of a retina display for a third of its cost. */
+export const WALK_PIXEL_RATIO = 1.25;
+/** Degrees the view turns per pixel the mouse moves while the pointer is locked. */
+export const MOUSE_LOOK = 0.12;
+/** Degrees per pixel when dragging instead — the fallback when the browser refuses the lock. A drag
+ *  is a deliberate motion and wants a bit more turn for its trouble. */
+export const DRAG_LOOK = 0.22;
+export const TURN_SPEED = 120; // degrees per second for A, D and the arrow keys
 /** A wall piece whose underside clears this is a head-height lintel — the strip over a door — and you
  *  walk under it. Anything lower is something you walk into. */
 export const HEAD_ROOM = 1.25;
+
+/** Where the walker is, kept apart from the camera: the camera is whatever mode you are in, the
+ *  avatar is the person, and they persist across leaving the walk and coming back to it. */
+export interface WalkAvatar {
+  floorId: string | null;
+  /** Plan metres. */
+  position: Point;
+  /** Clockwise from plan +Y, as WalkPose.heading. */
+  heading: number;
+  pitch?: number;
+}
 
 export interface WalkPose {
   /** Where the walker stands, in plan metres. */
@@ -54,13 +85,16 @@ export interface WalkPose {
   /** Clockwise from plan +Y, matching the plan's own grid rather than the compass. */
   heading: number;
   pitch: number;
-  /** True while the mouse is held down and turning the view. */
+  /** True while the mouse is aiming the view — the pointer is locked, or held down and dragged. */
   looking: boolean;
+  /** True while the browser has given the pointer to the walk: no cursor, and Esc hands it back. */
+  locked: boolean;
 }
 
 /* ------------------------------------------------------------------ geometry */
 
 const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+const wrap = (deg: number) => ((deg % 360) + 360) % 360;
 
 /** Nearest point to `p` on the segment ab. */
 function onSegment(p: Point, a: Point, b: Point): Point {
@@ -122,14 +156,56 @@ export function unstick(p: Point, walls: Ring[], r = BODY): Point {
   return out;
 }
 
-/** The zoom at which MapLibre's camera sits `eye` metres above the ground it is aimed at.
+/** The MapLibre camera that stands at `eye`, `alt` metres up, facing `bearing` and tilted `pitch`:
+ *  the ground point it looks at and the zoom that puts it that far away.
  *
- *  MapCanvas.fit() reads the altitude as cameraToCenterDistance · metresPerPixel · cos(pitch); this
- *  is that solved for zoom. Steeper pitch means a nearer target, so the same eye height needs less
- *  zoom — which is why pitch has to be decided before zoom every frame. */
-export function eyeZoom(lat: number, screenDistance: number, pitchDeg: number, eye: number): number {
-  const cos = Math.cos((pitchDeg * Math.PI) / 180);
-  return Math.log2((156543.03392 * Math.cos((lat * Math.PI) / 180) * screenDistance * cos) / Math.max(eye, 0.2));
+ *  This is MapLibre's calculateCenterFromCameraLngLatAlt() for a camera that looks at the ground —
+ *  the ray from the eye meets the ground alt/cos(pitch) away, and the zoom is the one at which that
+ *  distance fills cameraToCenterDistance pixels. MapLibre's own copy gives up within six degrees of
+ *  level and invents a target ten kilometres off instead, which is fine for a plane and is a 700 m
+ *  eye for a person; this one holds to the ground right up to MAX_PITCH. The mercator scale is
+ *  taken at the target rather than the eye, iterated, because a metre is a different fraction of
+ *  the world at each latitude and the target is the point the zoom is measured at. */
+export function eyeCamera(
+  view: { cameraToCenterDistance: number; tileSize: number },
+  eye: [number, number],
+  alt: number,
+  bearing: number,
+  pitch: number,
+): { center: [number, number]; zoom: number } {
+  const pitchRad = (Math.min(pitch, MAX_PITCH) * Math.PI) / 180,
+    bearingRad = (bearing * Math.PI) / 180;
+  const distance = alt / Math.cos(pitchRad); // eye to target, along the view
+  const dx = Math.sin(pitchRad) * Math.sin(bearingRad),
+    dy = -Math.sin(pitchRad) * Math.cos(bearingRad); // mercator y grows southward
+  const from = maplibregl.MercatorCoordinate.fromLngLat({ lng: eye[0], lat: eye[1] }, alt);
+  let perMetre = from.meterInMercatorCoordinateUnits();
+  let target = from;
+  for (let i = 0; i < 10; i++) {
+    const d = distance * perMetre;
+    target = new maplibregl.MercatorCoordinate(from.x + dx * d, from.y + dy * d, 0);
+    const next = target.meterInMercatorCoordinateUnits();
+    if (Math.abs(next - perMetre) < 1e-18) break;
+    perMetre = next;
+  }
+  const ll = target.toLngLat();
+  return {
+    center: [ll.lng, ll.lat],
+    zoom: Math.log2(view.cameraToCenterDistance / (distance * perMetre) / view.tileSize),
+  };
+}
+
+/** What a mouse movement does to where you are looking. Right turns you right; up looks up — which
+ *  in MapLibre's terms is a LARGER pitch, 90 being level and 0 the floor. The head stops at the
+ *  limits rather than wrapping: nobody looks at the ceiling by looking too far at their feet. */
+export function aim(
+  heading: number,
+  pitch: number,
+  dx: number,
+  dy: number,
+  perPixel = MOUSE_LOOK,
+): { heading: number; pitch: number } {
+  return { heading: wrap(heading + dx * perPixel), pitch: clamp(pitch - dy * perPixel, MIN_PITCH, MAX_PITCH) };
 }
 
 /** One frame of walking: what the held keys do to a heading and a position over `dt` seconds.
@@ -138,12 +214,12 @@ export function eyeZoom(lat: number, screenDistance: number, pitchDeg: number, e
  *  and which key carries you — and that opinion is worth stating somewhere a test can read it.
  *  Returns the new heading and the step to take, in plan metres, before any wall gets a say. */
 export function stride(keys: ReadonlySet<string>, heading: number, dt: number): { heading: number; step?: Point } {
-  // Turning is a turn on the spot: the arrows swing you round your own axis and move you nowhere,
-  // which is what a person does when they look down a different corridor. Strafing — sidling along
-  // without turning — is A and D, and is a different thing that wants a different key.
+  // Turning is a turn on the spot: A, D and the arrows swing you round your own axis and move you
+  // nowhere, which is what a person does when they look down a different corridor. Strafing —
+  // sidling along without turning — is Q and E, and is a different thing that wants a different key.
   let facing = heading;
   if (keys.has('turnLeft') !== keys.has('turnRight'))
-    facing = (((facing + (keys.has('turnRight') ? 1 : -1) * TURN_SPEED * dt) % 360) + 360) % 360;
+    facing = wrap(facing + (keys.has('turnRight') ? 1 : -1) * TURN_SPEED * dt);
   const ahead = (keys.has('ahead') ? 1 : 0) - (keys.has('back') ? 1 : 0);
   const side = (keys.has('right') ? 1 : 0) - (keys.has('left') ? 1 : 0);
   if (!ahead && !side) return { heading: facing };
@@ -193,17 +269,17 @@ export function alongPath(
   // hair short of the end — otherwise the two coincide on the last step, the direction collapses to
   // nothing and the walker finishes facing plan north instead of facing the way they arrived.
   const from = pick(Math.min(travelled, total - 1e-3));
-  const aim = pick(Math.min(total, travelled + ahead));
-  const dx = aim[0] - from[0],
-    dy = aim[1] - from[1];
-  const heading = Math.hypot(dx, dy) < 1e-6 ? 0 : ((((Math.atan2(dx, dy) * 180) / Math.PI) % 360) + 360) % 360;
+  const aimAt = pick(Math.min(total, travelled + ahead));
+  const dx = aimAt[0] - from[0],
+    dy = aimAt[1] - from[1];
+  const heading = Math.hypot(dx, dy) < 1e-6 ? 0 : wrap((Math.atan2(dx, dy) * 180) / Math.PI);
   return { at, heading, done: travelled >= total, left: Math.max(0, total - travelled) };
 }
 
 /** Turn `from` towards `to` by at most `step` degrees, the short way round. */
 export function easeHeading(from: number, to: number, step: number): number {
   const delta = ((((to - from + 540) % 360) + 360) % 360) - 180;
-  return (((from + clamp(delta, -step, step)) % 360) + 360) % 360;
+  return wrap(from + clamp(delta, -step, step));
 }
 
 /* ------------------------------------------------------------------ controller */
@@ -223,25 +299,36 @@ export interface WalkCallbacks {
   onUse(down: boolean): void;
   /** Escape with no pointer lock to release: the host leaves walk mode. */
   onExit(): void;
+  /** M: the walker wants the sound on or off. */
+  onSound?(): void;
 }
 
 const HANDLERS = ['dragPan', 'dragRotate', 'scrollZoom', 'keyboard', 'touchZoomRotate', 'doubleClickZoom'] as const;
 type Handler = (typeof HANDLERS)[number];
 
-const KEYS: Record<string, string> = {
+/** The keys, by physical position rather than by letter so the layout survives a French or a Dvorak
+ *  keyboard. W and S walk, A and D turn — the way Doom bound the arrows, and what a person
+ *  walking a floor plan reaches for: the point of A is to look down the other corridor, not to
+ *  sidle towards it. Q and E sidestep for whoever wants it, the arrows mirror the letters, and Shift
+ *  runs. */
+export const KEYS: Record<string, string> = {
   KeyW: 'ahead',
   ArrowUp: 'ahead',
   KeyS: 'back',
   ArrowDown: 'back',
-  KeyA: 'left',
-  KeyD: 'right',
-  KeyQ: 'turnLeft',
+  KeyA: 'turnLeft',
   ArrowLeft: 'turnLeft',
-  KeyE: 'turnRight',
+  KeyD: 'turnRight',
   ArrowRight: 'turnRight',
+  KeyQ: 'left',
+  KeyE: 'right',
   ShiftLeft: 'fast',
   ShiftRight: 'fast',
 };
+
+/** Esc leaves the pointer lock, and the browser may deliver that key to the page as well as acting
+ *  on it. For this long after an unlock a second Esc is taken to be the same one. */
+const UNLOCK_GRACE_MS = 300;
 
 export class WalkController {
   private map?: GLMap;
@@ -250,9 +337,14 @@ export class WalkController {
   private keys = new Set<string>();
   private frame = 0;
   private last = 0;
-  private dragging = false;
   private handlers: [Handler, boolean][] = [];
+  private maxPitch = 60;
+  private maxZoom = 22;
+  private pixelRatio = 1;
   private running = false;
+  private dragging = false;
+  private locked = false;
+  private unlockedAt = -Infinity;
   private drag: Point = [0, 0];
   private path: Point[] | null = null;
   private travelled = 0;
@@ -267,7 +359,7 @@ export class WalkController {
     this.map = map;
     this.origin = origin;
     this.position = start.position;
-    this.heading = start.heading;
+    this.heading = wrap(start.heading);
     this.pitch = clamp(start.pitch ?? REST_PITCH, MIN_PITCH, MAX_PITCH);
     this.running = true;
     // MapLibre's own handlers would fight every jumpTo we make, and its keyboard handler eats the
@@ -276,17 +368,27 @@ export class WalkController {
     // different map than we were given is how a mode leaves damage behind it.
     this.handlers = HANDLERS.map(h => [h, map[h]?.isEnabled() ?? false]);
     for (const [h] of this.handlers) map[h]?.disable();
+    // jumpTo clamps to the map's pitch and zoom ceilings without a word, and the plan camera's are
+    // below where a walker looks and how near the floor they stand. Raise both for the walk, and
+    // put them back with the handlers.
+    this.maxPitch = map.getMaxPitch();
+    this.maxZoom = map.getMaxZoom();
+    map.setMaxPitch(Math.max(this.maxPitch, MAX_PITCH));
+    map.setMaxZoom(Math.max(this.maxZoom, WALK_ZOOM));
+    this.pixelRatio = map.getPixelRatio();
+    if (this.pixelRatio > WALK_PIXEL_RATIO) map.setPixelRatio(WALK_PIXEL_RATIO);
     const canvas = map.getCanvas();
     canvas.addEventListener('pointerdown', this.grab);
     canvas.addEventListener('pointermove', this.look);
     canvas.addEventListener('pointerup', this.drop);
     canvas.addEventListener('pointercancel', this.drop);
+    document.addEventListener('pointerlockchange', this.lockChanged);
     window.addEventListener('keydown', this.down, true);
     window.addEventListener('keyup', this.up, true);
     window.addEventListener('blur', this.release);
     this.last = performance.now();
     this.frame = requestAnimationFrame(this.tick);
-    map.getCanvas().style.cursor = 'grab';
+    canvas.style.cursor = 'crosshair';
     this.apply();
   }
 
@@ -296,18 +398,25 @@ export class WalkController {
     this.cancelFollow();
     cancelAnimationFrame(this.frame);
     this.keys.clear();
+    document.removeEventListener('pointerlockchange', this.lockChanged);
+    window.removeEventListener('keydown', this.down, true);
+    window.removeEventListener('keyup', this.up, true);
+    window.removeEventListener('blur', this.release);
     if (!map) return;
     const canvas = map.getCanvas();
     canvas.removeEventListener('pointerdown', this.grab);
     canvas.removeEventListener('pointermove', this.look);
     canvas.removeEventListener('pointerup', this.drop);
     canvas.removeEventListener('pointercancel', this.drop);
-    window.removeEventListener('keydown', this.down, true);
-    window.removeEventListener('keyup', this.up, true);
-    window.removeEventListener('blur', this.release);
+    if (document.pointerLockElement === canvas) document.exitPointerLock?.();
+    this.locked = false;
+    this.dragging = false;
     canvas.style.cursor = '';
     for (const [h, was] of this.handlers) if (was) map[h]?.enable();
     this.handlers = [];
+    map.setMaxPitch(this.maxPitch);
+    map.setMaxZoom(this.maxZoom);
+    if (map.getPixelRatio() !== this.pixelRatio) map.setPixelRatio(this.pixelRatio);
     this.map = undefined;
   }
 
@@ -343,7 +452,7 @@ export class WalkController {
   /** Put the walker somewhere — arriving at a new floor, or jumping to a route's start. */
   place(position: Point, heading = this.heading) {
     this.position = position;
-    this.heading = heading;
+    this.heading = wrap(heading);
     if (this.running) this.apply();
   }
 
@@ -352,22 +461,45 @@ export class WalkController {
       position: this.position,
       heading: this.heading,
       pitch: this.pitch,
-      looking: this.dragging,
+      looking: this.locked || this.dragging,
+      locked: this.locked,
     };
   }
 
-  /** Turning is drag, not pointer lock. Lock takes the cursor away from the rest of the app — the
-   *  floor selector, the panels and the other view modes are all still there — and a mode you have
-   *  to press Escape to get out of is a mode you get trapped in. Drag also asks the browser for no
-   *  permission and needs no gesture it might refuse. */
+  /** A click takes the mouse: the pointer is locked to the canvas and its movement turns the head,
+   *  the way a first-person game does it. The browser can refuse — no support, a permission policy,
+   *  or Chrome's cool-down after Esc released the last lock — so the same click also begins a drag,
+   *  and the drag stays in force only if the lock never arrives. */
   private grab = (e: PointerEvent) => {
-    if (e.button !== 0) return;
+    if (e.button !== 0 || e.pointerType === 'touch') return;
     const canvas = this.map?.getCanvas();
     if (!canvas) return;
+    e.preventDefault();
+    // A click while the pointer is already locked is nothing: the mouse is aiming, and Chrome
+    // throws on a capture request from a locked element. The drag is only for when there is no lock.
+    if (this.locked || document.pointerLockElement === canvas) return;
     this.dragging = true;
     this.drag = [e.clientX, e.clientY];
-    canvas.setPointerCapture(e.pointerId);
-    canvas.style.cursor = 'grabbing';
+    try {
+      canvas.setPointerCapture(e.pointerId);
+    } catch {
+      /* the pointer went away between down and here; the drag ends with the next up */
+    }
+    if (!this.locked && document.pointerLockElement !== canvas) {
+      try {
+        // Raw mouse input first — no OS acceleration, which is what aiming wants — and a plain
+        // lock when the platform has none, because Chrome refuses the whole request rather than
+        // settling for the plain one. Chrome returns a promise; Safari and Firefox return nothing
+        // and report through pointerlockerror instead. Either way a refusal leaves the drag.
+        const lock = canvas.requestPointerLock as (o?: unknown) => Promise<void> | undefined;
+        lock
+          .call(canvas, { unadjustedMovement: true })
+          ?.catch(() => lock.call(canvas))
+          ?.catch(() => undefined);
+      } catch {
+        /* no pointer lock here: drag to look */
+      }
+    }
     this.on.onPose(this.pose);
   };
 
@@ -376,23 +508,36 @@ export class WalkController {
     this.dragging = false;
     const canvas = this.map?.getCanvas();
     if (canvas?.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
-    if (canvas) canvas.style.cursor = 'grab';
+    this.on.onPose(this.pose);
+  };
+
+  private lockChanged = () => {
+    const canvas = this.map?.getCanvas();
+    const locked = !!canvas && document.pointerLockElement === canvas;
+    if (locked === this.locked) return;
+    this.locked = locked;
+    if (locked)
+      this.dragging = false; // the lock supersedes the drag that asked for it
+    else this.unlockedAt = performance.now();
     this.on.onPose(this.pose);
   };
 
   private release = () => this.keys.clear();
 
   private look = (e: PointerEvent) => {
-    if (!this.dragging) return;
-    const [px, py] = this.drag;
-    this.drag = [e.clientX, e.clientY];
-    // Mouse-look, not map-drag: the view follows the hand. Drag right and you turn right, drag up
-    // and you look up — the same way round on both axes, which is the half of it that was wrong when
-    // horizontal dragged the world and vertical dragged the head.
-    this.heading = (((this.heading + (e.clientX - px) * LOOK_SPEED) % 360) + 360) % 360;
-    // Looking up is a LARGER pitch: 85 is as level as MapLibre's camera goes and 0 is straight down,
-    // so the sign is inverted relative to the usual "pitch up" reading.
-    this.pitch = clamp(this.pitch - (e.clientY - py) * LOOK_SPEED, MIN_PITCH, MAX_PITCH);
+    let dx: number, dy: number;
+    if (this.locked) {
+      dx = e.movementX;
+      dy = e.movementY;
+    } else if (this.dragging) {
+      dx = e.clientX - this.drag[0];
+      dy = e.clientY - this.drag[1];
+      this.drag = [e.clientX, e.clientY];
+    } else return;
+    if (!dx && !dy) return;
+    const turned = aim(this.heading, this.pitch, dx, dy, this.locked ? MOUSE_LOOK : DRAG_LOOK);
+    this.heading = turned.heading;
+    this.pitch = turned.pitch;
     this.apply();
   };
 
@@ -401,6 +546,9 @@ export class WalkController {
     const target = e.target as HTMLElement | null;
     if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
     if (e.code === 'Escape') {
+      // With the pointer locked, Esc is the browser's: it releases the lock, and the walk carries
+      // on. Only an Esc with nothing left to release leaves the walk.
+      if (this.locked || performance.now() - this.unlockedAt < UNLOCK_GRACE_MS) return;
       this.on.onExit();
       return;
     }
@@ -408,6 +556,12 @@ export class WalkController {
       e.preventDefault();
       e.stopImmediatePropagation();
       this.on.onUse(e.shiftKey);
+      return;
+    }
+    if (e.code === 'KeyM') {
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      this.on.onSound?.();
       return;
     }
     const action = KEYS[e.code];
@@ -428,10 +582,13 @@ export class WalkController {
   private tick = (now: number) => {
     if (!this.running) return;
     this.frame = requestAnimationFrame(this.tick);
-    const dt = Math.min((now - this.last) / 1000, 0.1); // a backgrounded tab must not teleport you
+    // Capped, so a backgrounded tab does not teleport you when it comes back — but not at a frame's
+    // worth: a dense floor can render at a few frames a second, and a cap of 100 ms then takes the
+    // missing time out of your stride and makes the whole walk slow.
+    const dt = Math.min((now - this.last) / 1000, 0.25);
     this.last = now;
     if (this.path) {
-      // Touching a movement key takes the tour back off the route; dragging to look around does not,
+      // Touching a movement key takes the tour back off the route; aiming the view does not,
       // because looking about you while the route carries you on is the whole point of watching it.
       if (this.keys.size) this.cancelFollow();
       else return this.advance(dt);
@@ -461,22 +618,16 @@ export class WalkController {
     }
   }
 
-  /** One camera write per frame: pitch decides the zoom, the zoom decides how far ahead to aim. */
+  /** One camera write per frame. The eye is where the walker stands, `terrain.eye` metres up, facing
+   *  `heading` and tilted `pitch`; eyeCamera() turns that into the ground point the camera looks at
+   *  and how far away it is, which is all a MapLibre camera can be told. */
   private apply() {
     const map = this.map;
     if (!map) return;
-    const bearing = (((this.heading + (this.origin[2] ?? 0)) % 360) + 360) % 360;
-    const stand = toLngLat(this.position, this.origin);
-    const screenDistance =
-      (map as unknown as { transform?: { cameraToCenterDistance?: number } }).transform?.cameraToCenterDistance ??
-      map.getCanvas().height * 1.5;
-    const eye = this.terrain.eye;
-    map.jumpTo({
-      center: aimCenter(stand as [number, number], eye, this.pitch, bearing),
-      zoom: eyeZoom(stand[1], screenDistance, this.pitch, eye),
-      bearing,
-      pitch: this.pitch,
-    });
+    const bearing = wrap(this.heading + (this.origin[2] ?? 0));
+    const eye = toLngLat(this.position, this.origin);
+    const camera = eyeCamera(map.transform, [eye[0], eye[1]], this.terrain.eye, bearing, this.pitch);
+    map.jumpTo({ center: camera.center, zoom: camera.zoom, bearing, pitch: this.pitch });
     this.on.onPose(this.pose);
   }
 }

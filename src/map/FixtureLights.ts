@@ -13,6 +13,12 @@ export function fixtureOutput(id: string, seconds: number, flicker = 0): number 
   return 1 - flicker * (dropout ? 0.95 : 0.015 * (1 + Math.sin(seconds * 37 + hash)));
 }
 export const MAX_FIXTURE_LIGHTS = 4;
+/** How many of those throw shadows. A shadowed lamp is six shadow passes when it moves and a cube
+ *  of shadow taps on every pixel every frame; the two nearest carry the room, and the two beyond
+ *  them light without shadow, which nobody notices past the first two. The count is held constant
+ *  — an empty slot keeps its flag — because the shader is compiled for a number of shadowed lights
+ *  and changing that number recompiles every material in the scene. */
+export const SHADOWED_FIXTURE_LIGHTS = 2;
 
 /** All fittings are two instanced draws. Only the nearest few cast light/shadows, keeping the
  * shader and shadow-map budget constant whether the document contains ten lamps or ten thousand. */
@@ -21,7 +27,7 @@ export class FixtureLights {
   private colors: THREE.Color[];
   private emitters: THREE.InstancedMesh;
   private lights: THREE.PointLight[];
-  private active: number[] = [];
+  private active: (number | undefined)[] = [];
   private lastFlicker = -Infinity;
   private flickering: boolean;
   constructor(
@@ -70,7 +76,11 @@ export class FixtureLights {
     this.emitters.instanceColor!.setUsage(THREE.DynamicDrawUsage);
     this.lights = Array.from({ length: Math.min(MAX_FIXTURE_LIGHTS, fixtures.length) }, () => {
       const light = new THREE.PointLight('#fff', 0, 12, 2);
-      light.castShadow = true;
+      light.castShadow = false;
+      // Each lamp's shadow is six passes over the scene, and they are redrawn only when the lamp
+      // itself changes — see update(). Left on automatic, every one of them would be redrawn each
+      // time anything at all asked for shadows, the sun included.
+      light.shadow.autoUpdate = false;
       light.shadow.mapSize.set(256, 256);
       light.shadow.camera.near = 0.1;
       light.shadow.bias = -0.001;
@@ -78,20 +88,73 @@ export class FixtureLights {
       scene.add(light);
       return light;
     });
+    this.lights.slice(0, SHADOWED_FIXTURE_LIGHTS).forEach(light => {
+      light.castShadow = true;
+    });
+  }
+  /** The shadows go to the nearest lamps, and stay with them until a lamp without one is clearly
+   *  nearer — a swap redraws a shadow, so a walker straddling two lamps must not swap on every step.
+   *  Always exactly SHADOWED_FIXTURE_LIGHTS flags are set, empty slots included: see the constant. */
+  private assignShadows(eye: THREE.Vector3) {
+    const active = this.lights.map((light, slot) => ({ light, slot, i: this.active[slot] }));
+    const lit = active.filter(a => a.i !== undefined);
+    const distance = (a: (typeof lit)[number]) => this.points[a.i!].distanceToSquared(eye);
+    const nearest = [...lit].sort((a, b) => distance(a) - distance(b));
+    const casters = new Set(lit.filter(a => a.light.castShadow));
+    // Promote a lamp only when it is nearer than a current caster by a margin: 1.3 in squared
+    // distance is about 14 % in metres, a clear step and not a wobble.
+    for (const a of nearest.slice(0, SHADOWED_FIXTURE_LIGHTS)) {
+      if (casters.has(a)) continue;
+      const worst = [...casters].sort((x, y) => distance(y) - distance(x))[0];
+      if (worst && distance(a) * 1.3 < distance(worst)) {
+        casters.delete(worst);
+        casters.add(a);
+      } else if (casters.size < SHADOWED_FIXTURE_LIGHTS) casters.add(a);
+    }
+    // Pad with empty slots so the number of shadowed lights never changes.
+    for (const a of active) if (casters.size < SHADOWED_FIXTURE_LIGHTS && a.i === undefined) casters.add(a);
+    for (const a of active) {
+      const cast = casters.has(a);
+      if (cast && !a.light.castShadow) a.light.shadow.needsUpdate = true;
+      a.light.castShadow = cast;
+    }
+  }
+  /** Every lamp's shadow is stale — the scene changed under them. */
+  invalidate() {
+    for (const light of this.lights) light.shadow.needsUpdate = true;
   }
   update(eye: THREE.Vector3, seconds: number) {
-    const candidates = this.points
+    const ranked = this.points
       .map((at, i) => ({ i, distance: at.distanceToSquared(eye) }))
       .filter(
         ({ i, distance }) => this.fixtures[i].light!.intensity > 0 && distance < this.fixtures[i].light!.range ** 2,
       )
       .sort((a, b) => a.distance - b.distance)
-      .slice(0, this.lights.length)
       .map(c => c.i);
+    // A lamp keeps its slot for as long as it is lit and near: swapping a lamp means redrawing its
+    // shadow, six passes over everything it can reach, so the assignment has to be stable under a
+    // walker's ordinary jitter. Re-sorting by distance every frame was not — two lamps at similar
+    // range traded slots on every step and every step redrew both. A lamp stays while it ranks
+    // within one place of the cut, so a lamp on the boundary does not flicker in and out either.
+    const wanted = ranked.slice(0, this.lights.length);
+    const keep = new Set(ranked.slice(0, this.lights.length + 1));
+    const next: (number | undefined)[] = this.lights.map((_, slot) => {
+      const i = this.active[slot];
+      return i !== undefined && keep.has(i) ? i : undefined;
+    });
+    for (const i of wanted) {
+      if (next.includes(i)) continue;
+      const free = next.indexOf(undefined);
+      if (free < 0) break;
+      next[free] = i;
+    }
     let shadowsChanged = false;
     this.lights.forEach((light, slot) => {
-      const i = candidates[slot];
-      if (this.active[slot] !== i) shadowsChanged = true;
+      const i = next[slot];
+      if (this.active[slot] !== i) {
+        shadowsChanged = true;
+        light.shadow.needsUpdate = true;
+      }
       if (i === undefined) {
         light.intensity = 0;
         return;
@@ -104,7 +167,8 @@ export class FixtureLights {
       light.distance = spec.range;
       light.intensity = spec.intensity * fixtureOutput(o.id, seconds, spec.flicker);
     });
-    this.active = candidates;
+    this.active = next;
+    this.assignShadows(eye);
     if (this.flickering && seconds - this.lastFlicker >= 0.04) {
       this.fixtures.forEach((o, i) => {
         if (o.light!.flicker)

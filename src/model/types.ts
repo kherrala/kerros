@@ -88,7 +88,20 @@ export interface Floor {
    *  buildings anyone draws. A building's own lighting does not follow the sun, so this is what
    *  keeps a storey legible in a plan opened after dark. */
   light?: InteriorLight;
+  /** What this level sounds like from inside it — the default for every space on it that does not
+   *  say otherwise. Absent is silence. */
+  ambience?: Ambience;
 }
+/** The sound of a space, heard at eye level: a named preset of the building's own noises — the
+ *  ventilation, the ballasts, a compressor somewhere — and how loud, 0 to 1 (absent is 1). Kept in
+ *  the document rather than the renderer for the same reason light is: what a room sounds like
+ *  describes the room. */
+export interface Ambience {
+  preset: AmbiencePreset;
+  level?: number;
+}
+export type AmbiencePreset = 'silent' | 'office' | 'backrooms' | 'plant';
+export const AMBIENCE_PRESETS: AmbiencePreset[] = ['silent', 'office', 'backrooms', 'plant'];
 /** Colour temperature in kelvin (2700 tungsten, 4000 fluorescent, 6500 daylight) and how brightly,
  *  0 to 1. Kept here rather than in the renderer: what a space is lit by describes the space. */
 export interface InteriorLight {
@@ -210,6 +223,8 @@ export interface SiteObject {
   material?: MaterialKind;
   model?: ModelKind;
   light?: LightFixture;
+  /** A space's own sound, overriding its floor's. See Floor.ambience. */
+  ambience?: Ambience;
   /** Host-defined subtype/category (e.g. 'meeting-room', 'speedgate', 'cold-store') for styling, filtering and event handlers. */
   category?: string;
   /** Arbitrary host metadata; ignored by the core, available to style hooks and event handlers. */

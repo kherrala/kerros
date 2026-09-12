@@ -174,7 +174,9 @@ function Home() {
         // The Backrooms is the one sample whose whole point is being inside it — endless yellow rooms
         // read as a floor plan from above and as somewhere you are lost from eye level. It opens in
         // walk mode for the same reason a maze is not sold as a map of itself.
-        view: { floor: demo.initialFloorId, threeD: true, stack: false, walk: true },
+        // And on the plain ground: the rooms are nowhere, and the city they would otherwise be
+        // drawn over is the most expensive thing in a frame nothing of it appears in.
+        view: { floor: demo.initialFloorId, threeD: true, stack: false, walk: true, basemap: 'plan' },
       });
     } catch (e) {
       setError((e as Error).message);

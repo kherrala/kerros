@@ -87,7 +87,7 @@ import { enclosedRegion, enclosedRegions, refitEnclosedRooms } from './model/spa
 import { pruneOntology } from './model/ontology';
 import { derivedGraph } from './model/topology';
 import { importPlanEntities, type PlanImportReport } from './import/planImport';
-import { addNavEdge, addNavNode, chainVertical, findRoute } from './model/navigation';
+import { addNavEdge, addNavNode, chainVertical, findRoute, HERE, type RouteEnd } from './model/navigation';
 import { createObject } from './model/factory';
 import { transformObject } from './model/project';
 import { commitHistory, makeHistory, redoHistory, undoHistory } from './model/history';
@@ -98,6 +98,7 @@ import { neutralBasemap } from './adapters/basemap';
 import { openingFloorId } from './model/project';
 import { statusTone } from './adapters/status';
 import { MapCanvas } from './map/MapCanvas';
+import type { WalkAvatar } from './map/walk';
 import { EntityIcon } from './components/Icons';
 import { Inspector } from './components/Inspector';
 import { NavigatePanel } from './components/NavigatePanel';
@@ -208,7 +209,9 @@ export function SitePlanner({
   }, [initial]);
   const [coverage, setCoverage] = useState(false),
     [showLabels, setShowLabels] = useState(true),
-    [basemapMode, setBasemapMode] = useState<'plan' | 'host'>(adapters.basemap ? 'host' : 'plan'),
+    [basemapMode, setBasemapMode] = useState<'plan' | 'host'>(
+      adapters.basemap && initialView?.basemap !== 'plan' ? 'host' : 'plan',
+    ),
     [settings, setSettings] = useState(false),
     [palette, setPalette] = useState(false),
     [fullscreen, setFullscreen] = useState(false),
@@ -258,6 +261,10 @@ export function SitePlanner({
     [search, setSearch] = useState(''),
     [activeTab, setActiveTab] = useState<'structure' | 'objects'>('structure'),
     [statuses, setStatuses] = useState<Map<string, StatusReading>>(new Map());
+  // The person, apart from the camera: where the last walk ended, or where the person marker was
+  // dropped. Survives leaving the walk — the 2D plan shows them standing there — and not the project.
+  const [avatar, setAvatar] = useState<WalkAvatar | null>(null);
+  useEffect(() => setAvatar(null), [project.id]);
   // Indoor navigation: route-tool chaining anchor, the A-to-B panel and journey playback state.
   const [routeAnchor, setRouteAnchor] = useState<string | null>(null),
     [navigating, setNavigating] = useState(false),
@@ -271,10 +278,21 @@ export function SitePlanner({
     playingRef.current = false;
     setPlaying(false);
   }, []);
-  const route = useMemo(
-    () => (navFrom && navTo ? findRoute(history.present, navFrom, navTo) : null),
-    [history.present, navFrom, navTo],
-  );
+  // "Where you are" is the avatar — where the last walk left the person, or where the marker was
+  // dropped — and it is the start most people want, so the panel proposes it. It is a point, not
+  // an object, and the router takes it as one.
+  // While a route is being played the person is being carried along it, and a start that followed
+  // them would shorten the route under the playback step by step. The start is frozen where the
+  // play began and follows the person again once it stops.
+  const playStart = useRef<WalkAvatar | null>(null);
+  const route = useMemo(() => {
+    const at = playing ? (playStart.current ?? avatar) : avatar;
+    const end = (id: string | null): RouteEnd | null =>
+      id === HERE ? (at ? { floorId: at.floorId, position: at.position } : null) : id;
+    const a = end(navFrom),
+      b = end(navTo);
+    return a && b ? findRoute(history.present, a, b) : null;
+  }, [history.present, navFrom, navTo, avatar, playing]);
   useEffect(() => {
     stopPlaying();
     setPlayStep(null);
@@ -1856,6 +1874,13 @@ export function SitePlanner({
               }}
               walk={walk}
               onWalkExit={() => chooseMode('3d')}
+              avatar={avatar}
+              onAvatar={setAvatar}
+              onWalkAt={a => {
+                setAvatar(a);
+                if (a.floorId !== floorId) setFloorId(a.floorId);
+                chooseMode('walk');
+              }}
               onRequestFloor={id => setFloorId(id)}
               onReady={map => {
                 mapRef.current = map;
@@ -2369,6 +2394,7 @@ export function SitePlanner({
         ) : navigating ? (
           <NavigatePanel
             project={project}
+            here={avatar ? { floorId: avatar.floorId, position: avatar.position } : null}
             from={navFrom}
             to={navTo}
             route={route}
@@ -2386,6 +2412,7 @@ export function SitePlanner({
               setNavTo(null);
             }}
             onPlay={() => {
+              playStart.current = avatar;
               playingRef.current = true;
               setPlayStep(0);
               setPlaying(true);
@@ -2685,6 +2712,7 @@ export function SitePlanner({
                 ['⇧ ↑ / ⇧ ↓', 'Floor up / down'],
                 ['⇧ ← / ⇧ →', 'Rotate map'],
                 ['↑ ↓ ← →', 'Pan map · walk and turn'],
+                ['W A S D', 'Walk and turn · mouse to look'],
                 ['⇧ W / ⇧ S', 'Tilt 3D camera'],
                 ['N', 'Dark / light mode'],
                 ['B', 'Side panel'],

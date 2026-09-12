@@ -31,6 +31,7 @@ import { statusLabel, statusTone } from '../adapters/status';
 import { EntityIcon } from './Icons';
 import { Choice, Field, Toggle } from './controls';
 import { DEFAULT_LIGHT, kelvinColor, LAMPS, lampFor } from '../map/lighting';
+import { AMBIENCES } from '../map/ambience';
 
 interface Props {
   project: ProjectDocument;
@@ -511,6 +512,30 @@ export function Inspector(props: Props) {
                       <option value="parking">Parking</option>
                       <option value="assembly">Assembly point</option>
                       <option value="info">Information</option>
+                    </select>
+                  </label>
+                )}
+                {isSpace(object.kind) && (
+                  <label className="field">
+                    <span>Ambient sound</span>
+                    <select
+                      aria-label="Ambient sound"
+                      value={object.ambience?.preset ?? 'floor'}
+                      onChange={e =>
+                        update({
+                          ambience:
+                            e.target.value === 'floor'
+                              ? undefined
+                              : { preset: e.target.value as NonNullable<SiteObject['ambience']>['preset'] },
+                        })
+                      }
+                    >
+                      <option value="floor">Same as the floor</option>
+                      {AMBIENCES.map(a => (
+                        <option value={a.id} key={a.id} title={a.description}>
+                          {a.label}
+                        </option>
+                      ))}
                     </select>
                   </label>
                 )}
@@ -1100,6 +1125,27 @@ export function Inspector(props: Props) {
                     {LAMPS.map(lamp => (
                       <option value={lamp.id} key={lamp.id}>
                         {lamp.label} · {lamp.kelvin} K
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Ambient sound</span>
+                  <select
+                    aria-label="Ambient sound"
+                    value={floor.ambience?.preset ?? 'silent'}
+                    onChange={e =>
+                      props.onUpdateFloor(floor.id, {
+                        ambience:
+                          e.target.value === 'silent'
+                            ? undefined
+                            : { preset: e.target.value as NonNullable<Floor['ambience']>['preset'] },
+                      })
+                    }
+                  >
+                    {AMBIENCES.map(a => (
+                      <option value={a.id} key={a.id} title={a.description}>
+                        {a.label}
                       </option>
                     ))}
                   </select>

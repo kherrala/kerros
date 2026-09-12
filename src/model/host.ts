@@ -81,6 +81,10 @@ export interface ViewState {
   /** First-person walk-through. Implies threeD; stack is ignored while it is on. */
   walk?: boolean;
   camera?: CameraState;
+  /** Which map background to open on: the host's basemap, or the plain drawing ground. A project
+   *  that is nowhere in particular — a sample, a fiction, a plan not yet placed — has nothing to
+   *  gain from the city under it and pays to draw it. Absent means the host's basemap if it has one. */
+  basemap?: 'plan' | 'host';
   /** Which surface to open on. Absent means the plan viewer — right for a link someone was sent,
    *  wrong for a project the host just created or imported, where the point is to start drawing. */
   mode?: PlannerMode;

@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from 'react';
 import maplibregl, {
   type ExpressionSpecification,
   type FilterSpecification,
@@ -6,7 +13,7 @@ import maplibregl, {
   type ImageSource,
   type Map as GLMap,
 } from 'maplibre-gl';
-import { Compass, LocateFixed, Minus, Mountain, Plus, RotateCcw, RotateCw } from 'lucide-react';
+import { Compass, LocateFixed, Minus, Mountain, PersonStanding, Plus, RotateCcw, RotateCw } from 'lucide-react';
 import polygonClipping from 'polygon-clipping';
 import {
   isSpace,
@@ -33,6 +40,7 @@ import {
   rotate,
   toLngLat,
   toLocal,
+  rectangle,
 } from '../model/geometry';
 import { statusLabel, statusTone } from '../adapters/status';
 import { useKerrosTheme, useStrings, type MapStyleOptions } from '../theme';
@@ -53,7 +61,8 @@ import { aimCenter, JourneyPlayer } from './journey';
 import type { Route } from '../model/navigation';
 import { LIFT, SLAB } from './levels';
 import type { SceneLayer } from './SceneLayer';
-import { EYE, HEAD_ROOM, MAX_MAP_ZOOM, MIN_PITCH, unstick, WalkController, type WalkPose } from './walk';
+import { EYE, HEAD_ROOM, MAX_MAP_ZOOM, unstick, type WalkAvatar, WalkController, type WalkPose } from './walk';
+import { AmbienceEngine, ambienceAt } from './ambience';
 import { inSpace, spaceAt, spacePoint } from '../model/spaces';
 import { servedFloors } from '../model/vertical';
 import { floorIndex, undergroundView } from './underground';
@@ -93,6 +102,13 @@ export interface MapCanvasProps {
   walk?: boolean;
   /** Walk mode wants out (Escape with nothing else to release). */
   onWalkExit?: () => void;
+  /** Where the walker last stood, or was dropped — the person, kept apart from the camera. Drawn on
+   *  its floor in the other modes, and a walk resumes from it when it is in view. */
+  avatar?: WalkAvatar | null;
+  /** The walker moved. Throttled to a few times a second, and once more on leaving the walk. */
+  onAvatar?: (avatar: WalkAvatar) => void;
+  /** The person marker was dropped on the map, or the avatar clicked: walk from here. */
+  onWalkAt?: (avatar: WalkAvatar) => void;
   focusId?: string | null;
   alignment?: { image: Point[]; map: Point[] };
   /** Exact camera to restore (deep links); suppresses the automatic fit and 3D tilt-in on load. */
@@ -183,13 +199,20 @@ const siteBearing = (project: ProjectDocument) => project.origin[2] ?? 0;
 /** What walk mode tells the person walking: where they are, and what the level keys would do here. */
 interface WalkHint {
   looking: boolean;
+  /** The building's sound is playing (M turns it off). */
+  sound: boolean;
+  /** The browser has handed the pointer to the walk; Esc gives it back. */
+  locked: boolean;
   up: string | null;
   down: string | null;
   where: string;
   /** The next thing the active route asks you to do, and how far off it is. */
   next: string;
 }
-const NO_HINT: WalkHint = { looking: false, up: null, down: null, where: '', next: '' };
+const NO_HINT: WalkHint = { looking: false, sound: true, locked: false, up: null, down: null, where: '', next: '' };
+/** Where the walker's choice to mute lives between walks. A person who turned the hum off does not
+ *  want it back on at the next door. */
+const MUTED_KEY = 'kerros:walk-muted';
 
 export function MapCanvas(props: MapCanvasProps) {
   const container = useRef<HTMLDivElement>(null),
@@ -300,6 +323,33 @@ export function MapCanvas(props: MapCanvasProps) {
     tip.classList.toggle('nudge-left', r.left + half > w.right);
     tip.classList.toggle('nudge-right', r.left - half < w.left);
   };
+  /** Indoors at eye level the basemap is under the floor you stand on and behind the walls around
+   *  you: none of it is in the frame. At walking pitch the map runs to the horizon, so the vector
+   *  tiles it would fetch and draw for the far side of the city are the most expensive thing on a
+   *  screen they do not appear on. Hide every layer that is not ours; a source no visible layer
+   *  draws is one MapLibre stops loading tiles for. Remembered per layer and put back on the way
+   *  out, so a basemap that hides its own layers by zoom keeps its arrangement. */
+  const veiled = useRef(new Map<string, string>());
+  const veilBasemap = () => {
+    const m = map.current;
+    if (!m || !m.getStyle()) return;
+    const p = latest.current;
+    const hide = !!p.walk && p.floorId !== null;
+    if (hide) {
+      for (const layer of m.getStyle().layers ?? []) {
+        if (layer.id.startsWith('kerros-') || layer.type === 'background' || veiled.current.has(layer.id)) continue;
+        veiled.current.set(layer.id, (m.getLayoutProperty(layer.id, 'visibility') as string | undefined) ?? 'visible');
+        m.setLayoutProperty(layer.id, 'visibility', 'none');
+      }
+    } else if (veiled.current.size) {
+      for (const [id, was] of veiled.current) if (m.getLayer(id)) m.setLayoutProperty(id, 'visibility', was);
+      veiled.current.clear();
+    }
+  };
+  useEffect(() => {
+    if (ready) veilBasemap();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [props.walk, props.floorId, ready]);
   // Overlay symbols follow the camera imperatively so they never trail a pan while React catches up.
   const reposition = () => {
     const m = map.current,
@@ -308,9 +358,18 @@ export function MapCanvas(props: MapCanvasProps) {
     if (!m || !el) return;
     const byId = objectIndex.current;
     for (const child of Array.from(el.children) as HTMLElement[]) {
-      const { wx, wy, oid } = child.dataset;
+      const { wx, wy, oid, floor, bearing } = child.dataset;
       if (wx === undefined || wy === undefined) continue;
-      if (p.threeD && oid) {
+      // The avatar faces a compass bearing; on screen that is relative to the way the map is turned.
+      if (bearing !== undefined) child.style.setProperty('--turn', `${Number(bearing) - m.getBearing()}deg`);
+      if (p.threeD && floor !== undefined) {
+        const s = scene.current?.projectPoint([Number(wx), Number(wy)], floor || null);
+        if (s) {
+          child.style.left = `${s.x}px`;
+          child.style.top = `${s.y}px`;
+          child.style.visibility = s.visible ? '' : 'hidden';
+        }
+      } else if (p.threeD && oid) {
         const o = byId.get(oid);
         const s = o && scene.current?.projectObject(o);
         if (s) {
@@ -1148,14 +1207,13 @@ export function MapCanvas(props: MapCanvasProps) {
         zoom: cam?.zoom ?? 18.5,
         bearing: cam?.bearing ?? siteBearing(props.project),
         pitch: cam?.pitch ?? 0,
-        // 26, not 25: walk mode solves its zoom from its pitch, and looking down at the steepest the
-        // walker is allowed needs more zoom than looking level does. A ceiling the solve can hit is a
-        // ceiling that silently lifts the eye off the floor.
+        // The plan camera's ceiling. Walk mode needs more — its eye is 2 m off the floor — and
+        // raises it to its own while it has the map, rather than letting the plan scroll in that far.
         maxZoom: MAX_MAP_ZOOM,
         minZoom: 5,
-        // Walk mode puts the eye ~2 m above the slab, and the only way MapLibre expresses that is a
-        // very high zoom at a very steep pitch. The default ceiling of 60° leaves the horizon off
-        // screen and the eye a storey too high; 85° is as far as the projection stays sane.
+        // Walk mode looks along the floor, a degree short of level. The default ceiling of 60° keeps
+        // the horizon off screen; 85 is as far as the plan camera's own drag will tilt, and the walk
+        // raises it to its own limit while it has the map.
         maxPitch: 85,
         attributionControl: false,
         canvasContextAttributes: { antialias: true },
@@ -1197,8 +1255,10 @@ export function MapCanvas(props: MapCanvasProps) {
       cityHidden.current = '';
       cityIds.current = new Set();
       footprintFilters.current = new Map();
+      veiled.current.clear(); // a fresh style: whatever the old one had hidden is gone with it
       if (!m.getLayer('kerros-3d')) scene.current = null;
       sync();
+      veilBasemap();
       setReady(true);
       setFrame(n => n + 1);
       setMapError('');
@@ -1451,41 +1511,91 @@ export function MapCanvas(props: MapCanvasProps) {
   const [walkHint, setWalkHint] = useState<WalkHint>(NO_HINT);
   const hintRef = useRef<WalkHint>(NO_HINT);
   const hintAt = useRef(0);
+  const avatarAt = useRef(0);
+  // The person marker being dragged off the navigator, in map-wrap pixels; dropped on the map it
+  // becomes the avatar and the walk starts there. Google's pegman, for a floor plan.
+  const [peg, setPeg] = useState<{ x: number; y: number } | null>(null);
+  /** Where a screen point lands on the active floor's walking surface, in plan metres. The map
+   *  unprojects onto the ground; a floor presented above it meets the same ray nearer the camera, by
+   *  its elevation times tan(pitch) — the fit's depth-aim in reverse. */
+  const floorPoint = (m: GLMap, x: number, y: number): Point => {
+    const p = latest.current;
+    const ground = m.unproject([x, y]);
+    const lift = p.threeD && !p.walk ? undergroundView(p.project, p.floorId, p.stack).focusElevation + LIFT + SLAB : 0;
+    const at = lift
+      ? aimCenter([ground.lng, ground.lat], -lift, m.getPitch(), m.getBearing())
+      : [ground.lng, ground.lat];
+    return toLocal(at as Point, p.project.origin);
+  };
+  const dropPeg = (e: ReactPointerEvent<HTMLButtonElement>) => {
+    const m = map.current,
+      wrap = container.current;
+    e.currentTarget.releasePointerCapture(e.pointerId);
+    setPeg(null);
+    if (!m || !wrap) return;
+    const r = wrap.getBoundingClientRect();
+    const x = e.clientX - r.left,
+      y = e.clientY - r.top;
+    // Dropped back on the controls, or off the map: nothing happens, as nothing should.
+    if (x < 0 || y < 0 || x > r.width || y > r.height) return;
+    if (document.elementFromPoint(e.clientX, e.clientY)?.closest('.map-navigator, .canvas-top-left')) return;
+    const p = latest.current;
+    p.onWalkAt?.({
+      floorId: p.floorId,
+      position: floorPoint(m, x, y),
+      // Facing up the screen: the way the map is turned is the way the person dropped on it faces.
+      heading: m.getBearing() - (p.project.origin[2] ?? 0),
+    });
+  };
   /** Wall bodies the walker's shoulders meet. wallPieces() already splits a wall at its openings, so
    *  a doorway is a gap in this list and nothing has to know what a door is; the strip left over a
    *  door is a piece lifted clear of head height, which you walk under. */
   const walkWalls = useMemo(
     () =>
       props.walk
-        ? wallPieces(props.project, props.floorId, false)
-            .filter(piece => piece.base < HEAD_ROOM)
-            .map(piece => piece.ring)
+        ? [
+            ...wallPieces(props.project, props.floorId, false)
+              .filter(piece => piece.base < HEAD_ROOM)
+              .map(piece => piece.ring),
+            // What stands on the floor is as solid as what encloses it: a parked car, a column,
+            // a desk. Anything lower than a step is walked over; a rug is a fixture too.
+            ...props.project.objects
+              .filter(o => o.floorId === props.floorId && o.kind === 'fixture' && o.height >= 0.3)
+              .map(o => rectangle(o.position, o.width, o.depth, o.rotation)),
+          ]
         : [],
     [props.walk, props.project, props.floorId],
   );
   /** Where to stand when walk mode opens. Under the camera if that is somewhere on this floor —
    *  entering walk mode should feel like stepping into the view you already had — and otherwise in
    *  the middle of the floor's largest space, rather than in the car park across the street. */
-  const startPoint = (m: GLMap): Point => {
+  const startPose = (m: GLMap): { position: Point; heading: number; pitch?: number } => {
     const p = latest.current;
-    const c = m.getCenter();
-    // The map's centre is the point the camera looks AT. At walking pitch that is twenty-odd metres
-    // ahead of whoever is looking, so a walk pose restored from a deep link would put the walker a
-    // room further on than the one they left. Undo the aim shift when the pose is already a walk
-    // pose; a plan camera looking down from above has no walker to recover and needs no correction.
-    const pitch = m.getPitch();
-    const back = pitch >= MIN_PITCH ? (EYE + LIFT + SLAB) * Math.tan((pitch * Math.PI) / 180) : 0;
-    const bearing = (m.getBearing() * Math.PI) / 180;
-    const aim = toLocal([c.lng, c.lat], p.project.origin);
-    const spin = ((p.project.origin[2] ?? 0) * Math.PI) / 180;
-    // Plan frame, not compass: plan +Y points at the site bearing, so a compass heading is that much
-    // rotated when it is written down in the plan's own axes.
-    const here: Point = [aim[0] - back * Math.sin(bearing - spin), aim[1] - back * Math.cos(bearing - spin)];
+    const planHeading = m.getBearing() - (p.project.origin[2] ?? 0);
     // A route in play is where the walk is meant to begin: its first node on this floor, which is
     // the door you came in by or the point the last flight left off at.
     const onRoute = p.route?.nodes.find(n => n.floorId === p.floorId);
-    if (onRoute) return onRoute.position;
-    if (!p.floorId || spaceAt(p.project, p.floorId, here)) return here;
+    if (onRoute) return { position: onRoute.position, heading: planHeading };
+    // The person is where they were left — as long as that is somewhere in the view being walked
+    // into. Panning across the site to another building and pressing Walk means that building, not
+    // a march back to where the last walk ended.
+    const avatar = p.avatar;
+    if (avatar && avatar.floorId === p.floorId) {
+      const at = m.project(toLngLat(avatar.position, p.project.origin));
+      const { clientWidth: w, clientHeight: h } = m.getCanvas();
+      if (at.x >= 0 && at.y >= 0 && at.x <= w && at.y <= h) return avatar;
+    }
+    // The map's centre is the point the camera looks AT. At walking pitch that is a hundred metres up
+    // the corridor from whoever is looking, so a walk pose restored from a deep link would put the
+    // walker a building further on than where they left. When the camera is already down at eye
+    // height, stand where the camera is and keep its pitch; a plan camera looking down from a
+    // hundred metres up has no walker to recover, the point it looks at is the room the person
+    // meant, and its 35° tilt would have them staring at their shoes.
+    const eyeLevel = m.transform.getCameraAltitude() < 2 * (EYE + LIFT + SLAB);
+    const c = eyeLevel ? m.transform.getCameraLngLat() : m.getCenter();
+    const here = toLocal([c.lng, c.lat], p.project.origin);
+    const pose = (position: Point) => ({ position, heading: planHeading, pitch: eyeLevel ? m.getPitch() : undefined });
+    if (!p.floorId || spaceAt(p.project, p.floorId, here)) return pose(here);
     const spaces = p.project.objects
       .filter(o => o.floorId === p.floorId && isSpace(o.kind) && o.rings?.length)
       .sort((a, b) => objectArea(b) - objectArea(a));
@@ -1493,9 +1603,9 @@ export function MapCanvas(props: MapCanvasProps) {
     // actually contains the point it offers.
     for (const space of spaces) {
       const at = spacePoint(p.project, space);
-      if (inSpace(space, at)) return at;
+      if (inSpace(space, at)) return pose(at);
     }
-    return here;
+    return pose(here);
   };
   /** What the route asks for next, from where the walker is standing. This is the whole reason walk
    *  mode is the right mode for indoor navigation: the route is already drawn on the floor by
@@ -1549,28 +1659,60 @@ export function MapCanvas(props: MapCanvasProps) {
     const m = map.current;
     if (!m || !props.walk) return;
     const p = latest.current;
+    // What the building sounds like from where the walker stands, synthesised as they go. Muted
+    // is remembered; the browser will not let sound start until the walker clicks or presses
+    // something, and every such gesture nudges it awake.
+    const sound = new AmbienceEngine();
+    let muted = false;
+    try {
+      muted = localStorage.getItem(MUTED_KEY) === '1';
+    } catch {
+      /* private mode: not remembered, still mutable */
+    }
+    sound.setMuted(muted);
+    if (import.meta.env.DEV) (window as unknown as { __kerrosSound?: AmbienceEngine }).__kerrosSound = sound;
+    const wake = () => sound.resume();
+    window.addEventListener('pointerdown', wake, true);
+    window.addEventListener('keydown', wake, true);
     const controller = new WalkController({
       onPose: (pose: WalkPose) => {
         // Where you are changes every frame; what is there does not, and looking it up means a scan
         // of every object on the floor. Throttle the lookup — never the drag flag, which fires once
         // on mouse-up and would otherwise leave the legend dimmed until the next keystroke.
         const now = performance.now();
+        // The avatar is the host's copy of where the person is, and a host re-renders for it; a few
+        // times a second is plenty for a marker nobody sees until the walk ends.
+        if (now - avatarAt.current >= 400) {
+          avatarAt.current = now;
+          latest.current.onAvatar?.({
+            floorId: latest.current.floorId,
+            position: pose.position,
+            heading: pose.heading,
+            pitch: pose.pitch,
+          });
+        }
         const fresh = now - hintAt.current >= 150;
-        if (!fresh && pose.looking === hintRef.current.looking) return;
+        if (!fresh && pose.looking === hintRef.current.looking && pose.locked === hintRef.current.locked) return;
         const { up, down } = fresh ? climb(pose.position) : { up: null, down: null };
         const room = fresh ? spaceAt(latest.current.project, latest.current.floorId, pose.position) : null;
-        if (fresh) hintAt.current = now;
+        if (fresh) {
+          hintAt.current = now;
+          sound.set(ambienceAt(latest.current.project, latest.current.floorId, pose.position));
+        }
         const next: WalkHint = fresh
           ? {
               looking: pose.looking,
+              sound: !sound.isMuted,
+              locked: pose.locked,
               up: up?.name ?? null,
               down: down?.name ?? null,
               where: room?.name ?? '',
               next: guide(pose.position),
             }
-          : { ...hintRef.current, looking: pose.looking };
+          : { ...hintRef.current, looking: pose.looking, locked: pose.locked };
         if (
           next.looking !== hintRef.current.looking ||
+          next.locked !== hintRef.current.locked ||
           next.up !== hintRef.current.up ||
           next.down !== hintRef.current.down ||
           next.where !== hintRef.current.where ||
@@ -1586,15 +1728,38 @@ export function MapCanvas(props: MapCanvasProps) {
         if (floor) latest.current.onRequestFloor?.(floor.id);
       },
       onExit: () => latest.current.onWalkExit?.(),
+      onSound: () => {
+        sound.setMuted(!sound.isMuted);
+        try {
+          localStorage.setItem(MUTED_KEY, sound.isMuted ? '1' : '0');
+        } catch {
+          /* not remembered */
+        }
+        hintRef.current = { ...hintRef.current, sound: !sound.isMuted };
+        setWalkHint(hintRef.current);
+      },
     });
     walker.current = controller;
     if (import.meta.env.DEV) (window as unknown as { __kerrosWalk?: WalkController }).__kerrosWalk = controller;
-    controller.attach(m, p.project.origin, {
-      position: unstick(startPoint(m), walkWalls),
-      heading: m.getBearing() - (p.project.origin[2] ?? 0),
-    });
+    const start = startPose(m);
+    // Stand clear of things, not against them: the walk's own radius keeps a shoulder off a wall,
+    // but arriving with a car's flank filling half the frame is no way to start. A metre of room
+    // first, where there is a metre to be had, then the walking radius.
+    const position = unstick(unstick(start.position, walkWalls, 1), walkWalls);
+    controller.attach(m, p.project.origin, { ...start, position });
     return () => {
+      // The last step is the one the marker shows.
+      const final = controller.pose;
       controller.detach();
+      sound.dispose();
+      window.removeEventListener('pointerdown', wake, true);
+      window.removeEventListener('keydown', wake, true);
+      latest.current.onAvatar?.({
+        floorId: latest.current.floorId,
+        position: final.position,
+        heading: final.heading,
+        pitch: final.pitch,
+      });
       walker.current = null;
       hintRef.current = NO_HINT;
       setWalkHint(NO_HINT);
@@ -1739,6 +1904,12 @@ export function MapCanvas(props: MapCanvasProps) {
     props.activeStep,
     props.tool,
     props.canEdit,
+    // The walk builds a different scene — the floor on the ground plane, a ceiling on it, the
+    // batches cut for culling — and leaving it has to build the plan's scene back. Without this the
+    // 3D view kept the walk's, and a garage came back as its deck lifted to street level, lidded,
+    // inside the cage of the levels above it.
+    props.walk,
+    props.excavation,
     ready,
   ]);
   useEffect(() => {
@@ -2016,7 +2187,12 @@ export function MapCanvas(props: MapCanvasProps) {
   const depthView = undergroundView(props.project, props.floorId, props.threeD && props.stack);
   const m = map.current;
   let scaleWidth = 70;
-  if (m && ready) {
+  // Not while walking: ten metres at the site origin, seen in perspective from eye level, is a
+  // different number of pixels on every step, and everything gated on it below would flicker with
+  // it. At eye level a marker is worth showing whenever it is near, so the bar is held at the width
+  // that shows the nearby ones and the bar itself is not drawn.
+  if (m && ready && props.walk) scaleWidth = 80;
+  else if (m && ready) {
     const a = screen([0, 0]),
       b = screen([10, 0]);
     if (a && b) scaleWidth = Math.hypot(b.x - a.x, b.y - a.y);
@@ -2374,6 +2550,40 @@ export function MapCanvas(props: MapCanvasProps) {
             </b>
           ) : null;
         })}
+        {(() => {
+          // The person, where the last walk left them, on the floor they were left on. Clicking
+          // them picks the walk back up from there.
+          const a = props.avatar;
+          if (!a || props.walk || a.floorId !== props.floorId) return null;
+          const s = (props.threeD ? scene.current?.projectPoint(a.position, a.floorId) : null) ?? screen(a.position);
+          if (!s) return null;
+          const bearing = a.heading + (props.project.origin[2] ?? 0);
+          return (
+            <button
+              className="avatar-marker"
+              data-wx={a.position[0]}
+              data-wy={a.position[1]}
+              data-floor={a.floorId ?? ''}
+              data-bearing={bearing}
+              style={
+                {
+                  left: s.x,
+                  top: s.y,
+                  '--turn': `${bearing - (map.current?.getBearing() ?? 0)}deg`,
+                } as CSSProperties
+              }
+              title="Resume walking from here"
+              aria-label="Resume walking from here"
+              onClick={e => {
+                e.stopPropagation();
+                props.onWalkAt?.(a);
+              }}
+            >
+              <i />
+              <PersonStanding size={13} />
+            </button>
+          );
+        })()}
       </div>
       {props.threeD && (
         <label className="pitch-control" title="Camera inclination (⇧W / ⇧S)">
@@ -2390,6 +2600,49 @@ export function MapCanvas(props: MapCanvasProps) {
         </label>
       )}
       <div className="map-navigator">
+        {!props.walk && (
+          <>
+            <button
+              className={`pegman ${peg ? 'lifted' : ''}`}
+              title="Drag onto the map to walk from there"
+              aria-label="Drag onto the map to walk from there"
+              onPointerDown={e => {
+                if (e.button !== 0) return;
+                e.currentTarget.setPointerCapture(e.pointerId);
+                const r = container.current?.getBoundingClientRect();
+                if (r) setPeg({ x: e.clientX - r.left, y: e.clientY - r.top });
+              }}
+              onPointerMove={e => {
+                if (!peg) return;
+                const r = container.current?.getBoundingClientRect();
+                if (r) setPeg({ x: e.clientX - r.left, y: e.clientY - r.top });
+              }}
+              onPointerUp={dropPeg}
+              onPointerCancel={e => {
+                e.currentTarget.releasePointerCapture(e.pointerId);
+                setPeg(null);
+              }}
+              // A click without a drag walks from wherever the walker last stood, or the middle
+              // of the view — the same as the Walk button, for anyone who does not think to drag.
+              onClick={() => {
+                const m = map.current;
+                const p = latest.current;
+                if (!m) return;
+                const a = p.avatar && p.avatar.floorId === p.floorId ? p.avatar : null;
+                p.onWalkAt?.(
+                  a ?? {
+                    floorId: p.floorId,
+                    position: floorPoint(m, m.getCanvas().clientWidth / 2, m.getCanvas().clientHeight / 2),
+                    heading: m.getBearing() - (p.project.origin[2] ?? 0),
+                  },
+                );
+              }}
+            >
+              <PersonStanding size={19} />
+            </button>
+            <div />
+          </>
+        )}
         <button title="Zoom in" aria-label="Zoom in" onClick={() => map.current?.zoomIn()}>
           <Plus size={18} />
         </button>
@@ -2459,28 +2712,38 @@ export function MapCanvas(props: MapCanvasProps) {
               </span>
             )}
           </div>
-          <div className={`walk-keys ${walkHint.looking ? 'busy' : ''}`}>
-            <span>Drag to look around</span>
+          <div className={`walk-keys ${walkHint.looking && !walkHint.locked ? 'busy' : ''}`}>
+            <span>{walkHint.locked ? 'Mouse to look around' : 'Click to look around'}</span>
             <span>
               <kbd>W</kbd>
+              <kbd>S</kbd> walk
+            </span>
+            <span>
               <kbd>A</kbd>
-              <kbd>S</kbd>
-              <kbd>D</kbd> walk
+              <kbd>D</kbd> turn
             </span>
             <span>
-              <kbd>←</kbd>
-              <kbd>→</kbd> turn
+              <kbd>Q</kbd>
+              <kbd>E</kbd> sidestep
             </span>
             <span>
-              <kbd>Shift</kbd> hurry
+              <kbd>Shift</kbd> run
             </span>
             <span>
-              <kbd>Esc</kbd> leave
+              <kbd>M</kbd> {walkHint.sound ? 'mute' : 'sound'}
+            </span>
+            <span>
+              <kbd>Esc</kbd> {walkHint.locked ? 'free the mouse' : 'leave'}
             </span>
           </div>
         </div>
       )}
-      <div className="map-scale">
+      {peg && (
+        <div className="pegman-ghost" style={{ left: peg.x, top: peg.y }}>
+          <PersonStanding size={22} />
+        </div>
+      )}
+      <div className="map-scale" hidden={props.walk}>
         <span style={{ width: scaleWidth }} />
         10 m <i />{' '}
         {props.threeD

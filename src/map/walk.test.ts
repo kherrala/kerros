@@ -1,18 +1,23 @@
 import { describe, expect, it } from 'vitest';
 import { rectangle } from '../model/geometry';
+import maplibregl from 'maplibre-gl';
 import {
+  aim,
   alongPath,
+  eyeCamera,
   BODY,
   easeHeading,
   EYE,
-  eyeZoom,
-  MAX_MAP_ZOOM,
+  KEYS,
   MAX_PITCH,
   MIN_PITCH,
+  MOUSE_LOOK,
   REST_PITCH,
   stride,
+  TURN_SPEED,
   unstick,
   WALK_SPEED,
+  WALK_ZOOM,
 } from './walk';
 import { createDemo } from '../../app/demo/demo';
 import { add, rotate } from '../model/geometry';
@@ -80,53 +85,114 @@ describe('walking into things', () => {
 });
 
 describe('standing at eye height', () => {
-  it('solves the zoom that MapCanvas.fit() would measure back', () => {
-    // fit(): altitude = cameraToCenterDistance · metresPerPixel · cos(pitch). eyeZoom is that
-    // inverted, so round-tripping it has to land on the eye height we asked for.
-    const lat = 60.1684,
-      screen = 1075.5,
-      pitch = 82;
-    const zoom = eyeZoom(lat, screen, pitch, EYE);
-    const perPixel = (156543.03392 * Math.cos((lat * Math.PI) / 180)) / 2 ** zoom;
-    expect(screen * perPixel * Math.cos((pitch * Math.PI) / 180)).toBeCloseTo(EYE, 6);
+  /** MapLibre's getCameraAltitude(): cos(pitch) · cameraToCenterDistance / pixels per metre at the
+   *  centre, where a pixel is 1/(tileSize · 2^zoom) of the world. */
+  const altitudeOf = (
+    view: { cameraToCenterDistance: number; tileSize: number },
+    cam: ReturnType<typeof eyeCamera>,
+    pitch: number,
+  ) => {
+    const perMetre = maplibregl.MercatorCoordinate.fromLngLat({
+      lng: cam.center[0],
+      lat: cam.center[1],
+    }).meterInMercatorCoordinateUnits();
+    return (
+      (Math.cos((pitch * Math.PI) / 180) * view.cameraToCenterDistance) / (perMetre * view.tileSize * 2 ** cam.zoom)
+    );
+  };
+  const view = { cameraToCenterDistance: 1075.5, tileSize: 512 };
+  const helsinki: [number, number] = [24.946, 60.185];
+
+  it('puts the camera the asked height off the floor, at every pitch it can look', () => {
+    // The whole point: the person is 2 m tall on every frame, whether they look at their feet or
+    // down the corridor. Including a degree short of level, where MapLibre's own solve gives up.
+    for (const pitch of [MIN_PITCH, 60, REST_PITCH, 88, MAX_PITCH]) {
+      const cam = eyeCamera(view, helsinki, EYE + 0.33, 30, pitch);
+      expect(altitudeOf(view, cam, pitch)).toBeCloseTo(EYE + 0.33, 6);
+    }
   });
 
-  it('needs less zoom the steeper it looks', () => {
-    // Steeper pitch aims nearer, so the same eye height sits at a lower zoom — the reason pitch has
-    // to be decided before zoom on every frame rather than held as a constant.
-    expect(eyeZoom(60, 1075.5, MAX_PITCH, EYE)).toBeLessThan(eyeZoom(60, 1075.5, 70, EYE));
+  it('looks at the ground ahead, along the bearing, and further the flatter it looks', () => {
+    const near = eyeCamera(view, helsinki, EYE, 0, 60);
+    const far = eyeCamera(view, helsinki, EYE, 0, MAX_PITCH);
+    // Bearing 0 is north: the target is due north of the eye.
+    expect(near.center[0]).toBeCloseTo(helsinki[0], 9);
+    expect(near.center[1]).toBeGreaterThan(helsinki[1]);
+    expect(far.center[1]).toBeGreaterThan(near.center[1]);
+    // And a nearer target is a higher zoom.
+    expect(near.zoom).toBeGreaterThan(far.zoom);
   });
 
-  it('never divides by an eye height of zero', () => {
-    expect(Number.isFinite(eyeZoom(60, 1075.5, 80, 0))).toBe(true);
+  it('turns with the bearing', () => {
+    const east = eyeCamera(view, helsinki, EYE, 90, 80);
+    expect(east.center[0]).toBeGreaterThan(helsinki[0]);
+    expect(east.center[1]).toBeCloseTo(helsinki[1], 9);
+  });
+});
+
+describe('aiming with the mouse', () => {
+  it('turns the way the hand moves', () => {
+    // Mouse right, look right; mouse up, look up. In MapLibre's terms up is a LARGER pitch — 90 is
+    // level and 0 the floor — so the vertical sign is the one that is easy to get backwards.
+    const out = aim(10, 80, 100, -50);
+    expect(out.heading).toBeCloseTo(10 + 100 * MOUSE_LOOK, 6);
+    expect(out.pitch).toBeCloseTo(80 + 50 * MOUSE_LOOK, 6);
+  });
+
+  it('wraps the heading and stops the pitch', () => {
+    expect(aim(355, 80, 100, 0).heading).toBeCloseTo(7, 6);
+    expect(aim(5, 80, -100, 0).heading).toBeCloseTo(353, 6);
+    // Nobody looks at the ceiling by looking too far at their feet.
+    expect(aim(0, 80, 0, 10_000).pitch).toBe(MIN_PITCH);
+    expect(aim(0, 80, 0, -10_000).pitch).toBe(MAX_PITCH);
+  });
+
+  it('is a no-op for a still mouse', () => {
+    expect(aim(42, 77, 0, 0)).toEqual({ heading: 42, pitch: 77 });
   });
 });
 
 describe('what the keys do', () => {
   const held = (...keys: string[]) => new Set(keys);
 
+  it('is bound the way a first-person game is bound', () => {
+    // W and S walk, A and D turn, the arrows mirror them, Q and E sidestep, Shift runs. By physical
+    // key, not by letter, so the layout survives a keyboard that puts other letters under the same
+    // fingers.
+    expect([KEYS.KeyW, KEYS.KeyS, KEYS.KeyA, KEYS.KeyD]).toEqual(['ahead', 'back', 'turnLeft', 'turnRight']);
+    expect([KEYS.ArrowUp, KEYS.ArrowDown, KEYS.ArrowLeft, KEYS.ArrowRight]).toEqual([
+      'ahead',
+      'back',
+      'turnLeft',
+      'turnRight',
+    ]);
+    expect([KEYS.KeyQ, KEYS.KeyE]).toEqual(['left', 'right']);
+    expect(KEYS.ShiftLeft).toBe('fast');
+    expect(KEYS.ShiftRight).toBe('fast');
+  });
+
   it('turns on the spot, and does not walk you anywhere doing it', () => {
-    // The arrows swing you round your own axis: a person looking down a different corridor turns,
-    // they do not slide sideways. Strafing is A and D and is a different thing.
+    // A, D and the arrows swing you round your own axis: a person looking down a different
+    // corridor turns, they do not slide sideways. Strafing is Q and E and is a different thing.
     const left = stride(held('turnLeft'), 90, 0.5);
     const right = stride(held('turnRight'), 90, 0.5);
     expect(left.step).toBeUndefined();
     expect(right.step).toBeUndefined();
     expect(left.heading).toBeLessThan(90); // anticlockwise
     expect(right.heading).toBeGreaterThan(90); // clockwise
-    expect(right.heading - left.heading).toBeCloseTo(90, 5); // 90°/s, half a second each way
+    expect(right.heading - left.heading).toBeCloseTo(TURN_SPEED, 5); // half a second each way
   });
 
   it('wraps the heading rather than running off the end of the circle', () => {
-    expect(stride(held('turnLeft'), 5, 0.5).heading).toBeCloseTo(320, 5);
-    expect(stride(held('turnRight'), 340, 0.5).heading).toBeCloseTo(25, 5);
+    expect(stride(held('turnLeft'), 5, 0.5).heading).toBeCloseTo(365 - TURN_SPEED / 2, 5);
+    expect(stride(held('turnRight'), 340, 0.5).heading).toBeCloseTo(340 + TURN_SPEED / 2 - 360, 5);
   });
 
   it('turns and walks at once without the turn stealing the step', () => {
     // Holding forward while turning has to curve, not stop: the step is taken along the heading you
     // finish the frame on, so a corridor can be walked round a corner in one motion.
     const out = stride(held('ahead', 'turnRight'), 0, 0.5);
-    expect(out.heading).toBeCloseTo(45, 5);
+    expect(out.heading).toBeCloseTo(TURN_SPEED / 2, 5);
     expect(Math.hypot(...out.step!)).toBeCloseTo(WALK_SPEED * 0.5, 5);
     expect(out.step![0]).toBeGreaterThan(0); // carried off along the new heading, not the old one
   });
@@ -256,21 +322,27 @@ describe('walking the building that is actually drawn', () => {
 });
 
 describe('the range the head can turn through', () => {
-  it('leaves room to look up as well as down', () => {
-    // MapLibre will not pitch past 85°, so "level" is as far up as the camera goes and the default
-    // has to sit below it — parked at the ceiling, dragging up does nothing at all, which is what
-    // made looking up feel broken rather than limited.
+  it('rests below level with room to look up as well as down', () => {
+    // Parked at the ceiling, looking up does nothing at all, which is what made looking up feel
+    // broken rather than limited. And the ceiling stays short of level: at 90° the point the map
+    // looks at leaves the ground and MapLibre has to invent one in the sky.
     expect(REST_PITCH).toBeLessThan(MAX_PITCH);
     expect(REST_PITCH).toBeGreaterThan(MIN_PITCH);
-    expect(MAX_PITCH).toBe(85);
+    expect(MAX_PITCH).toBeLessThan(90);
+    expect(MAX_PITCH).toBeGreaterThanOrEqual(88);
   });
 
   it('keeps the whole range inside the zoom the map will give it', () => {
-    // Eye height is a zoom solved from the pitch, and looking down needs more zoom than looking
-    // level. If the steepest downward look solves past the map's maxZoom the eye silently rises off
-    // the floor, so the downward limit is set by the zoom ceiling, not by taste.
-    const tallWindow = 1600 * 1.5; // cameraToCenterDistance on a tall display
-    expect(eyeZoom(60, tallWindow, MIN_PITCH, EYE + 0.33)).toBeLessThan(MAX_MAP_ZOOM);
+    // MapLibre puts its camera at the eye by choosing a zoom for the ground point the eye looks at,
+    // and the nearest that point can be is the eye height itself, straight down. If that zoom is
+    // past the map's ceiling the camera is clamped and the eye silently rises off the floor. Its
+    // solve: zoom = log2(cameraToCenterDistance / (distance in mercator units) / 512), worst at the
+    // equator where a metre is the largest fraction of the world, on the tallest display.
+    const cameraToCenter = (0.5 / Math.tan((36.87 / 2 / 180) * Math.PI)) * 2160; // a 4K window
+    const nearest = (EYE + 0.33) / Math.cos((MIN_PITCH * Math.PI) / 180);
+    const mercatorPerMetre = 1 / 40_075_016.686;
+    const zoom = Math.log2(cameraToCenter / (nearest * mercatorPerMetre) / 512);
+    expect(zoom).toBeLessThan(WALK_ZOOM);
   });
 });
 

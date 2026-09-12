@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { excavationRings } from './underground';
+import { dropContained, excavationRings, undergroundView } from './underground';
 import { createObject } from '../model/factory';
 import { newProject } from '../model/testFixtures';
 import { addBarrier, closeRing, ringArea } from '../model/geometry';
@@ -109,5 +109,40 @@ describe('a basement drawn as rooms rather than one plate', () => {
     expect(Math.max(...xs)).toBeGreaterThan(5);
     expect(Math.min(...xs)).toBeLessThan(-9);
     expect(Math.abs(ringArea(dug))).toBeGreaterThan(150);
+  });
+});
+
+describe('the excavation outline of a real garage', () => {
+  it('is a handful of plates, not a pit per parking bay', async () => {
+    const { createDemo } = await import('../../app/demo/demo');
+    const project = createDemo();
+    const view = undergroundView(project, 'floor-p2', false);
+    const rings = excavationRings(project, view.levels);
+    // Three decks, the store basements and the ramps reaching the street merge into a few outlines.
+    // Before this the union failed on a thousand bay rings and every bay got its own soil box.
+    expect(rings.length).toBeGreaterThan(0);
+    expect(rings.length).toBeLessThanOrEqual(6);
+  });
+
+  it('drops rings that sit inside a bigger one', () => {
+    const plate: Point[] = [
+      [0, 0],
+      [40, 0],
+      [40, 30],
+      [0, 30],
+    ];
+    const bay: Point[] = [
+      [2, 2],
+      [4.5, 2],
+      [4.5, 7],
+      [2, 7],
+    ];
+    const apart: Point[] = [
+      [50, 0],
+      [60, 0],
+      [60, 10],
+      [50, 10],
+    ];
+    expect(dropContained([bay, plate, apart])).toEqual([plate, apart]);
   });
 });

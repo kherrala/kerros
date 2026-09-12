@@ -140,6 +140,10 @@ export class SceneLayer implements CustomLayerInterface {
   private project?: ProjectDocument;
   private stack = false;
   private walking = false;
+  /** The walked floor has lamps of its own. Then the walk hands the interior over to them and
+   *  turns the general ceiling light down; a floor without any keeps the general light, or it is
+   *  a dark floor with a bright lid. */
+  private lampLit = false;
   /** Per-storey ghost strength, shared out across however many levels the stack layers up. */
   private ghostAlpha = 0.17;
   private activeFloor: string | null = null;
@@ -285,7 +289,7 @@ export class SceneLayer implements CustomLayerInterface {
     if (this.skyLight) this.skyLight.intensity = air.hemisphere;
     this.roomLight?.color.set(air.interior);
     this.roomLight?.groundColor.set(air.interiorBounce);
-    if (this.roomLight) this.roomLight.intensity = air.interiorLevel * (this.walking ? 0.45 : 1);
+    if (this.roomLight) this.roomLight.intensity = air.interiorLevel * (this.walking && this.lampLit ? 0.45 : 1);
     const beam = sunlight(sun);
     if (this.sun) {
       this.sun.color.set(beam.color);
@@ -293,8 +297,18 @@ export class SceneLayer implements CustomLayerInterface {
       this.sun.position.set(...beam.position);
       this.fitShadowCamera();
     }
-    if (this.renderer) this.renderer.shadowMap.needsUpdate = true;
+    this.refreshShadows();
     this.map?.triggerRepaint();
+  }
+  /** Redraw every shadow map on the next frame: the sun's, and each lamp's. Shadows are drawn on
+   *  demand, and each light says for itself whether it is owed a redraw — the sun's map is one
+   *  2048² pass over the whole model and a lamp's is six, so a lamp swapping under a walker must
+   *  not cost the sun's as well. This is the "everything changed" case. */
+  private refreshShadows() {
+    if (!this.renderer) return;
+    if (this.sun) this.sun.shadow.needsUpdate = true;
+    this.fixtureLights?.invalidate();
+    this.renderer.shadowMap.needsUpdate = true;
   }
   /** Point the sun at the model and shrink its shadow frustum to fit. A fixed +/-140 m box spends
    *  most of a 2048 map on empty ground: a small building got a handful of texels and its shadows
@@ -1119,12 +1133,18 @@ export class SceneLayer implements CustomLayerInterface {
     this.project = project;
     this.stack = stack;
     this.walking = walk;
+    this.lampLit =
+      !!walk && !!floorId && project.objects.some(o => o.floorId === floorId && o.kind === 'light' && !!o.light);
     this.activeFloor = floorId;
     this.selected = selected;
     this.sunState = sun;
     this.liftSignature = liftSignature;
     this.excavation = excavation;
     this.revision++;
+    // Standing in it, most of a floor is behind you and a lamp's shadow reaches twelve metres:
+    // batch the floor in cells so the frustum and the shadow passes can leave the rest alone. From
+    // above, everything is in the frame and one mesh per material is cheapest.
+    this.batch.chunk = walk ? 20 : 0;
     const exterior = exteriorWalls(project);
     const index = floorIndex(project),
       floors = index.floors;
@@ -1219,7 +1239,7 @@ export class SceneLayer implements CustomLayerInterface {
     const room = new THREE.HemisphereLight(
       air.interior,
       air.interiorBounce,
-      walk ? air.interiorLevel * 0.45 : air.interiorLevel,
+      walk && this.lampLit ? air.interiorLevel * 0.45 : air.interiorLevel,
     );
     room.position.set(0, 0, 1);
     this.scene.add(room);
@@ -1235,6 +1255,7 @@ export class SceneLayer implements CustomLayerInterface {
     this.scene.add(fill);
     light.layers.enableAll();
     light.castShadow = true;
+    light.shadow.autoUpdate = false; // redrawn by refreshShadows(), not by every lamp that moves
     light.shadow.mapSize.set(2048, 2048);
     light.shadow.bias = -0.00015;
     light.shadow.normalBias = 0.025;
@@ -1448,6 +1469,16 @@ export class SceneLayer implements CustomLayerInterface {
           lit,
         );
       }
+      // The wells the stairs and escalators climb through are punched out of the lid, and only this
+      // storey is built — so through each one you looked straight at the sky. What is up a well is
+      // the storey above: put its ceiling over the well, a storey higher and unlit, so the flight
+      // climbs into a building rather than out of one.
+      const above = project.floors
+        .filter(f => f.buildingId === activeF.buildingId && f.elevation > activeF.elevation)
+        .sort((a, b) => a.elevation - b.elevation)[0];
+      const wellHead = this.rebase + activeF.height + (above?.height ?? activeF.height) - SLAB;
+      for (const [i, well] of shaftVoids(project, floorId, index.primary).entries())
+        this.surface([well], wellHead, SLAB, '#d9dad6', `well:${floorId}:${i}`);
     }
     // The level below brings its walls too, or its rooms read as floating colour.
     const allPieces = [...wallPieces(project, floorId, stack), ...(under ? wallPieces(project, under.id, false) : [])];
@@ -1633,7 +1664,7 @@ export class SceneLayer implements CustomLayerInterface {
       if (object.userData.entityId || object.userData.entityIds || object.userData.spans) this.pickables.push(object);
     });
     this.buildRoute(); // disposeScene swept the previous route group's resources with the scene
-    if (this.renderer) this.renderer.shadowMap.needsUpdate = true;
+    this.refreshShadows();
     this.map?.triggerRepaint();
   }
   /** Show/replace the 3D route. When only the active step changed, restyle materials in place;
@@ -1908,7 +1939,7 @@ export class SceneLayer implements CustomLayerInterface {
     const elapsed = Math.min(0.1, this.lastFrame ? (now - this.lastFrame) / 1000 : 0);
     this.lastFrame = now;
     if (this.rigs.length && this.animate(elapsed)) {
-      if (this.shadowsMoved) this.renderer.shadowMap.needsUpdate = true;
+      if (this.shadowsMoved) this.refreshShadows();
       // A moving part asks for the next frame, and asking every frame pins a scene of a thousand
       // draw calls at the display's refresh rate for as long as one escalator is running. Measured,
       // the rig itself costs nothing — the cost is the repaint it demands. A step band travels half
@@ -1921,7 +1952,7 @@ export class SceneLayer implements CustomLayerInterface {
     if (this.growth < 1) {
       this.growth = Math.min(1, (performance.now() - this.growthStart) / 550);
       this.scene.scale.z = 0.03 + 0.97 * (1 - (1 - this.growth) ** 3);
-      this.renderer.shadowMap.needsUpdate = true;
+      this.refreshShadows();
       this.map?.triggerRepaint();
     } else this.scene.scale.z = 1;
     // defaultProjectionData.mainMatrix passes through a Float32 projection path; at city zoom its
@@ -1981,6 +2012,21 @@ export class SceneLayer implements CustomLayerInterface {
     this.renderer.render(this.scene, this.camera);
     this.renderer.resetState();
   }
+  /** Where a point on a floor's walking surface lands on screen — the avatar marker, which is not an
+   *  object and has no occlusion to test. `visible` is the frustum only. */
+  projectPoint(pt: Point, floorId: string | null): { x: number; y: number; visible: boolean } | null {
+    if (!this.project || !this.map) return null;
+    const z =
+      (this.stack ? (floorIndex(this.project).floors.get(floorId ?? '')?.elevation ?? 0) : floorId ? this.rebase : 0) +
+      wallBase(floorId);
+    const p = new THREE.Vector3(...this.xy(pt), this.present(z) * this.scene.scale.z).applyMatrix4(this.worldToClip);
+    return {
+      x: ((p.x + 1) / 2) * this.map.getCanvas().clientWidth,
+      y: ((1 - p.y) / 2) * this.map.getCanvas().clientHeight,
+      visible: Math.abs(p.x) <= 1.05 && Math.abs(p.y) <= 1.05 && p.z < 1 && p.z > -1,
+    };
+  }
+
   projectObject(o: SiteObject): { x: number; y: number; visible: boolean } | null {
     if (!this.project || !this.map) return null;
     const cached = this.markerCache.get(o.id);

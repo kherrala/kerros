@@ -4,12 +4,15 @@ import { createObject } from '../model/factory';
 import { emptyProject } from '../model/factory';
 import { validateProject } from '../model/validate';
 import { MaterialLibrary } from './materials';
-import { FixtureLights, fixtureOutput, MAX_FIXTURE_LIGHTS } from './FixtureLights';
+import { FixtureLights, fixtureOutput, MAX_FIXTURE_LIGHTS, SHADOWED_FIXTURE_LIGHTS } from './FixtureLights';
 
 describe('light fixtures', () => {
   it('keeps hundreds of fittings within a fixed shadow and draw budget', () => {
-    const scene = new THREE.Scene(), materials = new MaterialLibrary();
-    const fixtures = Array.from({ length: 500 }, (_, i) => createObject('light', [(i % 25) * 6, Math.floor(i / 25) * 6], 'floor-ground'));
+    const scene = new THREE.Scene(),
+      materials = new MaterialLibrary();
+    const fixtures = Array.from({ length: 500 }, (_, i) =>
+      createObject('light', [(i % 25) * 6, Math.floor(i / 25) * 6], 'floor-ground'),
+    );
     const lights = new FixtureLights(scene, fixtures, p => p, 0.33, materials);
     expect(scene.children.filter(o => o instanceof THREE.PointLight)).toHaveLength(MAX_FIXTURE_LIGHTS);
     expect(scene.children.filter(o => o instanceof THREE.InstancedMesh)).toHaveLength(2);
@@ -39,5 +42,48 @@ describe('light fixtures', () => {
       invalid.objects[0].light = { ...lamp.light!, ...patch };
       expect(() => validateProject(invalid)).toThrow(/light/);
     }
+  });
+});
+
+describe('which lamps carry the shadows', () => {
+  const grid = () => {
+    const scene = new THREE.Scene();
+    const fixtures = Array.from({ length: 25 }, (_, i) => {
+      const o = createObject('light', [(i % 5) * 6, Math.floor(i / 5) * 6], 'floor-ground');
+      o.light = { kelvin: 4000, intensity: 55, range: 13 };
+      return o;
+    });
+    const lights = new FixtureLights(scene, fixtures, p => p, 0.33, new MaterialLibrary());
+    return { lights, points: scene.children.filter(o => o instanceof THREE.PointLight) as THREE.PointLight[] };
+  };
+
+  it('always has exactly the budgeted number of shadow casters, empty slots included', () => {
+    const { lights, points } = grid();
+    lights.update(new THREE.Vector3(12, 12, 1.7), 0);
+    expect(points.filter(l => l.castShadow)).toHaveLength(SHADOWED_FIXTURE_LIGHTS);
+    // Far from every lamp: nothing lit, the count still holds, so the shaders stay compiled.
+    lights.update(new THREE.Vector3(500, 500, 1.7), 1);
+    expect(points.filter(l => l.intensity > 0)).toHaveLength(0);
+    expect(points.filter(l => l.castShadow)).toHaveLength(SHADOWED_FIXTURE_LIGHTS);
+  });
+
+  it('does not reshuffle the lamps for a step that changes nothing', () => {
+    // Every swap is a shadow map redrawn — six passes over the floor. Standing between lamps and
+    // shifting a foot must not trade them.
+    const { lights, points } = grid();
+    lights.update(new THREE.Vector3(12, 12, 1.7), 0);
+    const before = points.map(l => `${l.position.x},${l.position.y}:${l.castShadow}`);
+    const { shadowsChanged } = lights.update(new THREE.Vector3(12.3, 12.1, 1.7), 0.02);
+    expect(shadowsChanged).toBe(false);
+    expect(points.map(l => `${l.position.x},${l.position.y}:${l.castShadow}`)).toEqual(before);
+  });
+
+  it('moves the shadows on to the lamps you walk to', () => {
+    const { lights, points } = grid();
+    lights.update(new THREE.Vector3(0, 0, 1.7), 0);
+    for (let s = 1; s <= 20; s++) lights.update(new THREE.Vector3(s * 0.9, s * 0.9, 1.7), s * 0.05);
+    const casters = points.filter(l => l.castShadow && l.intensity > 0);
+    expect(casters).toHaveLength(SHADOWED_FIXTURE_LIGHTS);
+    for (const l of casters) expect(Math.hypot(l.position.x - 18, l.position.y - 18)).toBeLessThan(9);
   });
 });

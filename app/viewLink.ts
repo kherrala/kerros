@@ -19,6 +19,9 @@ export interface ViewLink {
   /** First-person walk-through. Implies threeD and excludes stack. */
   walk?: boolean;
   camera?: CameraPose;
+  /** Which map background: the host's basemap or the plain drawing ground. Not written to the
+   *  link — it is a property of what is being opened, not of where the camera is. */
+  basemap?: 'plan' | 'host';
 }
 
 export function parseViewLink(hash = location.hash): ViewLink {

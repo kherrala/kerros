@@ -6,6 +6,7 @@ import type { Floor, NavEdge, NavEdgeKind, NavNode, Point, ProjectDocument, Site
 import { uid } from './types';
 import { distance, objectPosition, pointInRing } from './geometry';
 import { topology } from './topology';
+import { inSpace, spaceAt } from './spaces';
 
 // Cost model in metres-equivalent, exported so editors and play mode price edges identically: a
 // lift ride costs a flat call-and-wait plus a little per metre of rise, stairs cost their run plus
@@ -105,9 +106,17 @@ export interface RouteStep {
   objectId?: string;
   distance?: number;
 }
+/** Either end of a route: an object in the document by id, or a point on a floor — where the
+ *  walker is standing, which is the start most people want and no object describes. */
+export type RouteEnd = string | { name?: string; floorId: string | null; position: Point };
+/** What a route knows about its ends: enough to name them and place them, whether they came from
+ *  an object or a point. */
+export type RoutePlace = Pick<SiteObject, 'id' | 'kind' | 'name' | 'floorId' | 'position'>;
+/** The id a host uses for "where the walker is" in a picker; findRoute() never sees it. */
+export const HERE = '@here';
 export interface Route {
-  from: SiteObject;
-  to: SiteObject;
+  from: RoutePlace;
+  to: RoutePlace;
   nodes: NavNode[];
   legs: RouteLeg[];
   steps: RouteStep[];
@@ -151,18 +160,75 @@ export function routeAnchors(p: ProjectDocument, object: SiteObject): { node: Na
   return nearest ? [nearest] : [];
 }
 
-/** Shortest route between two objects (rooms, doors, POIs, …) over the authored graph, with human step instructions. Returns null when either end has no anchor or no path exists. */
-export function findRoute(p: ProjectDocument, fromId: string, toId: string): Route | null {
-  const from = p.objects.find(o => o.id === fromId),
-    to = p.objects.find(o => o.id === toId);
-  if (!from || !to) return null;
-  const starts = routeAnchors(p, from),
-    goals = routeAnchors(p, to);
+/** A route's end resolved against the graph: the place it names, the nodes it can join the graph
+ *  at and what joining costs, and — for a point — the node and edges that stand in for it. A point
+ *  is not in the graph, so it is given a node of its own, joined by walk edges to the nodes inside
+ *  the space it stands in (or the nearest node on its floor, standing in a corridor nobody drew as
+ *  a space). The route then genuinely starts where the walker is, and the first leg is the walk
+ *  from there to the drawn network. */
+function routeEnd(
+  p: ProjectDocument,
+  end: RouteEnd,
+  tag: string,
+): {
+  place: RoutePlace;
+  anchors: { node: NavNode; cost: number }[];
+  extraNodes: NavNode[];
+  extraEdges: NavEdge[];
+} | null {
+  if (typeof end === 'string') {
+    const object = p.objects.find(o => o.id === end);
+    return object ? { place: object, anchors: routeAnchors(p, object), extraNodes: [], extraEdges: [] } : null;
+  }
+  const here: NavNode = { id: `@${tag}`, floorId: end.floorId, position: end.position };
+  const sameFloor = navNodes(p).filter(n => n.floorId === end.floorId);
+  const space = spaceAt(p, end.floorId, end.position);
+  let joins = space ? sameFloor.filter(n => inSpace(space, n.position)) : [];
+  if (!joins.length) {
+    const nearest = [...sameFloor].sort(
+      (a, b) => distance(a.position, end.position) - distance(b.position, end.position),
+    )[0];
+    joins = nearest ? [nearest] : [];
+  }
+  const extraEdges = joins.map(
+    (n, i): NavEdge => ({
+      id: `@${tag}-${i}`,
+      kind: 'walk',
+      aId: here.id,
+      bId: n.id,
+      weight: distance(end.position, n.position),
+    }),
+  );
+  return {
+    place: {
+      id: `@${tag}`,
+      kind: 'poi',
+      name: end.name ?? 'Where you are',
+      floorId: end.floorId,
+      position: end.position,
+    },
+    anchors: [{ node: here, cost: 0 }],
+    extraNodes: [here],
+    extraEdges,
+  };
+}
+
+/** Shortest route between two ends — objects (rooms, doors, POIs, …) or points on a floor — over
+ *  the authored graph, with human step instructions. Returns null when either end has no anchor or
+ *  no path exists. */
+export function findRoute(p: ProjectDocument, fromEnd: RouteEnd, toEnd: RouteEnd): Route | null {
+  const start = routeEnd(p, fromEnd, 'from'),
+    end = routeEnd(p, toEnd, 'to');
+  if (!start || !end) return null;
+  const from = start.place,
+    to = end.place;
+  const starts = start.anchors,
+    goals = end.anchors;
   if (!starts.length || !goals.length) return null;
-  const nodes = navNodes(p),
+  const nodes = [...navNodes(p), ...start.extraNodes, ...end.extraNodes],
     byId = new Map(nodes.map(n => [n.id, n]));
   const adjacency = new Map<string, { edge: NavEdge; other: NavNode }[]>();
-  for (const e of navEdges(p)) {
+  for (const e of [...navEdges(p), ...start.extraEdges, ...end.extraEdges]) {
     const a = byId.get(e.aId),
       b = byId.get(e.bId);
     if (!a || !b) continue;
@@ -230,8 +296,8 @@ const legName = (p: ProjectDocument, leg: RouteLeg, fallback: string) =>
 /** Build the human step list: walking grouped per floor, vertical rides merged per lift/stair name, doors called out — "Exit through Aleksanterinkatu entrance", "Take Lift A to Offices · buying & admin (level 8)". */
 export function routeSteps(
   p: ProjectDocument,
-  from: SiteObject,
-  to: SiteObject,
+  from: RoutePlace,
+  to: RoutePlace,
   path: NavNode[],
   legs: RouteLeg[],
 ): RouteStep[] {

@@ -1,6 +1,6 @@
 import polygonClipping from 'polygon-clipping';
 import type { Floor, Point, ProjectDocument, Ring, SiteObject } from '../model/types';
-import { closeRing, openRing, ringArea } from '../model/geometry';
+import { closeRing, openRing, pointInRing, ringArea } from '../model/geometry';
 import { floorOutline } from '../model/walls';
 import { isVertical, primaryShafts, servedFloors } from '../model/vertical';
 
@@ -39,16 +39,48 @@ export function excavationRings(project: ProjectDocument, levels: Floor[]): Poin
     // among several on an imported one. The pit was then dug under part of the basement and stopped
     // in the middle of it, leaving the rest of the storey hanging in the air with a cut edge running
     // through the building.
-    for (const ring of floorOutline(project, f.id)) polygons.push([closeRing(ring)]);
-    for (const o of index.objects.get(f.id) ?? []) if (o.slope && o.rings) polygons.push([closeRing(o.rings[0])]);
+    //
+    // Merged per level first. A garage deck is one plate and three hundred bays drawn as zones on
+    // it, and one union of every ring on every level is the input polygon-clipping's sweep line
+    // gives up on — after which the old fallback dug a thousand pits, one per bay, and stacked them
+    // up through every buried storey as a forest of translucent walls. A level's own rings are
+    // few enough to merge, and anything left inside a bigger ring is dropped either way.
+    const own: Ring[][] = [];
+    for (const ring of floorOutline(project, f.id)) own.push([closeRing(ring)]);
+    for (const o of index.objects.get(f.id) ?? []) if (o.slope && o.rings) own.push([closeRing(o.rings[0])]);
+    for (const ring of merge(own)) polygons.push([closeRing(ring)]);
   }
   if (!polygons.length) return [];
+  return merge(polygons);
+}
+
+/** Union polygons into their outer rings — a courtyard void in a plate is still excavated ground
+ *  around the shaft — and, when the clipper cannot, keep only the rings that are not inside another. */
+function merge(polygons: Ring[][]): Point[][] {
+  if (!polygons.length) return [];
+  let outer: Point[][];
   try {
-    // Outer rings only — a courtyard void in a plate is still excavated ground around the shaft.
-    return (polygonClipping.union(polygons[0], ...polygons.slice(1)) as unknown as Ring[][]).map(pg => openRing(pg[0]));
+    outer = (polygonClipping.union(polygons[0], ...polygons.slice(1)) as unknown as Ring[][]).map(pg =>
+      openRing(pg[0]),
+    );
   } catch {
-    return polygons.map(pg => openRing(pg[0])); // degenerate input: fall back to unmerged plates
+    outer = polygons.map(pg => openRing(pg[0]));
   }
+  return dropContained(outer);
+}
+
+/** Rings that lie wholly inside another ring in the list add nothing to an excavation outline. */
+export function dropContained(rings: Point[][]): Point[][] {
+  const byArea = rings
+    .map(ring => ({ ring, area: ringArea(ring) }))
+    .filter(r => r.area > 1e-6)
+    .sort((a, b) => b.area - a.area);
+  const kept: { ring: Point[]; area: number }[] = [];
+  for (const candidate of byArea) {
+    if (kept.some(k => candidate.ring.every(pt => pointInRing(pt, k.ring)))) continue;
+    kept.push(candidate);
+  }
+  return kept.map(k => k.ring);
 }
 
 interface FloorIndex {

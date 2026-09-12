@@ -43,6 +43,9 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
     elevation: -4 - i * 3.6,
     height: 3.3,
     light: { kelvin: theme.kelvin, level: theme.level },
+    // The sound of the place is half of what makes it the place: ballasts, ventilation, and a
+    // compressor somewhere you never find.
+    ambience: { preset: 'backrooms' },
   }));
   p.initialFloorId = p.floors[0].id;
   p.zones = [];

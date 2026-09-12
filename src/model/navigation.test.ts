@@ -235,3 +235,47 @@ describe('routing', () => {
     expect(edgeCost(p, ride, a, b)).toBe(2);
   });
 });
+
+describe('routing from where you stand', () => {
+  it('starts at the point, joins the drawn network inside the room, and names the start', () => {
+    const p = tower(0);
+    const hall = room(p, 'floor-ground', 'Hall', [0, 0], 10);
+    const office = room(p, 'floor-ground', 'Office', [20, 0], 6);
+    const a = addNavNode(p, 'floor-ground', [3, 0]),
+      b = addNavNode(p, 'floor-ground', [10, 0]),
+      c = addNavNode(p, 'floor-ground', [20, 0], office.id);
+    addNavEdge(p, 'walk', a, b);
+    addNavEdge(p, 'walk', b, c);
+    const route = findRoute(p, { floorId: 'floor-ground', position: [-2, 1] }, office.id)!;
+    expect(route).not.toBeNull();
+    expect(route.from.name).toBe('Where you are');
+    expect(route.from.floorId).toBe('floor-ground');
+    // The path begins where the person is, not at the nearest drawn node.
+    expect(route.nodes[0].position).toEqual([-2, 1]);
+    expect(route.nodes[1].id).toBe(a.id); // joined at the node inside the hall
+    expect(route.steps[0].text).toMatch(/^Start at Where you are/);
+    // And the first walk covers the approach to the network as well as the network.
+    expect(route.distance).toBeCloseTo(Math.hypot(5, 1) + 7 + 10, 5);
+    expect(hall.id).toBeTruthy();
+  });
+
+  it('works as a destination too, and routes object to point', () => {
+    const p = tower(0);
+    const office = room(p, 'floor-ground', 'Office', [20, 0], 6);
+    const a = addNavNode(p, 'floor-ground', [0, 0]),
+      c = addNavNode(p, 'floor-ground', [20, 0], office.id);
+    addNavEdge(p, 'walk', a, c);
+    const route = findRoute(p, office.id, { name: 'The lift lobby', floorId: 'floor-ground', position: [0, 3] })!;
+    expect(route.to.name).toBe('The lift lobby');
+    expect(route.nodes[route.nodes.length - 1].position).toEqual([0, 3]);
+    expect(route.steps[route.steps.length - 1].text).toMatch(/The lift lobby/);
+  });
+
+  it('is unreachable from a floor with no network', () => {
+    const p = tower(1);
+    const office = room(p, 'floor-ground', 'Office', [20, 0], 6);
+    const c = addNavNode(p, 'floor-ground', [20, 0], office.id);
+    addNavEdge(p, 'walk', addNavNode(p, 'floor-ground', [0, 0]), c);
+    expect(findRoute(p, { floorId: 'floor-1', position: [0, 0] }, office.id)).toBeNull();
+  });
+});

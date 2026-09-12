@@ -38,10 +38,25 @@ const panel = createObject('light', [6, 3], floorId, 'Fluorescent panel');
 panel.light = { kelvin: 4000, intensity: 55, range: 13, flicker: 0.8 };
 ```
 
-The 2D plan shows the fitting footprint. In walk mode the renderer instances the panels and assigns
-shadow-casting point lights to the nearest four; distant fixtures remain visible but do not add
-unbounded lighting cost. Flicker is intermittent and deterministic per object ID. These local lights
+The 2D plan shows the fitting footprint. In walk mode the renderer instances the panels and lights
+the room from the nearest four, of which the nearest two cast shadows; distant fixtures remain
+visible but do not add unbounded lighting cost. Flicker is intermittent and deterministic per object ID. These local lights
 supplement the floor's existing `light: InteriorLight` ambient setting.
+
+### Ambient sound
+
+A floor's `ambience` is what it sounds like from inside it, and any room or zone can carry its own
+`ambience` to override the floor's. Both are `{ preset, level? }`: `preset` is one of `silent`,
+`office` (ventilation and a faint ballast hum), `backrooms` (louder ballasts, a breathing HVAC and a
+compressor that cycles), or `plant` (machinery), and `level` is 0–1 (default 1). Absent is silence.
+
+```ts
+floor.ambience = { preset: 'backrooms' };
+serverRoom.ambience = { preset: 'plant', level: 0.8 };
+```
+
+Walk mode synthesises the sound locally — nothing is downloaded — and cross-fades as you cross from
+one space into the next. `M` mutes it; the plan views are silent.
 
 ### Sloped areas
 
