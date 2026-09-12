@@ -51,7 +51,8 @@ import {
 } from './route';
 import { aimCenter, JourneyPlayer } from './journey';
 import type { Route } from '../model/navigation';
-import { LIFT, SceneLayer, SLAB } from './SceneLayer';
+import { LIFT, SLAB } from './levels';
+import type { SceneLayer } from './SceneLayer';
 import { EYE, HEAD_ROOM, MAX_MAP_ZOOM, MIN_PITCH, unstick, WalkController, type WalkPose } from './walk';
 import { inSpace, spaceAt, spacePoint } from '../model/spaces';
 import { servedFloors } from '../model/vertical';
@@ -201,6 +202,16 @@ export function MapCanvas(props: MapCanvasProps) {
     [frame, setFrame] = useState(0),
     [mapError, setMapError] = useState(''),
     [pitch, setPitch] = useState(0);
+  // The 3D renderer, once fetched. A ref rather than state: sync() reads it imperatively, and a
+  // re-render is asked for explicitly when it lands.
+  const sceneModule = useRef<typeof import('./SceneLayer').SceneLayer | null>(null);
+  const scenePending = useRef<Promise<void> | null>(null);
+  const loadScene = () => {
+    scenePending.current ??= import('./SceneLayer').then(m => {
+      sceneModule.current = m.SceneLayer;
+    });
+    return scenePending.current;
+  };
   const suppressClick = useRef(false),
     overlay = useRef<HTMLDivElement>(null),
     hoverId = useRef<string | null>(null);
@@ -1053,7 +1064,21 @@ export function MapCanvas(props: MapCanvasProps) {
     }
     if (p.threeD && p.showPlan) {
       if (!m.getLayer('kerros-3d')) {
-        scene.current = new SceneLayer();
+        // The renderer arrives on demand. three.js and everything drawn with it is half a megabyte
+        // that a plan shown flat never executes — and plenty of hosts only ever show it flat — so the
+        // module is named here rather than at the top of the file, and a bundler can put it behind a
+        // fetch. Everything below already copes with the layer not existing yet: that is the state
+        // this file is in for as long as the basemap style takes to load.
+        const Layer = sceneModule.current;
+        if (!Layer) {
+          void loadScene().then(() => {
+            // Back through React rather than straight into sync(): the sync that asked for the
+            // renderer has moved on, and the next one rebuilds from whatever the props are by then.
+            if (latest.current.threeD) setFrame(n => n + 1);
+          });
+          return;
+        }
+        scene.current = new Layer();
         m.addLayer(scene.current);
         scene.current.animateIn();
       }

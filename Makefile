@@ -6,7 +6,7 @@ PORT     ?= 5173
 DOCS_PORT ?= 5174
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev docs test watch e2e check format format-check types build preview serve site lib media clean clean-all plan-stats plan-extract plan-apply plan-agent
+.PHONY: help install dev docs test watch e2e check budget format format-check types build preview serve site lib media clean clean-all plan-stats plan-extract plan-apply plan-agent
 
 help: ## List the available tasks
 	@echo "Kerros — make <task>"
@@ -41,6 +41,9 @@ serve: ## Serve whatever is already in dist/ — what to use after `make site`
 	npx vite preview --outDir dist --host 127.0.0.1 --port $(PORT) --strictPort
 
 # ——— Checking things
+
+budget: ## What a consumer pays to import each part of Kerros, measured against its budget
+	$(NPM) run budget
 
 test: ## Run the unit tests once
 	$(NPM) test

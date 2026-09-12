@@ -24,7 +24,18 @@ import { KerrosThemeProvider, useDarkMode, IndexedProjectRepository } from '@ker
 const FloorEditor = lazy(() => import('@kerros/editor').then(m => ({ default: m.FloorEditor })));
 ```
 
-That measures at 98 kB for the light names against 4.5 MB for `FloorEditor`, from the same barrel.
+What each import costs, as `make budget` measures it — Kerros's own code, before first paint:
+
+| import | eager | also fetches |
+| --- | --- | --- |
+| light names, from either entry | 62 kB | — |
+| `FloorEditor` | 449 kB | `maplibre-gl` |
+| `FloorEditor`, once you enter 3D | + the 3D scene | `three` |
+| opening a PDF to trace | + pdf.js and its worker | |
+
+`three` is not in that first load. The 3D scene is named with a dynamic import, so a host that shows
+a plan flat — and plenty only ever do — never fetches it; entering 3D is what pays for it. The same
+is true of pdf.js: a footprint import in any other format never touches it.
 The `lazy()` is still yours to write — tree-shaking decides what is in the bundle, not when it
 arrives, and mounting the editor is what makes the renderer worth fetching.
 

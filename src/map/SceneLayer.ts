@@ -60,8 +60,9 @@ export const nestingLift = (area: number) => COPLANAR_STEP * (area > 2000 ? 0 : 
 // How far the contact shading rises off a slab, and how dark it gets right at the junction.
 const AO_RISE = 0.85,
   AO_FLOOR = 0.58;
-export const LIFT = 0.15;
-export const SLAB = 0.18;
+// Re-exported: they are declared in levels.ts so the flat plan can read them without three.js.
+export { LIFT, SLAB } from './levels';
+import { LIFT, SLAB } from './levels';
 const ROOM = 0.05,
   GROUND = 0.06;
 /** Milliseconds between frames of a permanent animation — 24 fps, a step band's own rate. */

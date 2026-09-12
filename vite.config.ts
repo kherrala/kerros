@@ -45,6 +45,12 @@ const chunkFor = (id: string): string | undefined => {
   // dev hub is deliberately self-contained, and folding its inline CSS in here would make it link
   // the app's 126 kB stylesheet instead.
   if (id.endsWith('.css')) return id.includes('?') ? undefined : 'styles';
+  // Vite's dynamic-import preload helper is a virtual module, and left alone Rollup files it under
+  // whichever chunk reaches it first. When MapCanvas started naming SceneLayer with a dynamic import
+  // that became `map` — and since every entry needs the helper the instant it names a lazy import,
+  // a chunk holding maplibre and three went eager and the hosts' payload went back to 2 MB. It has
+  // no business living anywhere but with the small things both pages load regardless.
+  if (id.includes('vite/preload-helper')) return 'adapters';
   return CHUNKS.find(([marker]) => id.includes(marker))?.[1];
 };
 

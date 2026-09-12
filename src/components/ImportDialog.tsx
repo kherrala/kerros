@@ -233,11 +233,8 @@ export function ImportDialog({
       else {
         let blob: Blob = file;
         if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-          const pdfjs = await import('pdfjs-dist');
-          pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-            'pdfjs-dist/build/pdf.worker.min.mjs',
-            import.meta.url,
-          ).toString();
+          const [pdfjs, worker] = await Promise.all([import('pdfjs-dist'), import('../import/pdfWorker')]);
+          pdfjs.GlobalWorkerOptions.workerSrc = worker.pdfWorkerUrl();
           const task = pdfjs.getDocument({ data: await file.arrayBuffer() });
           const pdf = await task.promise;
           try {

@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test": "vitest run",
+    "budget": "node scripts/bundle-budget.mjs",
     "test:e2e": "playwright test",
     "format": "biome format --write .",
     "format:check": "biome format .",

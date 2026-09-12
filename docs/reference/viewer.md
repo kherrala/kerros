@@ -19,6 +19,18 @@ The package is published one file per module, so a bundler follows only what you
 importing `KerrosThemeProvider` from either entry point costs the same, and neither pulls the
 renderer.
 
+What each import costs, as `make budget` measures it — Kerros's own code, before first paint:
+
+| import | eager | also fetches |
+| --- | --- | --- |
+| light names, from either entry | 62 kB | — |
+| `FloorViewer` | 184 kB | `maplibre-gl` |
+| `FloorViewer`, once you enter 3D | + the 3D scene | `three` |
+
+`three` is not in that first load. The 3D scene is named with a dynamic import, so a viewer left in
+2D never fetches it — which is what a host embedding a flat floor plan wants, and it needs no
+separate entry point to get it.
+
 ```tsx
 import { KerrosThemeProvider, useDarkMode, parseExport } from '@kerros/viewer';
 const FloorViewer = lazy(() => import('@kerros/viewer').then(m => ({ default: m.FloorViewer })));
