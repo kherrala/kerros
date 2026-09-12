@@ -237,6 +237,21 @@ export function validateProject(value: unknown): ProjectDocument {
     )
   )
     fail('invalid buildings or floors.');
+  // A lamp that exists: a colour temperature inside the range a luminaire is actually made in, and
+  // a level between off and fully lit. Absent is the common case and means a fluorescent ceiling.
+  if (
+    p.floors.some(
+      f =>
+        f.light !== undefined &&
+        (!finite(f.light.kelvin) ||
+          f.light.kelvin < 1000 ||
+          f.light.kelvin > 12000 ||
+          !finite(f.light.level) ||
+          f.light.level < 0 ||
+          f.light.level > 1),
+    )
+  )
+    fail('a floor names a light that is not a lamp.');
   if (p.initialFloorId !== undefined && p.initialFloorId !== null && !p.floors.some(f => f.id === p.initialFloorId))
     fail('initialFloorId names a floor that does not exist.');
   if (p.buildings.some(b => b.exteriorPreset !== undefined && !Object.hasOwn(EXTERIOR_PRESETS, b.exteriorPreset)))

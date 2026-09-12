@@ -102,7 +102,8 @@ import { Inspector } from './components/Inspector';
 import { NavigatePanel } from './components/NavigatePanel';
 import { StructureView } from './components/StructureView';
 import { AlignmentPanel, ImportDialog, makeDrawing, type PreparedDrawing } from './components/ImportDialog';
-import { FloorSelect, Modal, Toggle } from './components/controls';
+import { Choice, FloorSelect, Modal, Toggle } from './components/controls';
+import { FIXED, sunAt } from './map/lighting';
 import { EXTERIOR_PRESETS, type ExteriorPreset } from './model/materials';
 import { useDarkMode, useKerrosTheme, useStrings } from './theme';
 
@@ -209,7 +210,13 @@ export function SitePlanner({
     [palette, setPalette] = useState(false),
     [fullscreen, setFullscreen] = useState(false),
     [showPlan, setShowPlan] = useState(true),
-    [evening, setEvening] = useState(false),
+    // The sun follows the clock and the place by default; 'day' and 'evening' pin it, for a
+    // screenshot or for looking at a building under a light it will not see for six months.
+    [lighting, setLighting] = useState<'auto' | 'day' | 'evening'>('auto'),
+    // Re-read every ten minutes. The sun turns 15° an hour, so that is a couple of degrees — under
+    // the width of the sun itself — and it means a plan left open through the afternoon dims and
+    // reddens and eventually lights its own windows, without a frame of work spent on it.
+    [clock, setClock] = useState(() => Date.now()),
     // Opening straight into the editor brings the editor's chrome with it, as enterEdit does.
     [sidebarOpen, setSidebarOpen] = useState(initialView?.mode === 'edit' && !readOnly),
     [inspectorOpen, setInspectorOpen] = useState(false),
@@ -219,6 +226,25 @@ export function SitePlanner({
     [excavation, setExcavation] = useState(() => project.floors.filter(f => f.elevation < 0).length > 1),
     [cityBuildings, setCityBuildings] = useState(true),
     [cadastre, setCadastre] = useState(true);
+  // Where the sun stands over THIS building, now. The origin is a lng/lat, so the model knows the
+  // latitude it is drawn at and the longitude that sets its clock — a Helsinki plan is lit by a
+  // Helsinki sun, low and from the south, rather than by a fixed studio lamp.
+  const sun = useMemo(
+    () => (lighting === 'auto' ? sunAt([project.origin[0], project.origin[1]], clock) : FIXED[lighting]),
+    [lighting, clock, project.origin],
+  );
+  useEffect(() => {
+    if (lighting !== 'auto') return;
+    const tick = window.setInterval(() => setClock(Date.now()), 600000);
+    return () => window.clearInterval(tick);
+  }, [lighting]);
+  // "Why has it gone dark?" is the next question otherwise. Say the time being drawn and how high
+  // the sun is, so a dusk view reads as half past three in December rather than as a bug.
+  const sunNote = useMemo(() => {
+    const clockTime = new Date(clock).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const angle = Math.round(Math.abs(sun.altitude));
+    return `${clockTime}, ${angle}° ${sun.altitude < 0 ? 'below' : 'above'} the horizon`;
+  }, [clock, sun.altitude]);
   const [importOpen, setImportOpen] = useState(false),
     [floorModal, setFloorModal] = useState(false),
     [helpOpen, setHelpOpen] = useState(false),
@@ -1775,7 +1801,7 @@ export function SitePlanner({
               coverage={coverage}
               showLabels={showLabels}
               showPlan={showPlan}
-              evening={evening}
+              sun={sun}
               dark={dark}
               excavation={excavation}
               cityBuildings={cityBuildings}
@@ -1965,11 +1991,20 @@ export function SitePlanner({
                 />
                 <Toggle label="Space labels" value={showLabels} onChange={() => setShowLabels(!showLabels)} />
                 <Toggle label="Camera coverage" value={coverage} onChange={() => setCoverage(!coverage)} />
-                <Toggle
-                  label="Evening lighting"
-                  description="Dusk sky and garden lamps in 3D"
-                  value={evening}
-                  onChange={() => setEvening(!evening)}
+                <Choice
+                  label="Sunlight"
+                  description={
+                    lighting === 'auto'
+                      ? `Following the sun over this site — ${sunNote}`
+                      : 'Pinned; switch to Auto to follow the clock'
+                  }
+                  value={lighting}
+                  options={[
+                    { value: 'auto', label: 'Auto', title: 'Sun position from this site and the time of day' },
+                    { value: 'day', label: 'Day', title: 'A fixed afternoon sun' },
+                    { value: 'evening', label: 'Dusk', title: 'A fixed dusk, with lamps lit' },
+                  ]}
+                  onChange={setLighting}
                 />
                 <Toggle
                   label="Ground section"

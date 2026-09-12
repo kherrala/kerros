@@ -30,6 +30,7 @@ import { spaceAt } from '../model/spaces';
 import { statusLabel, statusTone } from '../adapters/status';
 import { EntityIcon } from './Icons';
 import { Field, Toggle } from './controls';
+import { DEFAULT_LIGHT, kelvinColor, LAMPS, lampFor } from '../map/lighting';
 
 interface Props {
   project: ProjectDocument;
@@ -1035,6 +1036,68 @@ export function Inspector(props: Props) {
                   value={floor.mezzanine ?? false}
                   onChange={() => props.onUpdateFloor(floor.id, { mezzanine: !floor.mezzanine || undefined })}
                 />
+                <label className="field">
+                  <span>Ceiling light</span>
+                  <select
+                    aria-label="Ceiling light"
+                    value={lampFor((floor.light ?? DEFAULT_LIGHT).kelvin).id}
+                    onChange={e =>
+                      props.onUpdateFloor(floor.id, {
+                        light: {
+                          ...(floor.light ?? DEFAULT_LIGHT),
+                          kelvin: LAMPS.find(l => l.id === e.target.value)!.kelvin,
+                        },
+                      })
+                    }
+                  >
+                    {LAMPS.map(lamp => (
+                      <option value={lamp.id} key={lamp.id}>
+                        {lamp.label} · {lamp.kelvin} K
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <div className="field-grid">
+                  <Field
+                    label="Colour temperature"
+                    value={(floor.light ?? DEFAULT_LIGHT).kelvin}
+                    type="number"
+                    suffix="K"
+                    min={1500}
+                    max={12000}
+                    step={100}
+                    onChange={v =>
+                      props.onUpdateFloor(floor.id, {
+                        light: {
+                          ...(floor.light ?? DEFAULT_LIGHT),
+                          kelvin: Math.max(1000, Math.min(12000, Number(v) || DEFAULT_LIGHT.kelvin)),
+                        },
+                      })
+                    }
+                  />
+                  <Field
+                    label="Brightness"
+                    value={Math.round((floor.light ?? DEFAULT_LIGHT).level * 100)}
+                    type="number"
+                    suffix="%"
+                    min={0}
+                    max={100}
+                    step={5}
+                    onChange={v =>
+                      props.onUpdateFloor(floor.id, {
+                        light: {
+                          ...(floor.light ?? DEFAULT_LIGHT),
+                          level: Math.max(0, Math.min(1, Number(v) / 100)),
+                        },
+                      })
+                    }
+                  />
+                </div>
+                <p className="helper lamp-note">
+                  <i style={{ background: kelvinColor((floor.light ?? DEFAULT_LIGHT).kelvin) }} />
+                  This level's own lighting, which stays on whatever the sun is doing — it is what keeps the plan
+                  legible after dark.
+                </p>
                 <Toggle
                   label="Open here by default"
                   description="Anyone opening this plan starts on this level instead of the ground floor"

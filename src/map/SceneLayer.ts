@@ -45,7 +45,7 @@ import { UndergroundCage, undergroundPit } from './UndergroundContext';
 import { includeSceneDepth } from './projection';
 import { syncLightingCamera } from './projection';
 import type { SurfaceFinish } from './textures';
-import { sunlight } from './lighting';
+import { ambient, FIXED, type Sun, sunlight } from './lighting';
 
 // Building geometry floats slightly above the basemap so slabs never z-fight with map tiles.
 // Each floor gets an opaque slab; rooms sit on top of it with enough clearance to stay artifact-free.
@@ -140,7 +140,8 @@ export class SceneLayer implements CustomLayerInterface {
   private batch = new SurfaceBatch();
   private highlight = new THREE.Group();
   private selected: string | null = null;
-  private evening = false;
+  /** Where the sun stands over this project right now, and whether that counts as evening. */
+  private sunState: Sun = FIXED.day;
   private statuses: Map<string, StatusReading> | null = null;
   private excavation = false;
   /** Only the part of the feed the scene is built from — where the cars are and whether doors stand
@@ -501,7 +502,7 @@ export class SceneLayer implements CustomLayerInterface {
       const depth = Math.max(0.16, (barrier?.thickness ?? 0.2) + 0.035);
       const frame = this.materials.metal('#b4b9ba');
       const lit = [...o.id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % 5 < 2;
-      const glass = this.materials.glass(this.evening, lit);
+      const glass = this.materials.glass(this.sunState.evening, lit);
       const side = (
         offset: number,
         width: number,
@@ -1007,10 +1008,13 @@ export class SceneLayer implements CustomLayerInterface {
     floorId: string | null,
     stack: boolean,
     selected: string | null,
-    evening = false,
+    sun: Sun = FIXED.day,
     statuses: Map<string, StatusReading> | null = null,
     excavation = false,
   ) {
+    // Everything below still asks "is it evening?" — that question has an answer, it just is not a
+    // switch any more. The sun's own angle and strength are read from `sun` where they matter.
+    const evening = sun.evening;
     const liftSignature = statuses
       ? [...statuses.values()]
           .filter(r => r.carFloorId !== undefined || r.open !== undefined)
@@ -1023,7 +1027,7 @@ export class SceneLayer implements CustomLayerInterface {
       this.project === project &&
       this.stack === stack &&
       this.activeFloor === floorId &&
-      this.evening === evening &&
+      this.sunState === sun &&
       this.liftSignature === liftSignature &&
       this.excavation === excavation &&
       this.scene.children.length
@@ -1043,7 +1047,7 @@ export class SceneLayer implements CustomLayerInterface {
     this.stack = stack;
     this.activeFloor = floorId;
     this.selected = selected;
-    this.evening = evening;
+    this.sunState = sun;
     this.liftSignature = liftSignature;
     this.excavation = excavation;
     this.revision++;
@@ -1107,19 +1111,24 @@ export class SceneLayer implements CustomLayerInterface {
     // Image-based lighting is here for specular life on surfaces, not to flood the scene with fill:
     // pushed up it washes the model to paper-white and flattens the very shading it is meant to add.
     // Keep it low, keep the sun strong, and the model gains depth instead of losing it.
+    // The level in focus decides what the interior light is, because that is the level you are
+    // looking into. A stack is lit by the one in focus too: they are usually the same building with
+    // the same fit-out, and lighting seventeen storeys three different colours at once would say
+    // something about the building that is not true.
+    const air = ambient(sun, project.floors.find(f => f.id === floorId)?.light);
     this.scene.environment = this.environmentMap(evening);
     this.scene.environmentRotation.set(Math.PI / 2, 0, 0);
-    this.scene.environmentIntensity = evening ? 0.38 : 0.55;
-    const sky = new THREE.HemisphereLight(
-      evening ? '#819bc5' : '#c7ddf5',
-      evening ? '#393345' : '#b9ac94',
-      evening ? 0.32 : 0.38,
-    );
+    this.scene.environmentIntensity = air.environment;
+    const sky = new THREE.HemisphereLight(air.sky, air.ground, air.hemisphere);
     sky.position.set(0, 0, 1);
     this.scene.add(sky);
-    const sun = sunlight(evening);
-    const light = new THREE.DirectionalLight(sun.color, sun.intensity);
-    light.position.set(...sun.position);
+    // The building's own lighting, which does not care what the sun is doing. Offices, shop floors
+    // and garages burn their lights around the clock, and Kerros draws buildings from the inside —
+    // so a storey in section at midnight is lit by this and stays readable, while outside goes dark.
+    this.scene.add(new THREE.AmbientLight(air.interior, air.interiorLevel));
+    const beam = sunlight(sun);
+    const light = new THREE.DirectionalLight(beam.color, beam.intensity);
+    light.position.set(...beam.position);
     // A dim, cool fill from the opposite quarter. Real interiors and streets bounce light back into
     // the shadow side; without it every unlit façade collapses to the same dead tone.
     const fill = new THREE.DirectionalLight(evening ? '#7f90bd' : '#cfe0f2', evening ? 0.16 : 0.18);
@@ -1448,7 +1457,9 @@ export class SceneLayer implements CustomLayerInterface {
           new THREE.PlaneGeometry(size.x + reach * 2, size.y + reach * 2),
           new THREE.ShadowMaterial({
             color: evening ? '#282637' : '#3d4950',
-            opacity: evening ? 0.38 : 0.26,
+            // A weak sun casts a weak shadow. Held at a fixed darkness, a midwinter noon threw a
+            // shadow as black as midsummer's across a city it was barely lighting.
+            opacity: evening ? 0.34 : 0.1 + 0.2 * air.day,
             depthWrite: false,
           }),
         );

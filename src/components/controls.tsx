@@ -118,6 +118,46 @@ export function Toggle({
   );
 }
 
+/** A row of mutually exclusive choices, for a setting that has three answers rather than two.
+ *  Same shape as `Toggle` — label, optional description, the control on the right — so a panel of
+ *  switches does not acquire a second visual language for the one setting that needs a third state. */
+export function Choice<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+  description,
+}: {
+  label: string;
+  value: T;
+  options: { value: T; label: string; title?: string }[];
+  onChange: (value: T) => void;
+  description?: string;
+}) {
+  return (
+    <div className="toggle-row choice-row">
+      <div className="choice-head">
+        <span>{label}</span>
+        <div className="choice" role="radiogroup" aria-label={label}>
+          {options.map(o => (
+            <button
+              key={o.value}
+              role="radio"
+              aria-checked={value === o.value}
+              className={value === o.value ? 'active' : ''}
+              title={o.title}
+              onClick={() => onChange(o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      </div>
+      {description && <small>{description}</small>}
+    </div>
+  );
+}
+
 /** Searchable dropdown for level selection: projects like the Silo carry a hundred floors. */
 export interface FloorEntry {
   id: string;

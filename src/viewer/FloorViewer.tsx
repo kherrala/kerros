@@ -7,6 +7,7 @@ import type { AssetRepository, Point, ProjectDocument } from '../model/types';
 import type { StatusReading } from '../model/live';
 import type { BasemapConfig } from '../model/host';
 import { MapCanvas } from '../map/MapCanvas';
+import { sunAt } from '../map/lighting';
 import { useKerrosTheme } from '../theme';
 
 const NO_ASSETS: AssetRepository = { get: async () => undefined, put: async () => {}, delete: async () => {} };
@@ -83,6 +84,15 @@ export function FloorViewer(props: FloorViewerProps) {
   }, []);
   // tick refreshes the Map identity every 5 s so staleness tones re-evaluate without new status data.
   const statuses = useMemo(() => new Map((props.statuses ?? []).map(s => [s.feedId, s])), [props.statuses, tick]);
+  // The viewer is what a visitor sees, and a visitor is standing in the building at the time they
+  // are looking at it: its light should be that light. No switch — the clock and the site's own
+  // coordinates decide, and the building's own lamps keep the interior readable after dark.
+  const [minute, setMinute] = useState(() => Date.now());
+  useEffect(() => {
+    const tock = window.setInterval(() => setMinute(Date.now()), 600000);
+    return () => window.clearInterval(tock);
+  }, []);
+  const sun = useMemo(() => sunAt([project.origin[0], project.origin[1]], minute), [project.origin, minute]);
   return (
     <div className={`kerros-root kerros-surface ${props.dark ? 'dark' : ''}`}>
       <MapCanvas
@@ -98,7 +108,7 @@ export function FloorViewer(props: FloorViewerProps) {
         coverage={false}
         showLabels={props.showLabels ?? true}
         showPlan={props.showPlan ?? true}
-        evening={false}
+        sun={sun}
         dark={props.dark ?? false}
         cityBuildings={false}
         cadastre={false}

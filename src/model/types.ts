@@ -72,6 +72,17 @@ export interface Floor {
   height: number;
   mezzanine?: boolean;
   code?: string;
+  /** The artificial light this level burns — colour temperature and how brightly. Absent means a
+   *  fluorescent ceiling at working brightness, which is what is actually overhead in most of the
+   *  buildings anyone draws. A building's own lighting does not follow the sun, so this is what
+   *  keeps a storey legible in a plan opened after dark. */
+  light?: InteriorLight;
+}
+/** Colour temperature in kelvin (2700 tungsten, 4000 fluorescent, 6500 daylight) and how brightly,
+ *  0 to 1. Kept here rather than in the renderer: what a space is lit by describes the space. */
+export interface InteriorLight {
+  kelvin: number;
+  level: number;
 }
 export interface Building {
   id: string;

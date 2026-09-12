@@ -29,7 +29,7 @@ import {
 import { statusLabel, statusTone } from '../adapters/status';
 import { useKerrosTheme, useStrings, type MapStyleOptions } from '../theme';
 import { neutralBasemap } from '../adapters/basemap';
-import { sunlight } from './lighting';
+import { ambient, type Sun, sunlight } from './lighting';
 import { EntityIcon } from '../components/Icons';
 import { draftFeatures, makeFeatures, navGraphFeatures, onFloor, visibleOnFloor } from './features';
 import { routeArrowImage, routeFeatures } from './route';
@@ -58,7 +58,8 @@ export interface MapCanvasProps {
   coverage: boolean;
   showLabels: boolean;
   showPlan: boolean;
-  evening: boolean;
+  /** Where the sun stands over this project now. Carries its own `evening` for the dusk look. */
+  sun: Sun;
   dark: boolean;
   cityBuildings: boolean;
   cadastre: boolean;
@@ -725,12 +726,20 @@ export function MapCanvas(props: MapCanvasProps) {
     // Evening lighting used to fall only on the 3D model, so the building sat at dusk inside a map
     // that was still at noon. Dusk is a property of the whole composition: veil the basemap too,
     // warm rather than neutral, and lighter than the dark-mode veil so the city stays legible.
-    const dusk = p.evening && !p.dark && !underground;
-    const sun = sunlight(p.evening);
-    m.setLight({ anchor: 'map', position: sun.mapPosition, color: sun.color, intensity: p.evening ? 0.32 : 0.42 });
+    const evening = p.sun.evening;
+    const dusk = evening && !p.dark && !underground;
+    const beam = sunlight(p.sun);
+    // The basemap's own light follows the same sun as the model's, so the city's shadows fall the
+    // way the building's do instead of the two disagreeing about the time of day.
+    m.setLight({
+      anchor: 'map',
+      position: beam.mapPosition,
+      color: beam.color,
+      intensity: 0.2 + 0.26 * ambient(p.sun).day,
+    });
     m.setSky({
-      'sky-color': p.dark ? '#172435' : p.evening ? '#656c8d' : '#92b9d2',
-      'horizon-color': p.dark ? '#343b4c' : p.evening ? '#d9ac92' : '#e8e4d9',
+      'sky-color': p.dark ? '#172435' : evening ? '#656c8d' : '#92b9d2',
+      'horizon-color': p.dark ? '#343b4c' : evening ? '#d9ac92' : '#e8e4d9',
       'sky-horizon-blend': 0.65,
       'atmosphere-blend': p.threeD && !underground ? 0.65 : 0,
     });
@@ -956,7 +965,7 @@ export function MapCanvas(props: MapCanvasProps) {
         scene.current.animateIn();
       }
       scene.current?.setMapStyle(mapStyleRef.current);
-      scene.current?.update(p.project, p.floorId, p.stack, p.selected, p.evening, p.statuses, p.excavation ?? false);
+      scene.current?.update(p.project, p.floorId, p.stack, p.selected, p.sun, p.statuses, p.excavation ?? false);
       scene.current?.setRoute(p.route ?? null, p.activeStep ?? null);
     } else if (m.getLayer('kerros-3d')) {
       m.removeLayer('kerros-3d');
@@ -1338,7 +1347,7 @@ export function MapCanvas(props: MapCanvasProps) {
     props.stack,
     props.coverage,
     props.showPlan,
-    props.evening,
+    props.sun,
     props.dark,
     props.cityBuildings,
     props.cadastre,
