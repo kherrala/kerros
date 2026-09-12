@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { transact, validateProject } from './validate';
-import { MIN_SEGMENT, addBarrier, closeRing, distance, openRing, splitRoom } from './geometry';
-import { addPortal as portal, addSpace as space, addTestZone as zone, newProject } from './testFixtures';
+import { MIN_SEGMENT, addBarrier, closeRing, distance, openRing, rectangle, splitRoom } from './geometry';
+import { addFloor, addPortal as portal, addSpace as space, addTestZone as zone, newProject } from './testFixtures';
 import type { ProjectDocument } from './types';
 
 const refuses = (build: (p: ProjectDocument) => void, because: RegExp) => {
@@ -40,6 +40,25 @@ describe('rules the schema refuses outright', () => {
       space(p, 'lift-1', 'floor-ground', [0, 0], 'elevator');
       p.objects.find(o => o.id === 'lift-1')!.servedFloorIds = ['floor-ground', 'floor-ground'];
     }, /once/);
+  });
+  it('a lift cannot serve a level it stands nowhere on — its doors would open onto the void', () => {
+    refuses(p => {
+      addFloor(p, 'floor-mezzanine', 3);
+      space(p, 'hall', 'floor-ground', [0, 0]);
+      space(p, 'gallery', 'floor-mezzanine', [30, 0]); // the gallery rings the far side of the void
+      space(p, 'lift-1', 'floor-ground', [0, 0], 'elevator');
+      p.objects.find(o => o.id === 'lift-1')!.servedFloorIds = ['floor-ground', 'floor-mezzanine'];
+    }, /opens onto nothing/);
+  });
+  it('but a shaft in a light well is on the plan, and an undrawn level makes no claim at all', () => {
+    const p = newProject();
+    addFloor(p, 'floor-1', 3);
+    space(p, 'plate', 'floor-1', [0, 0]);
+    // A storey plate with an open well at its heart, and the stair winding up inside the well.
+    p.objects.find(o => o.id === 'plate')!.rings = [rectangle([0, 0], 30, 30), rectangle([0, 0], 8, 8)];
+    space(p, 'stair-1', 'floor-1', [0, 0], 'stairs');
+    p.objects.find(o => o.id === 'stair-1')!.servedFloorIds = ['floor-ground', 'floor-1'];
+    expect(() => validateProject(p)).not.toThrow(); // floor-ground has nothing drawn on it yet
   });
   it('coordinates a hundred kilometres from the origin are corruption, not geometry', () => {
     refuses(p => {

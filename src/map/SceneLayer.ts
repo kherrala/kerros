@@ -16,6 +16,7 @@ import {
   objectRotation,
   openRing,
   rectangle,
+  ringArea,
   rotate,
   toLngLat,
 } from '../model/geometry';
@@ -24,13 +25,18 @@ import { floorOutline } from '../model/walls';
 import { COLORS, objectRings, type WallPiece, wallPieces } from './features';
 import {
   type Flight,
+  flightRun,
+  type FlightRun,
   flights,
   flightsAt,
   isVertical,
-  pitchOf,
   reaches,
   servedFloors,
   shaftVoids,
+  type VoidOptions,
+  type StairModel,
+  stairModel,
+  treads,
 } from '../model/vertical';
 import type { StatusReading } from '../model/live';
 import { makeFixture, makeRoof } from './architecture';
@@ -47,6 +53,7 @@ import { syncLightingCamera } from './projection';
 import type { SurfaceFinish } from './textures';
 import { ambient, FIXED, type Sun, sunlight } from './lighting';
 import { FixtureLights } from './FixtureLights';
+import { EYE } from './walk';
 
 // Building geometry floats slightly above the basemap so slabs never z-fight with map tiles.
 // Each floor gets an opaque slab; rooms sit on top of it with enough clearance to stay artifact-free.
@@ -65,6 +72,83 @@ export { LIFT, SLAB } from './levels';
 import { LIFT, SLAB } from './levels';
 const ROOM = 0.05,
   GROUND = 0.06;
+/** Head clearance over the eye. A ceiling you can see the top of is not a ceiling. */
+const HEAD_CLEAR = 0.35;
+
+/** How far an absolutely-placed piece of geometry has to move to join the rest of the scene.
+ *
+ *  Geometry arrives in two coordinate systems. Most of it is placed relative to the level in focus,
+ *  which is what lets a cutaway sit on the map and a walk stand on the map's own ground plane. The
+ *  rest carries the elevation the document authored: a ramp's slope, the parcel and the fences out
+ *  of doors, the excavation and its cage. Nothing reconciled the two, so walking a P1 deck put the
+ *  ramps 12.6 m under the walker and left the pavement level with a fifth-floor shop. This is the
+ *  one number that carries an authored elevation into the frame everything else is drawn in. The
+ *  stacked view is already drawn at authored elevations, so there it is nothing. */
+export const sceneGround = (stack: boolean, rebase: number, activeElevation: number) =>
+  stack ? 0 : rebase - activeElevation;
+
+/** The underside of a walked storey's ceiling, above the storey's own datum.
+ *
+ *  It is the next slab's underside, not the storey height less a slab: fixtures are authored against
+ *  the storey — the garage's 3.1 m luminaires, its 4.2 m pillars — and a lid a third of a metre low
+ *  had them poking through it. And a storey the document drew too low for a person to stand in must
+ *  still get a ceiling above the eye rather than one you look down onto: the 1.6 m entresol put its
+ *  glowing plane at 1.42 m, a good half metre under the walker's eye. */
+export const walkSoffit = (rebase: number, height: number) =>
+  Math.max(rebase + height + LIFT, rebase + LIFT + SLAB + EYE + HEAD_CLEAR);
+
+/** Coordinates a clipper can close a ring with. Two plates drawn to the same edge arrive here
+ *  differing in the fifteenth decimal, and polygon-clipping answers that by losing the ring. */
+const snapRing = (ring: Ring): Ring =>
+  ring.map(p => [Math.round(p[0] * 1e4) / 1e4, Math.round(p[1] * 1e4) / 1e4] as Point);
+
+/** The single plate a storey is drawn as when it is drawn as a shell — the ceiling you look down
+ *  onto from the storey above — with the stairwells punched through it.
+ *
+ *  Only the storey's top-level areas go in. A parking deck is one plate carrying four hundred bays
+ *  drawn on it as zones; unioning every one of them is the input polygon-clipping's sweep line gives
+ *  up on, and the caller's catch then left the deck with no slab at all. The bays are inside the
+ *  plate anyway, so they say nothing about where the storey reaches. Ramps do — they run out past
+ *  the building to the street — so they are unioned in.
+ *
+ *  A storey drawn as rooms rather than as a zone has no single plate, and `floorOutline` already
+ *  knows how to make one: rooms plus the walls between them, snapped and cached. */
+export function shellPlate(
+  project: ProjectDocument,
+  floorId: string,
+  primary?: Set<string>,
+  voidOptions?: VoidOptions,
+): Ring[][] {
+  const index = floorIndex(project);
+  const own = index.objects.get(floorId) ?? [];
+  const zones = own.filter(o => o.kind === 'zone' && !o.parentId && o.rings?.length);
+  // A zone keeps all its rings: the -1A gallery is a loop around the atrium, and dropping its hole
+  // would floor the void it exists to ring.
+  const plates: Ring[][] = zones.length
+    ? zones.map(o => o.rings!.map(r => snapRing(closeRing(r))))
+    : floorOutline(project, floorId).map(r => [snapRing(closeRing(r))]);
+  const ramps: Ring[][] = own.filter(o => o.slope && o.rings?.length).map(o => [snapRing(closeRing(o.rings![0]))]);
+  const input = [...plates, ...ramps];
+  if (!input.length) return [];
+  try {
+    let merged = polygonClipping.union(input[0], ...input.slice(1)) as unknown as Ring[][];
+    // A shaft that carries on past this storey goes through its floor, and a slab drawn over it is
+    // a lid on the flight below.
+    const voids = shaftVoids(project, floorId, primary, voidOptions);
+    if (voids.length)
+      merged = polygonClipping.difference(
+        merged as never,
+        ...voids.map(v => [snapRing(v)] as never),
+      ) as unknown as Ring[][];
+    return merged;
+  } catch {
+    // Snapping is not a guarantee, and a storey with no slab reads as a storey that is not there.
+    // Its largest area and its ramps are the shape a shell is for: where the storey is, how far it
+    // reaches, and nothing inside it.
+    const largest = index.outlines.get(floorId)?.rings;
+    return [...(largest ? [largest.map(r => closeRing(r))] : []), ...ramps];
+  }
+}
 /** Milliseconds between frames of a permanent animation — 24 fps, a step band's own rate. */
 const LOOP_FRAME = 42;
 /** The one rig id the route owns, so a rebuild can drop its own and leave every other alone. */
@@ -77,18 +161,24 @@ const wallBase = (floorId: string | null) => (floorId ? LIFT + SLAB : GROUND);
 const STEP_GOING = 0.4,
   STEP_RISE = 0.2;
 
+/** How far a landing plate stands over the floor it belongs to. A comb plate drawn at its true
+ *  thickness stood a fifth of a metre proud of both storeys, so you stepped up onto a block at the
+ *  foot of every escalator and down off one at its head; drawn exactly flush it fights the plate for
+ *  the same pixels. A threshold's worth is neither. */
+const PLATE_LIP = 0.02;
+
 /** The steps of one escalator flight, bottom first.
  *
  *  `at` is how far up the run a step stands, measured in plan metres from the foot of the incline;
  *  `base` is how far above the foot its underside sits. The going is 0.4 m stretched to fill the
- *  incline exactly, so the band meets both comb plates instead of leaving a sliver at one end, and
- *  the riser is whatever the rise divided by the count comes to — a flight the plan has drawn too
- *  short shows as the steep stair it is instead of as a smooth ramp that hides the fact. */
-function escalatorSteps(rise: number, deck: number): { at: number; base: number; going: number; face: number }[] {
+ *  incline exactly, so the band leaves no sliver at the foot, and the riser is whatever the rise
+ *  divided by the count comes to — a flight the plan has drawn too short shows as the steep stair it
+ *  is instead of as a smooth ramp that hides the fact. */
+function escalatorSteps(rise: number, incline: number): { at: number; base: number; going: number; face: number }[] {
   // Capped: a very long flight is read at a glance, not counted, and every step is a draw call's
   // worth of geometry in a scene that may hold a bank of them on seventeen storeys.
-  const count = Math.max(2, Math.min(40, Math.round(deck / STEP_GOING)));
-  const going = deck / count;
+  const count = Math.max(2, Math.min(40, Math.round(incline / STEP_GOING)));
+  const going = incline / count;
   // An escalator's risers are closed — a cleated face runs from one tread down to the next — so the
   // face has to be at least as deep as the pitch it is set at. Drawn at the machine's own 0.2 m on
   // an incline steeper than the machine's own, the band opened into a gap under every nose and read
@@ -96,9 +186,12 @@ function escalatorSteps(rise: number, deck: number): { at: number; base: number;
   const face = Math.max(STEP_RISE, rise / count);
   return Array.from({ length: count }, (_, i) => ({
     at: going * (i + 0.5),
-    // Tops land on the slope line, so the last step meets the upper comb plate rather than stopping
-    // a riser short of it.
-    base: (rise * (i + 1)) / count - face,
+    // The band hangs a riser below the slope line: the foot step's top is level with the lower comb
+    // plate, which is where a step really does emerge, and the head of the run stops a riser short
+    // of the upper one. That last riser is where the band's travel goes — a cycle puts every step
+    // where its neighbour was, so the step that climbs past the last visible one has to finish
+    // inside the head housing rather than above a landing that is now flush with the floor.
+    base: (rise * i) / count - face,
     going,
     face,
   }));
@@ -149,6 +242,8 @@ export class SceneLayer implements CustomLayerInterface {
   private activeFloor: string | null = null;
   private hovered: string | null = null;
   private rebase = 0;
+  /** See sceneGround: what an authored elevation has to be shifted by to join the scene. */
+  private ground = 0;
   private growth = 1;
   private growthStart = 0;
   private materials = new MaterialLibrary();
@@ -694,16 +789,30 @@ export class SceneLayer implements CustomLayerInterface {
     }
     return null;
   }
-  /** An area's rings with the shafts that pass through its level cut out of them.
+  /** An area's rings with the shafts that climb through its level cut out of them.
+   *
+   *  `through` says which plate is being cut: a floor is open where something arrives up through it,
+   *  a ceiling where something sets off up through it. They are not the same holes — the bottom of a
+   *  run departs without arriving and the top arrives without departing — and on a criss-cross
+   *  escalator bank they are at opposite ends of the same box.
    *
    *  Cheap when there is nothing to cut, which is the usual case: a floor with no shaft through it
    *  gets its own rings back untouched, and one with a shaft pays a clip only for the areas the
    *  shaft actually lands in. */
-  private withVoids(project: ProjectDocument, rings: Ring[], floorId: string, primary: Set<string>): Ring[] {
-    let voids = this.voidCache.get(floorId);
+  private withVoids(
+    project: ProjectDocument,
+    rings: Ring[],
+    floorId: string,
+    primary: Set<string>,
+    through: 'floor' | 'ceiling' = 'floor',
+  ): Ring[] {
+    const key = `${floorId}|${through}`;
+    let voids = this.voidCache.get(key);
     if (!voids) {
-      voids = shaftVoids(project, floorId, primary);
-      this.voidCache.set(floorId, voids);
+      // Above ground nothing under the street is drawn, flights included, so a hole cut for one
+      // would open onto the basemap with nothing coming up through it.
+      voids = shaftVoids(project, floorId, primary, { through, lowest: this.buried ? -Infinity : -0.01 });
+      this.voidCache.set(key, voids);
     }
     if (!voids.length || !rings.length) return rings;
     const hits = voids.filter(v => v.some(p => pointInRing(p, rings[0])) || rings[0].some(p => pointInRing(p, v)));
@@ -728,10 +837,7 @@ export class SceneLayer implements CustomLayerInterface {
     const color = o.color ?? COLORS[o.kind] ?? '#bfcac7';
     const own = project.floors.find(f => f.id === o.floorId)?.elevation ?? 0;
     const all = flights(project, o);
-    // No authored geometry: read one off the plan. A footprint that cannot take the rise at a civil
-    // pitch is describing a stair that turns, which is what a short wide core box always is.
-    const model =
-      o.stairModel ?? (all.length && pitchOf(all[0].rise, Math.max(0.6, o.depth)) > 38 ? 'switchback' : 'straight');
+    const model = stairModel(project, o);
     // Every flight when the whole stack is on show; otherwise the two you could touch from here —
     // the one arriving at this level and the one leaving it. Drawing all of them in a single-floor
     // view hangs a ladder of treads through storeys that are not being drawn.
@@ -746,73 +852,78 @@ export class SceneLayer implements CustomLayerInterface {
       this.surface(objectRings({ ...o, position, rotation }), z + wallBase(o.floorId), 0.18, color, o.id);
       return;
     }
-    for (const flight of near) {
+    // A shaft is exempt from the below-grade skip — it is filed under the lowest level it serves and
+    // would otherwise vanish from every storey above — but that exemption let it draw its whole body.
+    // On an above-ground view nothing under the street is drawn, so a garage flight climbed out of
+    // bare basemap with no deck at either end of it. Clamp the shaft to the levels the view builds.
+    const drawn = this.buried ? near : near.filter(f => f.from.elevation > -0.01);
+    if (!drawn.length) return;
+    for (const flight of drawn) {
       const base = z + (flight.from.elevation - own) + wallBase(o.floorId);
       if (model === 'spiral') {
         this.spiral(o, position, base, flight.rise, color);
         continue;
       }
-      // A bank of escalators is stacked criss-cross: each flight sits over the one below and runs
-      // the other way, so you step off one and turn to step onto the next. Drawing every flight the
-      // same way up would make a single impossible ramp climbing the whole building.
       const index = all.indexOf(flight);
-      const reversed = model === 'escalator' && index % 2 === 1;
-      this.flight(o, position, rotation + (reversed ? 180 : 0), base, flight.rise, color, model);
+      // A criss-cross bank lands every flight where the next one starts, so the two of them asked
+      // for the same landing and drew it twice, in the same place, at the same height. One plate per
+      // level: the flight above puts its foot plate there, so the one below leaves its head bare.
+      const shared = index + 1 < all.length && drawn.includes(all[index + 1]);
+      this.flight(o, flightRun(project, o, flight.rise, model, index), base, flight.rise, color, model, !shared);
     }
   }
   /** A straight climb: treads for a stair, a ribbed deck between flat landing plates for an
    *  escalator. Both run along the object's own depth axis, which is where the plan put them. */
   private flight(
     o: SiteObject,
-    position: Point,
-    rotation: number,
+    run: FlightRun,
     base: number,
     rise: number,
     color: string,
-    model: 'straight' | 'switchback' | 'dogleg' | 'escalator',
+    model: StairModel,
+    /** Draw the landing at the head of this flight. False where the flight above starts here and
+     *  puts its own plate on the same level — see the criss-cross bank in shaft(). */
+    head = true,
   ) {
-    const rad = (rotation * Math.PI) / 180;
-    // Unit vector along the run, in plan metres. The footprint's depth is the run the drawing gives
-    // it — if that is short for the rise, the thing really is as steep as it looks, and saying so is
-    // more useful than quietly lying about the pitch.
-    const ux = Math.sin(rad),
-      uy = -Math.cos(rad);
-    const at = (t: number): Point => [position[0] + ux * t, position[1] + uy * t];
-    const run = Math.max(0.6, o.depth);
-    const half = run / 2;
+    const { at, half, pad, incline, topT, footT, rotation } = run;
     if (model === 'escalator') {
       // Landing plates at both ends, then the incline between them. A real escalator has about a
-      // metre of flat comb plate at each end; without them the deck spears into the floor.
-      const pad = Math.min(1, run / 4);
-      const deck = run - pad * 2;
-      // And the steps themselves. An escalator is a moving STAIR, and drawing its deck as one smooth
-      // ramp is what made a bank of them read as slides: nothing in the picture said you would be
-      // standing on the level. The step is the one fixed thing about the machine — 0.4 m of going,
-      // whatever the pitch — so the band is however many of those fit the incline, and the riser
-      // follows from the rise it has to climb. A drawing that gives the run too little length still
-      // shows the steep flight it describes, in steps, which is a more useful lie to catch.
-      const band = escalatorSteps(rise, deck);
+      // metre of flat comb plate at each end; without them the deck spears into the floor. The
+      // incline is only as long as the rise needs at the machine's own 30° — see flightRun — so the
+      // plate at the foot takes whatever run is left over rather than the climb being flattened out
+      // to fill the box.
+      const band = escalatorSteps(rise, incline);
       const going = band[0].going,
         face = band[0].face,
         riser = rise / band.length;
-      // The comb plates the band runs out of and into. The upper one is as deep as a riser rather
-      // than a fixed slab, because the step that has just left the top of a moving band has to go
-      // somewhere and under that plate is where: see the spare steps below.
-      const comb = Math.max(0.2, riser + 0.04);
-      this.surface([rectangle(at(half - pad / 2), o.width, pad, rotation)], base, 0.2, color, o.id);
-      this.surface([rectangle(at(-half + pad / 2), o.width, pad, rotation)], base + rise, comb, color, o.id);
+      // The comb plate the band runs into: deeper than a step's face, because the step that has just
+      // left the head of a moving band has to go somewhere and inside that plate is where — see the
+      // spare steps below. Its TOP is the storey's floor, not its underside: a landing standing a
+      // fifth of a metre proud is a block you step up onto and then down off again.
+      const comb = Math.max(0.24, riser + 0.06);
+      const foot = half - footT;
+      // And the foot plate is deep enough to bury the spare step waiting under it.
+      this.surface(
+        [rectangle(at(footT + foot / 2), o.width, foot, rotation)],
+        base - (riser + face + 0.08),
+        riser + face + 0.08 + PLATE_LIP,
+        color,
+        o.id,
+      );
+      if (head)
+        this.surface(
+          [rectangle(at(topT - pad / 2), o.width, pad, rotation)],
+          base + rise - comb,
+          comb + PLATE_LIP,
+          color,
+          o.id,
+        );
       // The truss the steps ride on: the old smooth deck, dropped clear of the step band so it reads
       // as the machine under the stair rather than as the surface you walk on.
-      const body = { ...o, rings: [rectangle(at(0), o.width, deck, rotation)] } as SiteObject;
-      this.slopedSurface(
-        body,
-        { axis: [at(-half + pad), at(half - pad)], high: base + rise, low: base },
-        -face,
-        0.3,
-        '#9aa5a1',
-      );
+      const body = { ...o, rings: [rectangle(at((topT + footT) / 2), o.width, incline, rotation)] } as SiteObject;
+      this.slopedSurface(body, { axis: [at(topT), at(footT)], high: base + rise, low: base }, -face, 0.3, '#9aa5a1');
       const tread = (step: { at: number; base: number }) => ({
-        rings: [rectangle(at(half - pad - step.at), o.width - 0.12, going * 1.02, rotation)],
+        rings: [rectangle(at(footT - step.at), o.width - 0.12, going * 1.02, rotation)],
         base: base + step.base,
         height: face,
       });
@@ -840,13 +951,14 @@ export class SceneLayer implements CustomLayerInterface {
         // The ends are the whole difficulty. A rigid band gains a step at one end of its travel and
         // loses one at the other, and a step that pops into being in open air is what a moving
         // staircase must never look like. So it carries one spare below the foot — it starts the
-        // cycle under the lower comb plate and climbs out from beneath it, which is what a real
-        // escalator does anyway — and at the head the step that has climbed past the last visible
-        // one finishes its cycle inside the upper plate, which is why that plate is a riser deep
-        // rather than a slab: it is the head housing the band runs into. A descending band is the
-        // same picture upside down, so its spare waits in the head housing instead.
+        // cycle under the foot plate and climbs out from beneath it, which is what a real escalator
+        // does anyway — and at the head the step that has climbed past the last visible one finishes
+        // its cycle inside the comb plate, which is why that plate is deeper than a step's face: it
+        // is the head housing the band runs into. A descending band is the same picture upside down,
+        // so its spare waits in the head housing instead.
         //
-        const spare = way > 0 ? { at: -going / 2, base: -face } : { at: deck + going / 2, base: rise + riser - face };
+        const spare =
+          way > 0 ? { at: -going / 2, base: -riser - face } : { at: incline + going / 2, base: rise - face };
         const group = this.parts([spare, ...band].map(tread), color, false);
         // One step's travel, in scene space, taken by projecting two plan points rather than by
         // rebuilding the rotation here: `xy` is the only thing that knows which way plan north
@@ -868,16 +980,17 @@ export class SceneLayer implements CustomLayerInterface {
       for (const sign of [-1, 1]) {
         const side = [sign * (o.width / 2 - 0.06), 0] as Point;
         const offset = rotate(side, rotation);
+        const mid = at((topT + footT) / 2);
         const rail = {
           ...o,
-          rings: [rectangle([at(0)[0] + offset[0], at(0)[1] + offset[1]], 0.1, deck, rotation)],
+          rings: [rectangle([mid[0] + offset[0], mid[1] + offset[1]], 0.1, incline, rotation)],
         } as SiteObject;
         this.slopedSurface(
           rail,
           {
             axis: [
-              [at(-half + pad)[0] + offset[0], at(-half + pad)[1] + offset[1]],
-              [at(half - pad)[0] + offset[0], at(half - pad)[1] + offset[1]],
+              [at(topT)[0] + offset[0], at(topT)[1] + offset[1]],
+              [at(footT)[0] + offset[0], at(footT)[1] + offset[1]],
             ],
             high: base + rise + 0.95,
             low: base + 0.95,
@@ -902,30 +1015,30 @@ export class SceneLayer implements CustomLayerInterface {
     // the landing at right angles. Both climb the same; they differ in where the second run lies.
     const turn = model === 'dogleg' ? 90 : 180;
     const laneWidth = sweeps > 1 ? o.width / 2 : o.width;
+    const centre = at(0);
     for (let lane = 0; lane < sweeps; lane++) {
       const from = base + (rise * lane) / sweeps,
         climb = rise / sweeps;
-      // A 175 mm riser is the comfortable domestic figure and close to code everywhere; capped so a
-      // tall storey does not spend hundreds of boxes on something read at a glance.
-      const steps = Math.max(2, Math.min(24, Math.round(climb / 0.175)));
-      const going = run / steps;
+      // A 175 mm riser is the comfortable domestic figure, and a third of a metre is as deep as a
+      // tread gets: past that a long box was spreading a short climb into a ramp with slabs on it,
+      // so the surplus run goes to the landing instead — see treads().
+      const { steps, going } = treads(climb, run.length);
       const spin = rotation + (lane ? turn : 0);
       const rad = (spin * Math.PI) / 180;
       const vx = Math.sin(rad),
         vy = -Math.cos(rad);
-      // Second flight sits beside the first across the footprint, not through it.
-      const offset = lane && sweeps > 1 ? rotate([laneWidth / 2, 0], rotation) : ([0, 0] as Point);
-      const shifted = lane ? ([position[0] + offset[0], position[1] + offset[1]] as Point) : position;
+      // BOTH lanes stand off the object's axis, half a lane each way. Leaving the first centred and
+      // shifting only the second by half a lane had the two overlapping by a quarter of the box —
+      // on a 2.5 m core stair, half a metre of tread that belonged to both flights at once.
+      const offset = sweeps > 1 ? rotate([((lane ? 1 : -1) * laneWidth) / 2, 0], rotation) : ([0, 0] as Point);
+      const shifted: Point = [centre[0] + offset[0], centre[1] + offset[1]];
       const on = (t: number): Point => [shifted[0] + vx * t, shifted[1] + vy * t];
       if (lane && sweeps > 1) {
-        // The landing the turn happens on, at the height the first flight reached.
-        this.surface(
-          [rectangle(on(half - going / 2), laneWidth * 1.9, going * 1.7, spin)],
-          from - 0.05,
-          0.11,
-          color,
-          o.id,
-        );
+        // The landing the turn happens on, at the height the first flight reached — the object's own
+        // box wide, not a lane and a half of it hanging out over the floor beside the core, and as
+        // deep as the run the treads did not need, so you turn on floor rather than on air.
+        const depth = Math.max(going * 1.7, run.length - steps * going);
+        this.surface([rectangle(at(-half + depth / 2), o.width, depth, rotation)], from - 0.05, 0.11, color, o.id);
       }
       for (let i = 0; i < steps; i++) {
         this.surface(
@@ -957,7 +1070,12 @@ export class SceneLayer implements CustomLayerInterface {
       this.surface(objectRings({ ...o, position, rotation }), base, Math.min(o.height, 2.4), color, o.id);
       return;
     }
-    const bottom = rel(levels[0]);
+    // Above ground, no lower than the map plane. A lift running up from a garage is filed under P3
+    // and exempt from the below-grade skip so that it shows on every storey it serves — but that
+    // exemption had it stand its shell down to -21 m over a basemap with no building around it.
+    const stood = this.buried ? levels : levels.filter(f => f.elevation > -0.01);
+    const lowest = stood[0] ?? levels[0];
+    const bottom = Math.max(rel(levels[0]), this.buried ? -Infinity : z - own + wallBase(o.floorId));
     const top = rel(levels[levels.length - 1]) + (levels[levels.length - 1].height ?? o.height);
     // Split at the level in focus: solid to the head of this storey, ghost for whatever is above it.
     const cut = active ? Math.min(top, z + (active.elevation - own) + wallBase(o.floorId) + (active.height ?? 3)) : top;
@@ -991,7 +1109,7 @@ export class SceneLayer implements CustomLayerInterface {
     // The car rides to the level the feed names, or waits at the bottom of its shaft — which is what
     // an idle lift actually does. Its target is an ELEVATION, not a floor: the ride takes as long as
     // the distance, so eight storeys is a longer journey than one.
-    const carAt = levels.find(f => f.id === carFloor) ?? levels[0];
+    const carAt = levels.find(f => f.id === carFloor && (this.buried || f.elevation > -0.01)) ?? lowest;
     const inset = 0.14,
       carHeight = Math.min(2.3, (carAt.height ?? 3) - 0.4);
     const car = this.part(
@@ -1066,7 +1184,9 @@ export class SceneLayer implements CustomLayerInterface {
           ring.push([position[0] + Math.cos(a) * r, position[1] + Math.sin(a) * r]);
         }
       }
-      this.surface([closeRing(ring)], base + (rise * i) / steps, 0.07, color, o.id);
+      // Treads count up from the first one you step ON, so the last lands level with the floor above
+      // rather than a riser short of it — which is what left a spiral ending in a step up to nothing.
+      this.surface([closeRing(ring)], base + (rise * (i + 1)) / steps - 0.07, 0.07, color, o.id);
     }
     // The pole the whole thing hangs off.
     this.surface([rectangle(position, inner * 2, inner * 2, 0)], base, rise, '#9aa3a0', o.id);
@@ -1179,9 +1299,19 @@ export class SceneLayer implements CustomLayerInterface {
     this.depthScale = view.depthScale;
     this.presentedElevation = view.elevation;
     this.rebase = stack || walk ? 0 : view.focusElevation;
+    // What an authored elevation has to be shifted by to land in the frame the rest of the scene is
+    // drawn in — see sceneGround. Zero in every view but a walk, which is the one that moves the
+    // level in focus away from where the document put it.
+    const ground = sceneGround(stack, this.rebase, activeF?.elevation ?? 0);
+    this.ground = ground;
     // Deep stacks show the complete structure with detail on the selected floor. Building every
     // room and fitting hundreds of metres into a city camera wasted work on hidden geometry.
-    const structureOverview = buried && stack && view.levels.length > 16 && !!activeF;
+    //
+    // Only where the depth mapping is actually compressing something. Counting levels said yes to
+    // Stockmann's seventeen storeys, which are drawn at their true depths and fit on the screen
+    // perfectly well, so "All floors" from any basement threw away fourteen above-ground storeys
+    // and drew wire rings where the building was.
+    const structureOverview = buried && stack && view.compressed && !!activeF;
     const outlineOnly = new Set(
       structureOverview ? view.levels.filter(f => f.elevation > activeF!.elevation).map(f => f.id) : [],
     );
@@ -1283,18 +1413,78 @@ export class SceneLayer implements CustomLayerInterface {
             .filter(f => f.buildingId === activeF.buildingId && f.elevation < activeF.elevation)
             .sort((a, b) => b.elevation - a.elevation)[0]
         : undefined;
-    /** Height of a floor relative to the one in focus — 0 for the active level, negative below it. */
+    // The mirror of `under`, and the reason a hall never showed the gallery hanging in it: a
+    // mezzanine sits INSIDE the storey below it, so from the ground floor the entresol is a level
+    // nothing draws and the twelve flights climbing to it end in mid-air. A mezzanine whose datum
+    // falls within the active storey belongs to it, seen from below.
+    //
+    // Mezzanines only. A gallery drawn tall enough to stand in can reach past its host storey's
+    // head, and taking every level that starts inside the storey would then hang the whole floor
+    // above it over the hall as well.
+    const over =
+      activeF && !stack
+        ? project.floors.filter(
+            f =>
+              f.mezzanine &&
+              f.buildingId === activeF.buildingId &&
+              f.id !== activeF.id &&
+              f.elevation > activeF.elevation &&
+              f.elevation < activeF.elevation + activeF.height,
+          )
+        : [];
+    // The storeys a single-floor view draws beneath the one in focus, as a façade envelope: their
+    // slabs, their exterior walls and their glazing. A mezzanine's carried level is left out — it is
+    // drawn in full above, and drawing it again put a second uncut slab and a second set of windows
+    // through the first.
+    const lower = new Map(
+      !stack && !walk && activeF
+        ? view.levels
+            .filter(fl => fl.elevation >= 0 && fl.elevation < activeF.elevation && fl.id !== under?.id)
+            .map(fl => [fl.id, fl] as const)
+        : [],
+    );
+    // Below grade there is no envelope to fall back on: the cutaway drew the deck in focus and
+    // nothing under it, so every ramp and every arriving flight ended in mid-air over bedrock.
+    // Shell the storey immediately below, the way the stack shells the ones beneath its focus.
+    const belowShell =
+      buried && !stack && !walk && activeF
+        ? view.levels
+            .filter(f => f.elevation < activeF.elevation && f.id !== under?.id)
+            .sort((a, b) => b.elevation - a.elevation)[0]
+        : undefined;
+    // Every storey this view actually builds below the one in focus.
+    const drawnLevels = new Set<string>(
+      [...shellBelow, ...lower.keys(), under?.id, belowShell?.id, floorId].filter(Boolean) as string[],
+    );
+    /** Does a hole in this level's plate open onto a storey that is drawn? A stairwell punched
+     *  through a floor with nothing under it is not a stairwell: on the ground floor all twelve of
+     *  them opened straight onto the basemap. The stack draws every storey, so there it always is. */
+    const punchWells = (fid: string) =>
+      stack ||
+      view.levels.some(f => f.elevation < (floors.get(fid)?.elevation ?? 0) && f.id !== fid && drawnLevels.has(f.id));
+    /** Height of a floor relative to the one in focus — 0 for the active level, negative below it.
+     *  Out of doors is grade, which is `ground` away from the floor being walked. */
     const relative = (fid: string | null) =>
-      fid ? this.rebase + ((floors.get(fid)?.elevation ?? activeF?.elevation ?? 0) - (activeF?.elevation ?? 0)) : 0;
+      fid
+        ? this.rebase + ((floors.get(fid)?.elevation ?? activeF?.elevation ?? 0) - (activeF?.elevation ?? 0))
+        : ground;
     const visibleObjects = stack
       ? project.objects
-      : [
-          ...(index.objects.get(null) ?? []),
-          ...(under ? (index.objects.get(under.id) ?? []) : []),
-          ...(floorId ? (index.objects.get(floorId) ?? []) : []),
-          // A stair that climbs to this level belongs on it, even though it is filed under the one
-          // it starts from. Without this the flight you are standing at the top of is not drawn.
-          ...(floorId ? (index.reaching.get(floorId) ?? []) : []),
+      : // Deduplicated: a shaft filed under the storey below reaches this one, and the carried
+        // levels bring their own copy of the same object.
+        [
+          ...new Map(
+            [
+              ...(index.objects.get(null) ?? []),
+              ...(under ? (index.objects.get(under.id) ?? []) : []),
+              ...over.flatMap(f => index.objects.get(f.id) ?? []),
+              ...(floorId ? (index.objects.get(floorId) ?? []) : []),
+              // A stair that climbs to this level belongs on it, even though it is filed under the
+              // one it starts from. Without this the flight you are standing at the top of is not
+              // drawn.
+              ...(floorId ? (index.reaching.get(floorId) ?? []) : []),
+            ].map(o => [o.id, o] as const),
+          ).values(),
         ];
     for (const o of visibleObjects) {
       if (buried && (o.floorId === null || (activeF && floors.get(o.floorId)?.buildingId !== activeF.buildingId)))
@@ -1309,8 +1499,14 @@ export class SceneLayer implements CustomLayerInterface {
       if (!buried && belowGrade(o.floorId) && !(isVertical(o.kind) && reaches(project, o, floorId))) continue;
       // A twin of a shaft already drawn from its lowest level. One lift, one shaft.
       if (isVertical(o.kind) && !index.primary.has(o.id)) continue;
-      if (o.floorId && outlineOnly.has(o.floorId)) continue;
-      if (o.floorId && shellBelow.has(o.floorId)) continue;
+      // A shaft is filed under the LOWEST level it serves, and every rule that hides a storey under
+      // the one in focus was hiding the shafts with it: the store's twelve cores are filed on Herkku
+      // and the garage's on P3, so "All floors" showed a building of punched stairwells with nothing
+      // in them unless you happened to be standing on one of those two levels. A shaft is not on a
+      // storey, it is between them — exempt, the way an exterior wall already is.
+      const spanning = isVertical(o.kind);
+      if (o.floorId && outlineOnly.has(o.floorId) && !spanning) continue;
+      if (o.floorId && shellBelow.has(o.floorId) && !spanning) continue;
       if (structureOverview && o.floorId !== floorId && o.kind !== 'zone') continue;
       const z = stack ? (floors.get(o.floorId ?? '')?.elevation ?? 0) : relative(o.floorId);
       const indoorFinish = o.floorId !== null && (o.kind === 'room' || o.kind === 'zone');
@@ -1356,8 +1552,9 @@ export class SceneLayer implements CustomLayerInterface {
         continue;
       }
       if (o.rings && o.slope) {
-        // A sloped deck carries its own absolute elevations, so it ignores the floor's plate height.
-        if (!ghosted) this.slopedSurface(o, o.slope, LIFT + SLAB, SLAB, color);
+        // A sloped deck carries its own authored elevations, so it ignores the floor's plate height
+        // and has to be brought into the scene's frame by hand — see sceneGround.
+        if (!ghosted) this.slopedSurface(o, o.slope, LIFT + SLAB + ground, SLAB, color);
         continue;
       }
       if (o.rings) {
@@ -1375,7 +1572,9 @@ export class SceneLayer implements CustomLayerInterface {
         this.surface(
           // A stairwell is a hole in the floor you are standing on, too. Added as holes in the
           // area's own rings so the plate keeps its shape and loses only the shaft.
-          indoor && o.floorId ? this.withVoids(project, o.rings, o.floorId, index.primary) : o.rings,
+          indoor && o.floorId && punchWells(o.floorId)
+            ? this.withVoids(project, o.rings, o.floorId, index.primary)
+            : o.rings,
           base,
           height,
           color,
@@ -1397,7 +1596,11 @@ export class SceneLayer implements CustomLayerInterface {
           !indoor,
         );
       } else if (['stairs', 'elevator', 'turnstile', 'door', 'gate', 'window'].includes(o.kind)) {
-        if (!ghosted) this.opening(project, o, z);
+        // A door or a window belongs to its own storey and is left to it when that storey is only a
+        // ghost. A shaft belongs to all of them at once, and the rule that skipped every ghosted
+        // opening was the last one hiding the stairs from "All floors": it stays, at full strength,
+        // because it is the one thing in the stack that says how the storeys are joined.
+        if (!ghosted || spanning) this.opening(project, o, z);
       } else if (['office', 'container', 'storage'].includes(o.kind)) {
         this.surface(
           objectRings(o),
@@ -1413,28 +1616,16 @@ export class SceneLayer implements CustomLayerInterface {
         );
       }
     }
-    // One slab per shell storey — the ceiling you look down onto — unioned from its areas so a
-    // wing or a bay is included and the interior divisions are not. One surface, one union, per
-    // storey: the whole point of the shell is that it costs a fraction of the real floor.
-    for (const fid of shellBelow) {
-      const areas = (index.objects.get(fid) ?? []).filter(
-        o => o.rings?.length && (o.kind === 'room' || o.kind === 'zone'),
-      );
-      if (!areas.length) continue;
-      const polygons = areas.map(o => [closeRing(o.rings![0])] as Ring[]);
-      let merged: Ring[][];
-      try {
-        merged = polygonClipping.union(polygons[0], ...polygons.slice(1)) as unknown as Ring[][];
-        // Punch the stairwells. A shaft that carries on past this storey goes through its floor, and
-        // a slab drawn over it is a lid on the flight below.
-        const voids = shaftVoids(project, fid, index.primary);
-        if (voids.length)
-          merged = polygonClipping.difference(merged as never, ...voids.map(v => [v] as never)) as unknown as Ring[][];
-      } catch {
-        continue; // degenerate footprint: no slab is better than a wrong one
-      }
-      const z = floors.get(fid)?.elevation ?? 0;
-      for (const pg of merged) this.surface(pg, z + LIFT + SLAB, SLAB, '#e5e4df', `shell:${fid}`, undefined, true);
+    // One slab per shell storey — the ceiling you look down onto — merged from its top-level plates
+    // so a wing or a ramp is included and the interior divisions are not. One surface, one union,
+    // per storey: the whole point of the shell is that it costs a fraction of the real floor.
+    for (const fid of [...shellBelow, ...(belowShell ? [belowShell.id] : [])]) {
+      // Standing above ground you cannot see through the earth, and the object and wall loops both
+      // say so — but the shell did not, so ghost slabs for the basements hung under the streets.
+      if (!buried && belowGrade(fid)) continue;
+      const z = stack ? (floors.get(fid)?.elevation ?? 0) : relative(fid);
+      for (const pg of shellPlate(project, fid, index.primary, { lowest: buried ? -Infinity : -0.01 }))
+        this.surface(pg, z + LIFT + SLAB, SLAB, '#e5e4df', `shell:${fid}`, undefined, stack);
     }
     // Walk mode gets a lid. An open-topped floor plate is not a room: the light has nothing to come
     // off, the floor runs away to the horizon and a shop floor reads as grey tarmac. The ceiling is
@@ -1449,7 +1640,8 @@ export class SceneLayer implements CustomLayerInterface {
     // through them; nesting keeps a room's ceiling a hair below the zone's, which is coplanar-safe
     // and is also true of every fit-out inside a bigger space.
     if (walk && floorId && activeF) {
-      const soffit = this.rebase + activeF.height - SLAB;
+      // The underside of the storey above, and never below the walker's own eye — see walkSoffit.
+      const soffit = walkSoffit(this.rebase, activeF.height);
       // Lit by how much the floor's lamps are ON, not by how hard they are working. The room light
       // dims as daylight comes in, and tying the soffit to that made the ceiling go dark at noon —
       // the one time of day a room is unmistakably bright. A ceiling is the source, so it is the
@@ -1458,7 +1650,9 @@ export class SceneLayer implements CustomLayerInterface {
       for (const o of index.objects.get(floorId) ?? []) {
         if (!o.rings?.length || (o.kind !== 'room' && o.kind !== 'zone')) continue;
         this.surface(
-          this.withVoids(project, o.rings, floorId, index.primary),
+          // The lid is open where a flight sets OFF through it, which is not where the floor is open:
+          // the bottom of a run departs without arriving, and a run's top arrives without departing.
+          this.withVoids(project, o.rings, floorId, index.primary, 'ceiling'),
           soffit - nestingLift(objectArea(o)),
           SLAB,
           '#f0f1ee',
@@ -1473,15 +1667,30 @@ export class SceneLayer implements CustomLayerInterface {
       // storey is built — so through each one you looked straight at the sky. What is up a well is
       // the storey above: put its ceiling over the well, a storey higher and unlit, so the flight
       // climbs into a building rather than out of one.
-      const above = project.floors
-        .filter(f => f.buildingId === activeF.buildingId && f.elevation > activeF.elevation)
+      //
+      // The storey above is the first one that starts at or past this storey's head, not simply the
+      // next level up: a mezzanine hanging inside this storey is drawn in the room with you, and
+      // taking its lid for the well head would have put the cap below the ceiling it is capping.
+      const overhead = project.floors
+        .filter(f => f.buildingId === activeF.buildingId && f.elevation >= activeF.elevation + activeF.height - 0.01)
         .sort((a, b) => a.elevation - b.elevation)[0];
-      const wellHead = this.rebase + activeF.height + (above?.height ?? activeF.height) - SLAB;
-      for (const [i, well] of shaftVoids(project, floorId, index.primary).entries())
-        this.surface([well], wellHead, SLAB, '#d9dad6', `well:${floorId}:${i}`);
+      const wellHead = Math.max(
+        soffit + SLAB,
+        overhead ? walkSoffit(relative(overhead.id), overhead.height) : soffit + activeF.height,
+      );
+      const wells = shaftVoids(project, floorId, index.primary, {
+        through: 'ceiling',
+        lowest: buried ? -Infinity : -0.01,
+      });
+      for (const [i, well] of wells.entries()) this.surface([well], wellHead, SLAB, '#d9dad6', `well:${floorId}:${i}`);
     }
-    // The level below brings its walls too, or its rooms read as floating colour.
-    const allPieces = [...wallPieces(project, floorId, stack), ...(under ? wallPieces(project, under.id, false) : [])];
+    // A carried level brings its walls too, or its rooms read as floating colour — the level below a
+    // mezzanine, and the mezzanine hanging inside the storey you are looking at.
+    const allPieces = [
+      ...wallPieces(project, floorId, stack),
+      ...(under ? wallPieces(project, under.id, false) : []),
+      ...over.flatMap(f => wallPieces(project, f.id, false)),
+    ];
     for (const p of allPieces) {
       if (buried && (p.floorId === null || (activeF && floors.get(p.floorId)?.buildingId !== activeF.buildingId)))
         continue;
@@ -1538,16 +1747,7 @@ export class SceneLayer implements CustomLayerInterface {
         }
     // Only the lower envelope is needed beneath a cutaway. Keep its authored façade and glazing;
     // interior partitions and duplicate ceiling plates were both hidden work and sources of seams.
-    if (!stack && floorId) {
-      const lower = new Map(
-        project.floors
-          .filter(
-            fl => fl.buildingId === floors.get(floorId)?.buildingId && fl.elevation >= 0 && fl.elevation < this.rebase,
-          )
-          .map(fl => [fl.id, fl]),
-      );
-      this.envelope(project, lower, exterior, finishes);
-    }
+    if (lower.size) this.envelope(project, lower, exterior, finishes);
     // The site view has to show the site. Until now only *authored* roof geometry drew here, so a
     // building whose roof was never modelled — which is most of them — disappeared completely and the
     // parcel read as an empty lot. Build the massing from the floor stack instead: the same façade
@@ -1568,16 +1768,31 @@ export class SceneLayer implements CustomLayerInterface {
     // Excavate around the whole below-grade complex (all deck plates plus any ramps reaching the
     // surface), not just the active floor's plate — otherwise a garage or driveway that extends past
     // the tower footprint hangs in open air with no soil around it.
-    if (buried && excavation) {
+    //
+    // Not while walking. The pit and the cage are the two things drawn at authored elevations that a
+    // shift cannot rescue: the pit's cut face runs from the level in focus up to grade, and it is
+    // grade the walk has moved away from — shifting the pit would stand the soil and its veil in the
+    // room around the walker, and the cage's rings would cross him at ankle and head height. Both
+    // are ways of looking AT a buried building from outside it; inside it they have nothing to say.
+    if (buried && excavation && !walk) {
       const outline = index.outlines.get(activeF?.id ?? view.levels[0]?.id ?? '');
       const excavation = excavationRings(project, view.levels);
       const rings = excavation.length ? excavation : outline?.rings?.[0] ? [openRing(outline.rings[0])] : [];
       const split = view.focusElevation;
-      // In a single-floor view the cut runs a few metres below your level, which is what exposes the
-      // soil profile; the stacked view already cuts to the bottom of the deepest level.
+      // The cut has to reach whatever the view actually draws below the floor in focus — the shelled
+      // storey under it, and any ramp running down off the plate — or the ramp ends in mid-air and
+      // the deck below stands inside bedrock. An arbitrary six metres did neither. The stacked view
+      // already cuts to the bottom of the deepest level.
+      const reach = Math.min(
+        split,
+        belowShell ? view.elevation(belowShell.elevation) : split,
+        ...(index.objects.get(floorId ?? '') ?? [])
+          .filter(o => o.slope)
+          .map(o => view.elevation(Math.min(o.slope!.low, o.slope!.high))),
+      );
       const bottom = stack
         ? view.elevation(view.levels.reduce((z, f) => Math.min(z, f.elevation), 0)) - 2.5
-        : split - 6;
+        : reach - 2.5;
       // Every below-grade slab leaves a stratum line on the cut face, so levels you are not standing
       // on still read in section.
       const strata = view.levels.filter(f => f.elevation < 0).map(f => view.elevation(f.elevation));
@@ -1596,21 +1811,27 @@ export class SceneLayer implements CustomLayerInterface {
         );
       }
     }
-    if (buried && activeF && (!stack || structureOverview)) {
+    if (buried && activeF && !walk && (!stack || structureOverview)) {
       const above = view.levels.filter(f => f.elevation > activeF.elevation).sort((a, b) => a.elevation - b.elevation);
       const stride = Math.max(1, Math.ceil((above.length - 1) / (MAX_CAGE_LEVELS - 1)));
       const samples = above.filter((_, i) => i % stride === 0 || i === above.length - 1);
       const rings: THREE.Vector3[][] = [];
-      let columns: Point[] = [];
+      let columns: Point[] = [],
+        widest = 0;
       for (const fl of samples) {
         const envelope = index.outlines.get(fl.id);
         if (!envelope) continue;
         const ring = openRing(envelope.rings![0]);
         rings.push(ring.map(pt => new THREE.Vector3(...this.xy(pt), view.elevation(fl.elevation) + LIFT)));
-        if (!columns.length) {
-          const step = Math.max(1, Math.ceil(ring.length / 16));
-          columns = ring.filter((_, i) => i % step === 0).map(pt => this.xy(pt));
-        }
+        // The corners the cage stands on are the building's, so they come from its widest storey —
+        // and never from a mezzanine, which is a gallery inside a storey and not the storey. Taken
+        // from the first level above instead, Herkku caged a hundred-and-ten-metre building in the
+        // four corners of the forty-metre -1A gallery standing inside it.
+        const area = fl.mezzanine ? 0 : Math.abs(ringArea(ring));
+        if (columns.length && area <= widest) continue;
+        widest = area;
+        const step = Math.max(1, Math.ceil(ring.length / 16));
+        columns = ring.filter((_, i) => i % step === 0).map(pt => this.xy(pt));
       }
       const topFl = above.at(-1);
       this.cage.configure(
@@ -1636,7 +1857,7 @@ export class SceneLayer implements CustomLayerInterface {
         const size = bounds.getSize(new THREE.Vector3()),
           center = bounds.getCenter(new THREE.Vector3());
         const reach = Math.max(24, size.z * 4);
-        const ground = new THREE.Mesh(
+        const shadowPlane = new THREE.Mesh(
           new THREE.PlaneGeometry(size.x + reach * 2, size.y + reach * 2),
           new THREE.ShadowMaterial({
             color: evening ? '#282637' : '#3d4950',
@@ -1646,11 +1867,12 @@ export class SceneLayer implements CustomLayerInterface {
             depthWrite: false,
           }),
         );
-        ground.position.set(center.x, center.y, 0.012);
-        ground.layers.set(OUTSIDE);
-        ground.receiveShadow = true;
-        ground.raycast = () => {};
-        this.scene.add(ground);
+        // It is the ground, so it lies where the ground lies: at grade, which a walk has moved.
+        shadowPlane.position.set(center.x, center.y, ground + 0.012);
+        shadowPlane.layers.set(OUTSIDE);
+        shadowPlane.receiveShadow = true;
+        shadowPlane.raycast = () => {};
+        this.scene.add(shadowPlane);
       }
     }
     this.fitShadowCamera();
@@ -1727,7 +1949,8 @@ export class SceneLayer implements CustomLayerInterface {
     };
     const zOf = (fid: string | null) =>
       fid === null
-        ? GROUND + 0.05
+        ? // Out of doors is grade, and a walk has moved grade — see sceneGround.
+          this.ground + GROUND + 0.05
         : this.present((this.stack ? (floors.get(fid)?.elevation ?? 0) : this.rebase) + LIFT + SLAB + ROOM + 0.07);
     const group = new THREE.Group();
     const steps = legStepIndices(route);

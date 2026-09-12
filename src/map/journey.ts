@@ -3,10 +3,11 @@
 // cancels on any user gesture. Owned and instantiated by MapCanvas; the host controls it through
 // the MapCanvas prop contract (playing / onJourneyStep / onJourneyEnd / onRequestFloor).
 import maplibregl, { type Map as GLMap } from 'maplibre-gl';
-import type { Origin, Point } from '../model/types';
+import type { Origin, Point, ProjectDocument } from '../model/types';
 import { distance, toLngLat } from '../model/geometry';
 import type { Route } from '../model/navigation';
 import { legStepIndices, pathHeading } from './route';
+import { undergroundView } from './underground';
 
 /** fit()'s depth-aim factored out and shared with the journey: with a pitched camera a plate at
  * elevation elev projects off-centre unless the ground target shifts by elev·tan(pitch) along the
@@ -26,6 +27,22 @@ export function aimCenter(
   target.y -= shift * Math.cos(bearing) * unit;
   const ll = target.toLngLat();
   return [ll.lng, ll.lat];
+}
+
+/** The map centre that brings a plan position on `floorId` under the crosshair. Anyone easing to a
+ * point in the document wants this rather than the raw ground coordinate: the storey is drawn at its
+ * presented elevation, and a pitched camera sees it displaced along the view bearing, so centring on
+ * the ground beneath a basement leaves the thing you asked for a good ten metres off screen centre. */
+export function floorAim(
+  map: GLMap,
+  project: ProjectDocument,
+  position: Point,
+  floorId: string | null,
+  view: { threeD: boolean; stack: boolean },
+): [number, number] {
+  const ll = toLngLat(position, project.origin);
+  const elev = view.threeD ? undergroundView(project, floorId, view.stack).focusElevation : 0;
+  return aimCenter([ll[0], ll[1]], elev, map.getPitch(), map.getBearing());
 }
 
 export interface JourneyCallbacks {

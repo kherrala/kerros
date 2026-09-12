@@ -2,7 +2,7 @@ import { stockmannOffices } from './stockmannOffices';
 import { STOCKMANN_ID } from './ids';
 import { attachOntology } from './ontology';
 import { stockmannGarage } from './stockmannGarage';
-import type { ModelKind, ObjectKind, Point, ProjectDocument } from '@kerros/schema';
+import type { ModelKind, ObjectKind, Point, ProjectDocument, Ring, SiteObject } from '@kerros/schema';
 import {
   addBarrier,
   addNavEdge,
@@ -14,9 +14,14 @@ import {
   createObject,
   distance,
   geoOrigin,
+  isArea,
+  isVertical,
   navPath,
   objectPosition,
   PITCH,
+  pointInRing,
+  primaryShafts,
+  rectangle,
   runFor,
   segmentProjection,
 } from '@kerros/schema';
@@ -198,12 +203,20 @@ const boxWalls = (r: Point[]): [Point, Point][] => r.map((pt, i) => [pt, r[(i + 
 // The central escalator spine plus a spiral stair at each end, alongside the atrium.
 // name, x, y, rotation, which way it carries you. A bank runs alternate ways so you step off one
 // and turn to step onto the next, and the direction is stated rather than read out of the name.
+//
+// The banks stand clear of the void, not over it. A flight runs along the object's DEPTH axis with a
+// comb plate at each end, so the run reaches half its length either side of the position given here —
+// standing at y -12 and 20 the inner end of every run, and the landing on it, hung over the atrium on
+// each of the floors that punch the void through their plate, and you stepped off into a hole.
 const STK_ESCALATORS: [string, number, number, number, 'up' | 'down'][] = [
-  ['Escalator up', 6, -12, 0, 'up'],
-  ['Escalator down', 11, -12, 0, 'down'],
-  ['Escalator up', 6, 20, 0, 'up'],
-  ['Escalator down', 11, 20, 0, 'down'],
+  ['Escalator up', 6, -15.5, 0, 'up'],
+  ['Escalator down', 11, -15.5, 0, 'down'],
+  ['Escalator up', 6, 23.5, 0, 'up'],
+  ['Escalator down', 11, 23.5, 0, 'down'],
 ];
+/** The flat comb plate at each end of an escalator run, in metres — the length `SceneLayer.flight()`
+ *  takes out of the footprint before it lays the steps out, so the incline is `depth - 2 * COMB`. */
+const COMB = 1;
 // Clear of the escalator bank and sized like the feature stair it is. At 2.2 m across and two
 // metres from the escalators' flank, the spirals were a pair of fire-escape ladders crowding the
 // spine; a department store's spiral is a 3.6 m drum you can pass someone on, standing on its own.
@@ -212,26 +225,47 @@ const STK_SPIRALS: Point[] = [
   [16.5, 19],
 ];
 const STK_SPIRAL_SIZE = 3.6;
-// name, elevation, colour, ground-floor sub-departments, isOffice
+// name, elevation, storey height, colour, ground-floor sub-departments, isOffice
+// Two storeys are taller than the rest because each has a mezzanine standing inside it: the ground
+// hall carries the entresol gallery half way up it, Herkku the pharmacy gallery. At 4.2 m neither
+// host had room for a level anyone could stand up in — the entresol was 1.6 m under a soffit, a
+// walker's eye is 2.03 — so the hall is 5.6 m and the food market 4.6 m, and the selling floors
+// above start from the hall's own top rather than from a nominal 4.2.
 // Every storey shares one brightness: an elevation-graded ladder read as the lower floors being
 // badly lit rather than lower, and a visitor stepping between levels expects the same daylight.
 // Every level wears a light cool neutral — daylight grey rather than the warm putty these plates
 // used to carry, which under a strong sun read as beige and made a whole department store look like
 // a model made of cardboard. Offices sit a shade bluer than retail, and basements only a step darker
 // so below-grade still reads below-grade.
-const STK_FLOORS: [string, string, number, string, string[], boolean][] = [
-  ['floor-basement', 'Herkku food market', -8.8, '#d2d8de', ['Bakery', 'Deli & sushi', 'Alko'], false],
-  ['floor-b1', 'Electronics & services', -4.2, '#d2d8de', ['Power electronics', 'Shoe repair', 'Pet supplies'], false],
-  ['floor-ground', 'Beauty & cosmetics', 0, '#e1e6ea', ['Fragrances', 'Skincare', 'Watches & jewellery'], false],
-  ['floor-01', 'Womenswear', 4.2, '#e1e6ea', ['Designer studio', 'Knitwear', 'Lingerie'], false],
-  ['floor-02', 'Menswear & denim', 8.4, '#e1e6ea', ['Suits', 'Casual', 'Shoes'], false],
-  ['floor-03', 'Shoes & accessories', 12.6, '#e1e6ea', ['Handbags', 'Travel', 'Sunglasses'], false],
-  ['floor-04', 'Kids & sport', 16.8, '#e1e6ea', ['Toys', 'Outdoor', 'Denim junior'], false],
-  ['floor-05', 'Home & interior', 21, '#e1e6ea', ['ISKU Koti', 'Kitchen', 'Textiles'], false],
-  ['floor-06', 'Books, toys & café', 25.2, '#e1e6ea', ['Academic bookstore', 'Restaurant', 'Crazy Days hall'], false],
-  ['floor-07', 'Offices · buying & admin', 29.4, '#dfe6ec', [], true],
-  ['floor-08', 'Offices · marketing & HR', 33.6, '#dfe6ec', [], true],
-  ['floor-09', 'Offices · management & F8 lounge', 37.8, '#dfe6ec', [], true],
+const STK_FLOORS: [string, string, number, number, string, string[], boolean][] = [
+  ['floor-basement', 'Herkku food market', -9, 4.8, '#d2d8de', ['Bakery', 'Deli & sushi', 'Alko'], false],
+  [
+    'floor-b1',
+    'Electronics & services',
+    -4.2,
+    4.2,
+    '#d2d8de',
+    ['Power electronics', 'Shoe repair', 'Pet supplies'],
+    false,
+  ],
+  ['floor-ground', 'Beauty & cosmetics', 0, 5.6, '#e1e6ea', ['Fragrances', 'Skincare', 'Watches & jewellery'], false],
+  ['floor-01', 'Womenswear', 5.6, 4.2, '#e1e6ea', ['Designer studio', 'Knitwear', 'Lingerie'], false],
+  ['floor-02', 'Menswear & denim', 9.8, 4.2, '#e1e6ea', ['Suits', 'Casual', 'Shoes'], false],
+  ['floor-03', 'Shoes & accessories', 14, 4.2, '#e1e6ea', ['Handbags', 'Travel', 'Sunglasses'], false],
+  ['floor-04', 'Kids & sport', 18.2, 4.2, '#e1e6ea', ['Toys', 'Outdoor', 'Denim junior'], false],
+  ['floor-05', 'Home & interior', 22.4, 4.2, '#e1e6ea', ['ISKU Koti', 'Kitchen', 'Textiles'], false],
+  [
+    'floor-06',
+    'Books, toys & café',
+    26.6,
+    4.2,
+    '#e1e6ea',
+    ['Academic bookstore', 'Restaurant', 'Crazy Days hall'],
+    false,
+  ],
+  ['floor-07', 'Offices · buying & admin', 30.8, 4.2, '#dfe6ec', [], true],
+  ['floor-08', 'Offices · marketing & HR', 35, 4.2, '#dfe6ec', [], true],
+  ['floor-09', 'Offices · management & F8 lounge', 39.2, 4.2, '#dfe6ec', [], true],
 ];
 // A floor plate is the footprint with the atrium (and, for offices, the cores) punched out.
 /** Push a ring outward from its centre by `metres` — a serviceable buffer for the broadly convex
@@ -259,12 +293,12 @@ function plate(p: ProjectDocument, kind: 'zone' | 'room', f: string, name: strin
   p.objects.push(object);
   return object;
 }
-function pillars(p: ProjectDocument, f: string) {
+function pillars(p: ProjectDocument, f: string, height: number) {
   for (const [x, y] of PILLARS) {
     const o = createObject('fixture', [x, y], f, 'Column');
     o.model = 'post' as ModelKind;
     o.width = o.depth = 0.8;
-    o.height = 4.2;
+    o.height = height;
     o.color = '#c4cad0';
     p.objects.push(o);
   }
@@ -317,6 +351,35 @@ function core(
   p.objects.push(toilet);
 }
 
+/** Where a shaft sets you down. A lift or a stair lands inside its own footprint; an escalator lands
+ *  a run away at each end, on the comb plates `SceneLayer.flight()` lays out along the object's DEPTH
+ *  axis — and it is those, not the middle of the truss, that need floor under them. */
+function landings(o: SiteObject): Point[] {
+  if (o.stairModel !== 'escalator') return [o.position];
+  const rad = (o.rotation * Math.PI) / 180;
+  const reach = o.depth / 2 - Math.min(COMB, o.depth / 4) / 2;
+  return [1, -1].map(
+    side => [o.position[0] + Math.sin(rad) * reach * side, o.position[1] - Math.cos(rad) * reach * side] as Point,
+  );
+}
+/** Is there floor under this point on that level — inside some area's outline and clear of its holes? */
+const standsOn = (p: ProjectDocument, floorId: string, pt: Point) =>
+  p.objects.some(
+    o =>
+      o.floorId === floorId &&
+      isArea(o.kind) &&
+      o.rings?.length &&
+      pointInRing(pt, o.rings[0]) &&
+      !o.rings.slice(1).some(hole => pointInRing(pt, hole)),
+  );
+/** Every shaft reaching this level, as its footprint plus a metre of landing margin. The office
+ *  fit-out keeps these clear: a partition drawn across an escalator well is a wall standing in a
+ *  hole in the floor, and the door in it opens onto the flight. */
+const shaftClearances = (p: ProjectDocument, floorId: string): Ring[] =>
+  p.objects
+    .filter(o => isVertical(o.kind) && o.servedFloorIds?.includes(floorId))
+    .map(o => rectangle(o.position, o.width + 2, o.depth + 2, o.rotation));
+
 function createCampus(): ProjectDocument {
   const p = newProject('Stockmann Helsinki');
 
@@ -328,8 +391,8 @@ function createCampus(): ProjectDocument {
   // the top storey's arcade beneath it. Each façade edge becomes one roof plane leaning inward from
   // the eave to the flat deck, and a final section closes the deck itself.
   {
-    const EAVE = 42, // top of floor-09 (37.8 + 4.2)
-      PEAK = 47.2,
+    const EAVE = 43.4, // top of floor-09 (39.2 + 4.2)
+      PEAK = 48.6,
       SETBACK = 5.4;
     const c = centroid(STK);
     const span = Math.max(...STK.map(pt => Math.hypot(pt[0] - c[0], pt[1] - c[1])));
@@ -350,29 +413,33 @@ function createCampus(): ProjectDocument {
   // model lands precisely on Stockmann's parcel at Aleksanterinkatu, Helsinki.
   p.origin = geoOrigin([24.9421808, 60.1683719], 123.045);
   p.description = 'Stockmann department store · Helsinki';
-  p.floors = STK_FLOORS.map(([id, name, elevation]) => ({
+  p.floors = STK_FLOORS.map(([id, name, elevation, height]) => ({
     id,
     buildingId: 'building-main',
     name,
     elevation,
-    height: 4.2,
+    height,
   }));
   // Entresol: the department store's historic intermediate gallery ringing the atrium between the
   // ground hall and Womenswear — a mezzanine level shown in context of the floors around it.
+  // It splits its host storey in two: 2.8 m of hall under the gallery slab and 2.8 m of gallery over
+  // it, which is the least a level can be and still be one you walk through rather than crouch in.
   p.floors.splice(2, 0, {
     id: 'floor-entresol',
     buildingId: 'building-main',
     name: 'Accessories & café · 1A',
-    elevation: 2.4,
-    height: 1.6,
+    elevation: 2.8,
+    height: 2.8,
     mezzanine: true,
   });
+  // The same split under Herkku: 2.4 m of food market below the pharmacy gallery, 2.4 m on it, and
+  // its top flush with the electronics floor's slab.
   p.floors.push({
     id: 'floor-b1a',
     buildingId: 'building-main',
     name: 'Pharmacy & wellness · -1A',
-    elevation: -6.4,
-    height: 2,
+    elevation: -6.6,
+    height: 2.4,
     mezzanine: true,
   });
   // Level codes follow the store's real signage: three below-ground levels and 1A over the hall.
@@ -427,13 +494,10 @@ function createCampus(): ProjectDocument {
     'floor-entresol',
     '#e5eae7',
   );
-  for (const [i, pt] of STK_SPIRALS.entries()) {
-    const s = createObject('stairs', pt, 'floor-entresol', `Spiral stair ${i + 1}`);
-    s.width = STK_SPIRAL_SIZE;
-    s.depth = STK_SPIRAL_SIZE;
-    s.servedFloorIds = ['floor-ground', 'floor-entresol', 'floor-01'];
-    p.objects.push(s);
-  }
+  // The spiral stairs themselves are built once, with the rest of the vertical cores, on the lowest
+  // level they serve. There used to be a second pair here — same name, same place, no stair model,
+  // three levels — and the two disagreed about everything: the renderer drew the drum from the
+  // basement while routing threaded the copy, so a route rode a stair nobody could see.
   // -1A: the pharmacy mezzanine ring with its real tunnel link toward the Academic Bookstore.
   const b1aGallery = poly(p, 'zone', 'Wellness gallery', ENT, 'floor-b1a', '#e0e6ec');
   b1aGallery.rings!.push(closeRing(ATRIUM.map(pt => [...pt] as Point)));
@@ -505,7 +569,7 @@ function createCampus(): ProjectDocument {
   poly(p, 'parcel', 'Property boundary', outset(STK, 7), null, '#f3f4f0');
   poly(p, 'building', 'Stockmann', STK, null, '#dadee4');
   const all = p.floors.map(f => f.id);
-  for (const [f, dept, elevation, color, sub, office] of STK_FLOORS) {
+  for (const [f, dept, elevation, height, color, sub, office] of STK_FLOORS) {
     const level = f === 'floor-basement' ? -2 : f === 'floor-b1' ? -1 : f === 'floor-ground' ? 0 : Number(f.slice(-2));
     // Zone plate carries the atrium hole so the void shows through the selling floors in the stacked
     // view. Only the floors ABOVE the hall, though, because a void has a floor: the light well opens
@@ -521,7 +585,9 @@ function createCampus(): ProjectDocument {
       b.material = 'brick';
       b.color = '#9b705b';
       b.thickness = 0.6;
-      b.height = 4.02;
+      // Up to the underside of the slab over it, so the facade is continuous however tall the storey
+      // is — a fixed 4.02 left daylight showing through a band round the whole 5.6 m hall.
+      b.height = height - 0.18;
     });
     // Enclosed service cores (walls + lift + stair + WC) on every floor.
     core(
@@ -538,10 +604,16 @@ function createCampus(): ProjectDocument {
       all,
     );
     core(p, f, CORE_W, [['Lift D', [-33, -11]]], ['Stair West', [-30, -4]], [-34, -4], all);
-    pillars(p, f);
+    pillars(p, f, height);
     // Central escalator spine and spiral stairs beside the atrium.
     if (f === all[0]) {
-      const storey = Math.abs((p.floors[1]?.elevation ?? 4.4) - (p.floors[0]?.elevation ?? 0)) || 4.4;
+      // An escalator climbs at 30°, so the run follows from the rise — and one bank is one machine,
+      // built to the tallest climb it makes, which here is the ground hall. The old reading took the
+      // difference between the first two entries of the floor LIST, which is an authoring order and
+      // not a stack: it answered 4.6 m for a bank whose steepest storey is 5.6, and then the comb
+      // plates came out of that run as well, so the spine climbed at 35° where it was sized for 30.
+      const stack = p.floors.filter(x => !x.mezzanine).sort((a, b) => a.elevation - b.elevation);
+      const storey = Math.max(...stack.slice(1).map((x, i) => x.elevation - stack[i].elevation));
       for (const [name, x, y, r, travel] of STK_ESCALATORS) {
         const s = createObject('stairs', [x, y], f, name);
         s.rotation = r;
@@ -549,10 +621,7 @@ function createCampus(): ProjectDocument {
         s.travel = travel;
         // Bound to a feed, so the sample host can start and stop it the way it commands a lift.
         s.feedId = `feed-${s.id}`;
-        // An escalator climbs at 30°, so its run follows from the storey height. Left at the
-        // stair default it would be a 4.5 m ramp climbing 4.4 m — the 44° slope that made the
-        // demo's spine look like a chute rather than a machine.
-        s.depth = Math.max(s.depth, runFor(storey, PITCH.escalator));
+        s.depth = Math.max(s.depth, runFor(storey, PITCH.escalator) + 2 * COMB);
         s.servedFloorIds = all;
         p.objects.push(s);
       }
@@ -565,7 +634,7 @@ function createCampus(): ProjectDocument {
         p.objects.push(s);
       }
     }
-    if (office) stockmannOffices(p, f, STK, ATRIUM, [CORE_E, CORE_W]);
+    if (office) stockmannOffices(p, f, STK, ATRIUM, [CORE_E, CORE_W], shaftClearances(p, f));
     else {
       plate(p, 'room', f, dept, [...voids, CORE_E, CORE_W], color);
       sub.forEach((name, i) => {
@@ -580,6 +649,16 @@ function createCampus(): ProjectDocument {
       attached(p, 'door', 'Keskuskatu entrance', [-33, -21], f, 2.2);
     }
     if (level >= 0) windowsAlong(p, f, STK, 'Stockmann glazing', { width: 1.25, height: 2.95, bay: 2.9 });
+  }
+  // Which levels each shaft actually reaches. The cores above were handed the whole floor list, which
+  // is true of every plate level and false of the two mezzanines: those are galleries ringing the
+  // atrium, not floors. Lift C, Lift D, Stair East and Stair West stand outside the ring and the
+  // escalators' comb plates land past its edge, so a landing door there would open onto the hall
+  // below. Trimmed once, here, where every plate exists to be asked.
+  for (const o of p.objects) {
+    if (!isVertical(o.kind) || !o.servedFloorIds) continue;
+    const feet = landings(o);
+    o.servedFloorIds = o.servedFloorIds.filter(id => feet.every(pt => standsOn(p, id, pt)));
   }
   for (const [name, position, symbol] of [
     ['Main entrance', [21.3, -63], 'personnel'],
@@ -604,16 +683,20 @@ function createCampus(): ProjectDocument {
 // cores, a vertical chain per distinct core name, the ground-floor entrances stepping out to the Main
 // entrance POI through bound doors, and the retail sub-department POIs strung along a west spine.
 function campusNav(p: ProjectDocument) {
+  // The ring steps out to each escalator on its way past, because a shaft's route node stands at the
+  // object's own position and the banks sit a half-run back from the void. Follow the atrium instead
+  // and the nodes the vertical chain hangs off would be adrift on the plate, connected to nothing.
+  const [south, north] = [STK_ESCALATORS[0][2], STK_ESCALATORS[2][2]];
   const RING: Point[] = [
     [-12, -12],
-    [6, -12],
-    [11, -12],
+    [6, south],
+    [11, south],
     [20, -12],
     [20, 0],
     [20, 13],
     [20, 20],
-    [11, 20],
-    [6, 20],
+    [11, north],
+    [6, north],
     [-12, 20],
     [-12, -11],
     [-12, -12],
@@ -638,42 +721,30 @@ function campusNav(p: ProjectDocument) {
       [-12, -11],
       [-30, -4],
     ]); // Stair East, Lift D, Stair West
-    navPath(p, f.id, [
-      [11, -12],
-      [13, -11],
-    ]);
-    navPath(p, f.id, [
-      [11, 20],
-      [13, 19],
-    ]); // spiral stairs
+    // Out to the spiral stairs themselves: a spur that stopped three metres short left the drum's
+    // route nodes standing alone, so nothing could ever be routed onto the stair.
+    navPath(p, f.id, [[11, south], [13, -11], STK_SPIRALS[0]]);
+    navPath(p, f.id, [[11, north], [13, 19], STK_SPIRALS[1]]);
     const pois = p.objects.filter(o => o.kind === 'poi' && o.symbol === 'personnel' && o.floorId === f.id);
     if (pois.length) {
       for (const poi of pois) addNavNode(p, f.id, poi.position, poi.id);
       navPath(p, f.id, [[-33, -11], ...pois.map(poi => poi.position)]);
     }
   }
-  for (const name of [
-    'Lift A',
-    'Lift B',
-    'Lift C',
-    'Lift D',
-    'Stair East',
-    'Stair West',
-    'Escalator up',
-    'Escalator down',
-    'Spiral stair 1',
-    'Spiral stair 2',
-  ]) {
-    const o = p.objects.find(x => (x.kind === 'elevator' || x.kind === 'stairs') && x.name === name);
-    if (o) chainVertical(p, o);
-  }
+  // One vertical chain per shaft, elected the way the renderer elects one: `primaryShafts` picks the
+  // lowest twin of each, so the object routing rides is the object the model draws. Threading by name
+  // instead picked whichever copy happened to be first in the list — which chained one of the two
+  // escalator banks and, while a second pair of spiral stairs existed, a twin that served three
+  // levels where the stair on the plan serves fourteen.
+  const primary = primaryShafts(p);
+  for (const o of p.objects) if (isVertical(o.kind) && primary.has(o.id)) chainVertical(p, o);
   const outs: Point[] = [];
   for (const [dname, outPt, approach] of [
     [
       'Aleksanterinkatu entrance',
       [3, -53],
       [
-        [6, -12],
+        [6, south],
         [3, -30],
       ],
     ],
@@ -681,7 +752,7 @@ function campusNav(p: ProjectDocument) {
       'Corner entrance',
       [13, -55],
       [
-        [11, -12],
+        [11, south],
         [12, -30],
       ],
     ],

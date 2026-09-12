@@ -8,6 +8,39 @@ Findings below came from seven independent reviewers reading the engine against 
 Stockmann demo. Each names a file, the failure, and the proposed fix. They are ordered by
 severity. Unticked items are not yet done.
 
+## Status after the fix pass
+
+Four agents worked the list in disjoint files. Everything below marked **fixed** landed in the
+commit this note sits in; the rest are still open.
+
+**Fixed — demo data.** Escalator banks moved clear of the atrium (y -15.5 / 23.5) and the run
+re-sized from the tallest climb the bank actually makes, so every flight is now at or under 30°.
+Both mezzanines given standable heights: the ground hall is 5.6 m with the entresol at 2.8 h2.8,
+Herkku 4.8 m with the pharmacy gallery at -6.6 h2.4, and everything from level 01 up shifted 1.4 m.
+Shafts now serve only levels they can actually land on, enforced by a new validation rule. Office
+partitions on 07-09 clear the shafts. The garage stair runs along its lobby, the two inter-deck
+ramps have separate lanes, and the duplicate spiral stairs are gone.
+
+**Fixed — camera.** The 512-px tile constant in fit, re-aim on tilt and rotate instead of re-fit,
+the aim preserved across 3D/2D, leaving walk mode returns to where the walker stood, startPose
+uses the floor point at screen centre, focus and route eases carry the depth aim, and the 3D edit
+handles are gated.
+
+**Fixed — engine, levels.** One presentation frame: ramps, the excavation pit, the cage and the
+outdoor geometry all follow the rebased floor in walk mode. The walk ceiling sits at the storey's
+real underside and can never fall below eye height. The stack overview is gated on real depth
+compression rather than a level count, so a basement no longer collapses the tower to wire rings.
+Shell slabs survive the garage decks and are hidden above grade. A mezzanine is now drawn from the
+storey it hangs inside, so flights to the entresol arrive somewhere.
+
+**Fixed — engine, circulation.** Plate voids and ceiling voids use separate predicates, so flights
+at the top and bottom of a run are visible. Shafts are clamped to the drawn levels above grade.
+Primary verticals survive the stack's shell skip. Switchback lanes are symmetric, comb plates are
+flush, and escalator voids are cut to the headroom zone.
+
+**Still open:** the low-severity items at the end of this note, plus anything the reviewers never
+reached — two of the seven lenses (visibility and materials) never reported.
+
 ## Confirmed and fixed already (in 25b65fe)
 
 - Excavation built 1,055 separate soil pits because `polygonClipping.union` threw on ~1,000

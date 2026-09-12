@@ -57,7 +57,7 @@ import {
   routeFlowGradient,
   routeWalks,
 } from './route';
-import { aimCenter, JourneyPlayer } from './journey';
+import { aimCenter, floorAim, JourneyPlayer } from './journey';
 import type { Route } from '../model/navigation';
 import { LIFT, SLAB } from './levels';
 import type { SceneLayer } from './SceneLayer';
@@ -1237,19 +1237,20 @@ export function MapCanvas(props: MapCanvasProps) {
       }
     });
     m.on('pitchend', () => setPitch(m.getPitch()));
-    // Re-aim after inclination changes: the depth-aim shift is pitch-dependent, so the focused
-    // floor drifts off-centre unless the fit re-runs once tilting settles.
-    let pitchTimer: ReturnType<typeof setTimeout> | undefined;
-    m.on('pitchend', () => {
-      const p = latest.current;
-      if (!p.threeD || !p.floorId || journey.current?.playing || p.walk) return;
-      clearTimeout(pitchTimer);
-      pitchTimer = setTimeout(() => {
-        if (journey.current?.playing) return;
-        const f = latest.current.project.floors.find(x => x.id === latest.current.floorId);
-        if (f && f.elevation !== 0) fit(latest.current.floorId);
-      }, 220);
-    });
+    // The depth-aim shift depends on both pitch and bearing, so tilting or turning slides the
+    // focused floor out from under the crosshair. Note what was there when the gesture starts and
+    // put it back when it settles — only the centre. Re-fitting here (which is what this used to do)
+    // threw away the zoom and the pan the user had just chosen, on every floor off grade.
+    let aimTimer: ReturnType<typeof setTimeout> | undefined;
+    const markAim = () => noteAim(m);
+    const settleAim = () => {
+      clearTimeout(aimTimer);
+      aimTimer = setTimeout(() => aimBack(m), 220);
+    };
+    m.on('pitchstart', markAim);
+    m.on('rotatestart', markAim);
+    m.on('pitchend', settleAim);
+    m.on('rotateend', settleAim);
     m.on('style.load', () => {
       styleReady.current = true;
       cityHidden.current = '';
@@ -1401,7 +1402,7 @@ export function MapCanvas(props: MapCanvasProps) {
       );
     });
     return () => {
-      clearTimeout(pitchTimer);
+      clearTimeout(aimTimer);
       journey.current?.stop();
       journey.current = null;
       resize.disconnect();
@@ -1468,19 +1469,25 @@ export function MapCanvas(props: MapCanvasProps) {
     const focusFloor = scopeFloor === undefined ? p.floorId : scopeFloor;
     const elev = undergroundView(p.project, focusFloor, p.stack).focusElevation;
     if (p.threeD && elev) {
-      const perPixel = (156543.03392 * Math.cos((m.getCenter().lat * Math.PI) / 180)) / Math.pow(2, zoom);
-      const screenDistance =
-        (m as unknown as { transform?: { cameraToCenterDistance?: number } }).transform?.cameraToCenterDistance ??
-        m.getCanvas().height * 1.5;
+      // Metres per screen pixel at the fitted zoom. MapLibre lays the world out in 512-pixel tiles,
+      // so the constant is half the familiar 256-pixel one; with the larger figure the camera looked
+      // twice as high as it is and the depth compensation below came out at half strength.
+      const perPixel = (78271.5169 * Math.cos((m.getCenter().lat * Math.PI) / 180)) / Math.pow(2, zoom);
+      const screenDistance = m.transform.cameraToCenterDistance || m.getCanvas().clientHeight * 1.5;
       const altitude = screenDistance * perPixel * Math.cos((m.getPitch() * Math.PI) / 180);
+      // cameraForBounds framed the plan on the ground; the storey is `elev` below it (or above), so
+      // the camera is that much farther from what is being framed. Zooming in lowers the camera by
+      // the same factor, which is why the whole correction is one logarithm and not an iteration.
+      // Undamped: the old 0.85 was tuned against an altitude that came out twice too large, and
+      // measured on one fixed ring drawn at each depth it left P3 nearly three per cent small.
       const adjusted = altitude + elev;
-      if (adjusted > 25) zoom += Math.log2(altitude / adjusted) * 0.85;
+      if (adjusted > 25) zoom += Math.log2(altitude / adjusted);
       // Aim at the floor itself, not the ground above it — aimCenter() is this fit's depth-aim
       // shift factored into journey.ts so the journey camera and the fit agree exactly.
       const at = maplibregl.LngLat.convert(camera.center as maplibregl.LngLatLike);
       camera.center = aimCenter([at.lng, at.lat], elev, m.getPitch(), m.getBearing());
     }
-    m.easeTo({ center: camera.center, zoom, bearing: m.getBearing(), duration: 650 });
+    steer(m, { center: camera.center, zoom, bearing: m.getBearing(), duration: 650 });
   }
   useEffect(() => {
     // A walker who climbs a stair stays where they are standing; re-fitting would throw them across
@@ -1508,6 +1515,8 @@ export function MapCanvas(props: MapCanvasProps) {
   // the things only the document knows — which walls are solid, what a stair leads to, and what the
   // head-up display should say.
   const walker = useRef<WalkController | null>(null);
+  /** Where the walk left the person, written by the walk's own teardown. */
+  const leftAt = useRef<WalkAvatar | null>(null);
   const [walkHint, setWalkHint] = useState<WalkHint>(NO_HINT);
   const hintRef = useRef<WalkHint>(NO_HINT);
   const hintAt = useRef(0);
@@ -1515,17 +1524,65 @@ export function MapCanvas(props: MapCanvasProps) {
   // The person marker being dragged off the navigator, in map-wrap pixels; dropped on the map it
   // becomes the avatar and the walk starts there. Google's pegman, for a floor plan.
   const [peg, setPeg] = useState<{ x: number; y: number } | null>(null);
+  /** How high above the map's own ground plane the active floor's walking surface is presented. Zero
+   *  in plan and while walking, where the storey is rebased onto the ground plane itself. Callers
+   *  that ask about a view they are leaving — the walk about to start, the 3D about to become 2D —
+   *  pass `lifted` themselves, because by then the prop has already flipped. */
+  const floorLift = (lifted = latest.current.threeD && !latest.current.walk): number => {
+    const p = latest.current;
+    return lifted ? undergroundView(p.project, p.floorId, p.stack).focusElevation + LIFT + SLAB : 0;
+  };
   /** Where a screen point lands on the active floor's walking surface, in plan metres. The map
    *  unprojects onto the ground; a floor presented above it meets the same ray nearer the camera, by
    *  its elevation times tan(pitch) — the fit's depth-aim in reverse. */
-  const floorPoint = (m: GLMap, x: number, y: number): Point => {
+  const floorPoint = (m: GLMap, x: number, y: number, lift = floorLift()): Point => {
     const p = latest.current;
     const ground = m.unproject([x, y]);
-    const lift = p.threeD && !p.walk ? undergroundView(p.project, p.floorId, p.stack).focusElevation + LIFT + SLAB : 0;
     const at = lift
       ? aimCenter([ground.lng, ground.lat], -lift, m.getPitch(), m.getBearing())
       : [ground.lng, ground.lat];
     return toLocal(at as Point, p.project.origin);
+  };
+  /** The inverse: the ground centre that puts `at` on the floor under the crosshair. */
+  const floorCenter = (at: Point, lift: number, pitchDeg: number, bearingDeg: number): [number, number] => {
+    const ll = toLngLat(at, latest.current.project.origin);
+    return aimCenter([ll[0], ll[1]], lift, pitchDeg, bearingDeg);
+  };
+  /** The floor point the camera was looking at when a tilt or a turn began, kept until the gesture
+   *  settles. Held across the whole gesture rather than sampled at the end, because the aim is what
+   *  the movement is breaking — and the pitch slider fires a start/end pair per tick, so the first
+   *  reading is the only honest one. */
+  const aimHeld = useRef<Point | null>(null);
+  /** True while a camera move of our own is in flight. Our eases aim where they mean to and change
+   *  pitch and bearing to get there, which looks exactly like a user tilting — without this the
+   *  re-aim below would note a point mid-transition and then chase it once the transition landed. */
+  const steering = useRef(false);
+  const steer = (m: GLMap, options: Parameters<GLMap['easeTo']>[0]) => {
+    steering.current = true;
+    aimHeld.current = null;
+    const settled = () => {
+      clearTimeout(timer);
+      m.off('moveend', settled);
+      steering.current = false;
+    };
+    const timer = setTimeout(settled, (options.duration ?? 300) + 400); // an ease with nothing to do never fires moveend
+    m.on('moveend', settled);
+    m.easeTo(options);
+  };
+  const noteAim = (m: GLMap) => {
+    const p = latest.current;
+    if (aimHeld.current || steering.current || !p.threeD || p.walk || journey.current?.playing) return;
+    const { clientWidth: w, clientHeight: h } = m.getCanvas();
+    aimHeld.current = floorPoint(m, w / 2, h / 2);
+  };
+  const aimBack = (m: GLMap) => {
+    const at = aimHeld.current;
+    aimHeld.current = null;
+    const p = latest.current;
+    if (!at || !p.threeD || p.walk || journey.current?.playing) return;
+    const lift = floorLift();
+    if (!lift) return; // at grade there is no parallax to correct, and no reason to nudge the view
+    m.easeTo({ center: floorCenter(at, lift, m.getPitch(), m.getBearing()), duration: 300 });
   };
   const dropPeg = (e: ReactPointerEvent<HTMLButtonElement>) => {
     const m = map.current,
@@ -1580,9 +1637,9 @@ export function MapCanvas(props: MapCanvasProps) {
     // into. Panning across the site to another building and pressing Walk means that building, not
     // a march back to where the last walk ended.
     const avatar = p.avatar;
+    const { clientWidth: w, clientHeight: h } = m.getCanvas();
     if (avatar && avatar.floorId === p.floorId) {
       const at = m.project(toLngLat(avatar.position, p.project.origin));
-      const { clientWidth: w, clientHeight: h } = m.getCanvas();
       if (at.x >= 0 && at.y >= 0 && at.x <= w && at.y <= h) return avatar;
     }
     // The map's centre is the point the camera looks AT. At walking pitch that is a hundred metres up
@@ -1590,10 +1647,15 @@ export function MapCanvas(props: MapCanvasProps) {
     // walker a building further on than where they left. When the camera is already down at eye
     // height, stand where the camera is and keep its pitch; a plan camera looking down from a
     // hundred metres up has no walker to recover, the point it looks at is the room the person
-    // meant, and its 35° tilt would have them staring at their shoes.
+    // meant, and its 35° tilt would have them staring at their shoes. That point is on the FLOOR,
+    // though, not on the ground the plan camera is centred over — on P3 the two are fifteen metres
+    // apart, which is where the walk used to begin. (`walk` is already true here, so the lift the
+    // view still has has to be asked for explicitly.)
     const eyeLevel = m.transform.getCameraAltitude() < 2 * (EYE + LIFT + SLAB);
-    const c = eyeLevel ? m.transform.getCameraLngLat() : m.getCenter();
-    const here = toLocal([c.lng, c.lat], p.project.origin);
+    const cam = m.transform.getCameraLngLat();
+    const here = eyeLevel
+      ? toLocal([cam.lng, cam.lat], p.project.origin)
+      : floorPoint(m, w / 2, h / 2, floorLift(p.threeD));
     const pose = (position: Point) => ({ position, heading: planHeading, pitch: eyeLevel ? m.getPitch() : undefined });
     if (!p.floorId || spaceAt(p.project, p.floorId, here)) return pose(here);
     const spaces = p.project.objects
@@ -1754,12 +1816,16 @@ export function MapCanvas(props: MapCanvasProps) {
       sound.dispose();
       window.removeEventListener('pointerdown', wake, true);
       window.removeEventListener('keydown', wake, true);
-      latest.current.onAvatar?.({
+      const stood: WalkAvatar = {
         floorId: latest.current.floorId,
         position: final.position,
         heading: final.heading,
         pitch: final.pitch,
-      });
+      };
+      // The camera effect below needs this in the same commit, and the host's copy of it does not
+      // come back to us until a render later.
+      leftAt.current = stood;
+      latest.current.onAvatar?.(stood);
       walker.current = null;
       hintRef.current = NO_HINT;
       setWalkHint(NO_HINT);
@@ -1946,17 +2012,41 @@ export function MapCanvas(props: MapCanvasProps) {
       cancelled = true;
     };
   }, [props.project.drawings, props.assets]);
+  const prevView = useRef({ threeD: props.threeD, walk: props.walk });
   useEffect(() => {
     const m = map.current;
     if (!m) return;
+    const was = prevView.current;
+    prevView.current = { threeD: props.threeD, walk: props.walk };
     const skipEase = (firstTilt.current && !!props.initialCamera) || props.walk;
     firstTilt.current = false;
-    if (!skipEase)
-      m.easeTo({
-        pitch: props.threeD ? 35 : 0,
-        bearing: siteBearing(props.project) + (props.threeD ? -12 : 0),
-        duration: 600,
+    const pitch = props.threeD ? 35 : 0;
+    const bearing = siteBearing(props.project) + (props.threeD ? -12 : 0);
+    const { clientWidth: w, clientHeight: h } = m.getCanvas();
+    const stood = was.walk && !props.walk ? (leftAt.current ?? props.avatar) : null;
+    leftAt.current = null;
+    if (stood) {
+      // Leaving the walk. The camera is a person's eye, and the point it looks AT is whatever the
+      // floor meets some thirty metres up the room in front of them — leaving it there is how the
+      // plan view came back showing the next room along, from above, at walking zoom. Ease out to a
+      // camera standing over the person and facing the way they faced, in one move that also
+      // straightens the pitch, so the walk reads as stepping back out of the building.
+      const bearingOut = stood.heading + (props.project.origin[2] ?? 0);
+      steer(m, {
+        center: floorCenter(stood.position, floorLift(props.threeD), pitch, bearingOut),
+        zoom: 20, // room scale: the floor the walk happened on, not the whole storey
+        pitch,
+        bearing: bearingOut,
+        duration: 700,
       });
+    } else if (!skipEase) {
+      // Switching between the plan and the model moves the horizon, and with it the depth aim: the
+      // floor point under the crosshair is displaced by its own elevation times tan(pitch). Read that
+      // point through the view being LEFT and put it back under the crosshair in the same ease.
+      const at = floorPoint(m, w / 2, h / 2, floorLift(was.threeD && !was.walk));
+      const center = was.threeD !== props.threeD ? floorCenter(at, floorLift(props.threeD), pitch, bearing) : null;
+      steer(m, { ...(center ? { center } : {}), pitch, bearing, duration: 600 });
+    }
     if (props.walk) {
       // Walk mode owns the handlers and turns them off — said here as well as in the controller so
       // that a walk which somehow fails to attach is inert rather than wrong. This effect also runs
@@ -1980,7 +2070,14 @@ export function MapCanvas(props: MapCanvasProps) {
     const m = map.current;
     if (journey.current?.playing) return;
     const o = props.project.objects.find(o => o.id === props.focusId);
-    if (m && o) m.easeTo({ center: toLngLat(objectPosition(props.project, o), props.project.origin), duration: 500 });
+    // Through the depth aim: the object's plan position is on the ground, and the storey it belongs
+    // to is drawn metres under it, so centring on the raw coordinate leaves a basement object well
+    // off to one side of the frame.
+    if (m && o)
+      m.easeTo({
+        center: floorAim(m, props.project, objectPosition(props.project, o), o.floorId ?? props.floorId, props),
+        duration: 500,
+      });
   }, [props.focusId]); // eslint-disable-line react-hooks/exhaustive-deps
   // Ground-plane projection: no elevation term, which is also how the markers are placed. Its
   // inverse is unproject, so a handle you grab and the point you drop it on are in the same frame
@@ -2413,6 +2510,10 @@ export function MapCanvas(props: MapCanvasProps) {
           )}
         {props.canEdit &&
           props.tool === 'select' &&
+          // Ground-plane handles, like the vertex and junction ones: in 3D the object is drawn at its
+          // storey's elevation and the handle would hang metres away from it, in open air over a
+          // basement or inside the slab over a tower.
+          !props.threeD &&
           selectedObject &&
           (() => {
             const s = screen(selectedObject.position);
@@ -2434,6 +2535,7 @@ export function MapCanvas(props: MapCanvasProps) {
           })()}
         {props.canEdit &&
           props.tool === 'select' &&
+          !props.threeD &&
           selectedObject &&
           !selectedObject.barrierId &&
           selectedObject.rotation !== undefined &&
@@ -2456,6 +2558,7 @@ export function MapCanvas(props: MapCanvasProps) {
           })()}
         {props.canEdit &&
           props.tool === 'select' &&
+          !props.threeD &&
           selectedObject?.kind === 'camera' &&
           (() => {
             // One handle for the whole cone: how far it reaches is the distance, how wide it opens

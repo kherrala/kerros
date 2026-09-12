@@ -98,6 +98,7 @@ import { neutralBasemap } from './adapters/basemap';
 import { openingFloorId } from './model/project';
 import { statusTone } from './adapters/status';
 import { MapCanvas } from './map/MapCanvas';
+import { floorAim } from './map/journey';
 import type { WalkAvatar } from './map/walk';
 import { EntityIcon } from './components/Icons';
 import { Inspector } from './components/Inspector';
@@ -1195,7 +1196,9 @@ export function SitePlanner({
     const node = (project.navNodes ?? []).find(n => n.id === step.nodeIds.at(-1));
     if (!moved && node && mapRef.current)
       mapRef.current.easeTo({
-        center: toLngLat(node.position, project.origin),
+        // Through the map's own depth aim: in 3D the step is drawn at its storey's elevation, and a
+        // node in the garage centred on its ground coordinate lands well outside the frame.
+        center: floorAim(mapRef.current, project, node.position, step.floorId, { threeD, stack }),
         zoom: Math.max(mapRef.current.getZoom(), 18),
         duration: 550,
       });

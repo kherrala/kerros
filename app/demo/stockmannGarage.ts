@@ -25,7 +25,7 @@ export const GARAGE_FLOORS: [id: string, name: string, elevation: number, code: 
   ['floor-p2', 'Parking P2', -16.8, 'P2'],
   ['floor-p3', 'Parking P3', -21, 'P3'],
 ];
-/** The store level the garage cores surface into (Herkku food market, -8.8 m). */
+/** The store level the garage cores surface into (Herkku food market, -9 m). */
 const LOBBY_FLOOR = 'floor-basement';
 // Scale of each deck relative to the plan above: each is a little smaller than the one over it,
 // because excavation costs money the deeper you go.
@@ -133,8 +133,13 @@ function fixture(p: ProjectDocument, name: string, position: Point, floorId: str
   p.objects.push(o);
   return o;
 }
-/** Bearing of a local direction, in the rotation convention SiteObject.rotation uses. */
+/** Bearing of a local direction, in the rotation convention SiteObject.rotation uses. Aligns an
+ *  object's WIDTH axis — its long side, for a car or a strip light — with that direction. */
 const heading = (dir: Point) => (Math.atan2(dir[1], dir[0]) * 180) / Math.PI;
+/** The same bearing for an object whose business runs along its DEPTH axis instead. A stair is the
+ *  case that matters: its flights climb up the depth of the footprint, so a stair given the heading
+ *  of the lobby it stands in runs across the lobby, not along it. */
+const runHeading = (dir: Point) => heading(dir) - 90;
 
 export function stockmannGarage(p: ProjectDocument): void {
   for (const [id, name, elevation, code] of GARAGE_FLOORS)
@@ -256,22 +261,29 @@ export function stockmannGarage(p: ProjectDocument): void {
     lobby.height = 3;
     lobby.feedId = `garage-lobby-${deck.id}`;
     const lift = createObject('elevator', at(core, -3.5, 0), deck.id, 'Garage lift');
+    // The car sits square in the lobby it opens onto: the site origin carries the block's bearing, so
+    // an unrotated box stands askew to every wall around it.
+    lift.rotation = heading(EAST);
     lift.servedFloorIds = [LOBBY_FLOOR, ...GARAGE_FLOORS.map(([id]) => id)];
     lift.feedId = `garage-lift-${deck.id}`;
     p.objects.push(lift);
     const stair = createObject('stairs', at(core, 3.5, 0), deck.id, 'Garage stair');
-    stair.rotation = heading(EAST);
+    stair.rotation = runHeading(EAST);
     stair.servedFloorIds = [LOBBY_FLOOR, ...GARAGE_FLOORS.map(([id]) => id)];
     p.objects.push(stair);
   }
 
   // Ramps between decks: alternating runs so a car works its way down rather than dropping through
-  // the same slot twice.
+  // the same slot twice. Each has its own lane, and the lower lane sits further in than the one above
+  // it: every deck is smaller than the deck over it, so a ramp that simply ran back down the first
+  // one's strip — which is what a single lane offset meant, the same rectangle twice — put the P2→P3
+  // ramp's foot a couple of metres off the edge of the P3 plate, a car driving down onto nothing.
+  const RAMP_LANES = [40, 30];
   for (let i = 0; i < decks.length - 1; i++) {
     const from = decks[i],
       to = decks[i + 1];
     const dir = i % 2 === 0 ? SOUTH : NORTH;
-    const highEnd = at(centroid(from.ring), 40, i % 2 === 0 ? -18 : 18);
+    const highEnd = at(centroid(from.ring), RAMP_LANES[i % RAMP_LANES.length], i % 2 === 0 ? -18 : 18);
     ramp(
       p,
       `Ramp ${from.code} → ${to.code}`,
@@ -330,11 +342,12 @@ function garageNav(p: ProjectDocument, decks: { id: string; code: string; ring: 
   const lobbyRing = decks[0].ring;
   const core = at(centroid(lobbyRing), -4, -MODULE / 2 - 9);
   const lobbyLift = createObject('elevator', add(core, scale(EAST, -3.5)), LOBBY_FLOOR, 'Garage lift');
+  lobbyLift.rotation = heading(EAST);
   lobbyLift.servedFloorIds = [LOBBY_FLOOR, ...GARAGE_FLOORS.map(([id]) => id)];
   lobbyLift.feedId = `garage-lift-${LOBBY_FLOOR}`;
   p.objects.push(lobbyLift);
   const lobbyStair = createObject('stairs', add(core, scale(EAST, 3.5)), LOBBY_FLOOR, 'Garage stair');
-  lobbyStair.rotation = heading(EAST);
+  lobbyStair.rotation = runHeading(EAST);
   lobbyStair.servedFloorIds = [LOBBY_FLOOR, ...GARAGE_FLOORS.map(([id]) => id)];
   p.objects.push(lobbyStair);
   // Tie the store-side core into the food market's own walk network.

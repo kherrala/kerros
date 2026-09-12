@@ -18,7 +18,7 @@ import {
 } from './geometry';
 import { navEdges, navNodes } from './navigation';
 import { EXTERIOR_PRESETS } from './materials';
-import { AMBIENCE_PRESETS, OBJECT_KINDS, isOpening, isSpace } from './types';
+import { AMBIENCE_PRESETS, OBJECT_KINDS, isArea, isOpening, isSpace } from './types';
 import type { Ambience, Point, ProjectDocument, Ring, SiteObject } from './types';
 
 /** How far from the site origin a coordinate may sit, in metres. A guard against corrupt data, not a
@@ -286,6 +286,12 @@ export function validateProject(value: unknown): ProjectDocument {
     )
   )
     fail('invalid barrier.');
+  // The drawn areas of each level, gathered once: the served-floor rule below asks what is under a
+  // shaft on every level it claims, and a department store asks that a couple of hundred times.
+  const areasByFloor = new Map<string, SiteObject[]>();
+  for (const o of p.objects)
+    if (o.floorId && isArea(o.kind) && Array.isArray(o.rings) && Array.isArray(o.rings[0]))
+      areasByFloor.set(o.floorId, [...(areasByFloor.get(o.floorId) ?? []), o]);
   for (const o of p.objects) {
     if (
       !(OBJECT_KINDS as readonly string[]).includes(o.kind) ||
@@ -305,6 +311,20 @@ export function validateProject(value: unknown): ProjectDocument {
     if (o.servedFloorIds && (!Array.isArray(o.servedFloorIds) || o.servedFloorIds.some(id => !floorIds.has(id))))
       fail('unknown served floor.');
     if (o.servedFloorIds && !distinct(o.servedFloorIds)) fail('served floors must be listed once each.');
+    // A shaft stands in one place and reaches a list of levels, so the plan has to agree with itself
+    // about that place: where the drawn areas of the levels it serves put floor under it, they all
+    // have to. One that lands on twelve plates and falls outside the thirteenth is the real case —
+    // a lift core beside a mezzanine gallery, its doors opening onto the hall two storeys down, and
+    // routing sending someone through them. Judged on outer boundaries only (a hole is exactly where
+    // a shaft belongs: a stair in a light well, a lift in an atrium), and only against levels that
+    // are drawn at all — a plan whose floors are not areas yet says nothing about any of its shafts,
+    // which is why a shaft standing off every one of them is left alone.
+    if (o.servedFloorIds && (o.kind === 'stairs' || o.kind === 'elevator')) {
+      const drawn = o.servedFloorIds.map(id => areasByFloor.get(id)).filter(areas => !!areas?.length);
+      const on = drawn.map(areas => areas!.some(a => pointInRing(o.position, (a.rings as Ring[])[0])));
+      if (on.some(Boolean) && !on.every(Boolean))
+        fail('a stair or lift serves a level it does not stand on — its landing there opens onto nothing.');
+    }
     if (o.doorSides !== undefined) {
       if (o.kind !== 'elevator') fail('only an elevator lists door sides.');
       if (

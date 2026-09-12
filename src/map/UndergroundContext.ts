@@ -156,9 +156,11 @@ export function undergroundPit(ring: Point[], floor: number, bottom: number, str
     for (const s of strata) if (Math.abs(z - s) < 0.35) target.lerp(SLAB_LINE, 0.5);
     return target;
   };
-  // `fade` makes the face transparent at `hi` and solid at `lo`. The veil above the inspected level
+  // `fade` makes the face solid at `hi` and transparent at `lo`. The veil above the inspected level
   // uses it so the ground you are looking through thins out to nothing exactly where your floor is —
   // the geology stays readable near grade without anything standing over the floor being inspected.
+  // It used to be the other way round, which put the densest band of soil across the near edge of
+  // the plate you had come down to look at and left grade itself invisible.
   const sides = (lo: number, hi: number, opacity: number, detail: boolean, fade = false) => {
     if (hi <= lo) return;
     const positions: number[] = [];
@@ -169,7 +171,7 @@ export function undergroundPit(ring: Point[], floor: number, bottom: number, str
       shade(x, y, z, c);
       colors.push(c.r, c.g, c.b);
       // Squared falloff keeps the soil near grade legible while clearing quickly toward the floor.
-      if (fade) colors.push(((hi - z) / (hi - lo)) ** 2);
+      if (fade) colors.push(((z - lo) / (hi - lo)) ** 2);
     };
     // Subdivide the face: vertex colours can only express strata and mottling if there are vertices
     // between the top and the bottom.

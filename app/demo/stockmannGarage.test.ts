@@ -12,8 +12,9 @@ describe('Stockmann underground garage', () => {
   it('adds three parking decks below the existing basements', () => {
     const decks = p.floors.filter(f => deckIds.includes(f.id));
     expect(decks).toHaveLength(3);
-    // Deeper than the deepest pre-existing level (Herkku at -8.8) and strictly descending.
-    expect(Math.max(...decks.map(d => d.elevation))).toBeLessThan(-8.8);
+    // Deeper than the deepest storey of the store itself, and strictly descending.
+    const store = Math.min(...p.floors.filter(f => !deckIds.includes(f.id)).map(f => f.elevation));
+    expect(Math.max(...decks.map(d => d.elevation))).toBeLessThan(store);
     for (let i = 1; i < decks.length; i++) expect(decks[i].elevation).toBeLessThan(decks[i - 1].elevation);
     expect(() => validateProject(JSON.parse(JSON.stringify(p)))).not.toThrow();
   });
@@ -43,6 +44,30 @@ describe('Stockmann underground garage', () => {
       expect(pointInRing(r.slope!.axis[0] as Point, deck.rings![0])).toBe(false);
       expect(pointInRing(r.slope!.axis[1] as Point, deck.rings![0])).toBe(true);
     }
+  });
+
+  it('lands each inter-deck ramp on the deck it arrives at, in a lane of its own', () => {
+    const inter = ramps.filter(r => r.slope!.high !== 0);
+    expect(inter.map(r => r.name)).toEqual(['Ramp P1 → P2', 'Ramp P2 → P3']);
+    for (const [i, r] of inter.entries()) {
+      // The deck it arrives on is the one at the ramp's low elevation. Every deck is smaller than
+      // the one above it, so a ramp that simply ran back down the lane above finishes off the plate.
+      const arrival = p.objects.find(o => o.name.startsWith('Parking deck') && o.floorId === GARAGE_FLOORS[i + 1][0])!;
+      expect(r.slope!.low).toBeCloseTo(GARAGE_FLOORS[i + 1][2]);
+      expect(pointInRing(r.slope!.axis[1] as Point, arrival.rings![0]), `${r.name} foot on the deck`).toBe(true);
+    }
+    // And they are two ramps, not one strip driven twice: no end of either lies on the other's run.
+    const [a, b] = inter.map(r => r.slope!.axis);
+    for (const end of [...a, ...b])
+      expect(
+        Math.min(
+          ...[a, b]
+            .flat()
+            .map(pt => Math.hypot(pt[0] - end[0], pt[1] - end[1]))
+            .filter(d => d > 0.01),
+        ),
+        'the two ramps share a lane',
+      ).toBeGreaterThan(4);
   });
 
   it('routes on foot from a shop floor down to a bay on the deepest deck', () => {

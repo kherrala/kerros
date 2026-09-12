@@ -81,6 +81,7 @@ export function stockmannOffices(
   footprint: Ring,
   atrium: Ring,
   cores: Ring[],
+  shafts: Ring[] = [],
 ) {
   const level = Number(floorId.slice(-2));
   const suite = (name: string, span: number, use: RoomUse): Suite => ({ name, span, use });
@@ -174,6 +175,10 @@ export function stockmannOffices(
     [rectangle([32, 8], 28, 3)], // east lift lobby to east wing
     [rectangle([2.5, 32], 3, 30)], // north gallery connection
     [rectangle([1, -28], 3, 34)], // south gallery connection
+    // The wells themselves, with their landing margins. The gallery rectangle covers most of the
+    // spine but not the ends of the escalator runs, and a fit-out that does not know a shaft is
+    // there slices offices across it: partitions standing in the opening and doors onto the flight.
+    ...shafts.map(r => [closeRing(r)]),
     ...wings.map(w => {
       const b = basis(w);
       return [b.strip(-3, b.length + 3, w.depth, w.depth + 2.6)];
@@ -560,7 +565,10 @@ export function stockmannOffices(
   // route can reach is a modelling error (the ontology walk visits every one), so break each
   // shut-in open with a door through its longest partition — never the facade, and the core walls
   // only as a last resort.
-  const floorBarriers = project.barriers.filter(b => b.floorId === floorId && b.name !== 'Facade wall');
+  // The facade counts when asking whether a stretch is open — it is a wall like any other, and a
+  // slot left between a suite and the outside wall is shut in, not open to the street — but never
+  // when choosing where the door goes, which is why it is filtered out of the candidates below.
+  const floorBarriers = project.barriers.filter(b => b.floorId === floorId);
   const wallEnds = new Map(floorBarriers.map(b => [b.id, barrierEnds(project, b) as [Point, Point]]));
   for (const { object } of rooms) {
     const ring = openRing(object.rings![0]);
@@ -581,7 +589,8 @@ export function stockmannOffices(
         o => o.kind === 'door' && o.barrierId === cover.id && segmentProjection(o.position, a, b).distance < 0.2,
       );
       if (hasDoor) open = true;
-      walls.push({ id: cover.id, length, partition: cover.name.endsWith('partition'), mid });
+      if (cover.name !== 'Facade wall')
+        walls.push({ id: cover.id, length, partition: cover.name.endsWith('partition'), mid });
     }
     if (open) continue;
     // A door frees the room only if the room itself stands on one side of it and a DIFFERENT
