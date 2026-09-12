@@ -8,7 +8,14 @@ import maplibregl, {
 } from 'maplibre-gl';
 import { Compass, LocateFixed, Minus, Mountain, Plus, RotateCcw, RotateCw } from 'lucide-react';
 import polygonClipping from 'polygon-clipping';
-import type { AssetRepository, Point, ProjectDocument, SiteObject, Tool } from '../model/types';
+import {
+  isSpace,
+  type AssetRepository,
+  type Point,
+  type ProjectDocument,
+  type SiteObject,
+  type Tool,
+} from '../model/types';
 import type { StatusReading } from '../model/live';
 import type { BasemapConfig } from '../model/host';
 import {
@@ -31,11 +38,14 @@ import { useKerrosTheme, useStrings, type MapStyleOptions } from '../theme';
 import { neutralBasemap } from '../adapters/basemap';
 import { ambient, mixColor, type Sun, sunlight } from './lighting';
 import { EntityIcon } from '../components/Icons';
-import { draftFeatures, makeFeatures, navGraphFeatures, onFloor, visibleOnFloor } from './features';
+import { draftFeatures, makeFeatures, navGraphFeatures, onFloor, visibleOnFloor, wallPieces } from './features';
 import { routeArrowImage, routeFeatures } from './route';
 import { aimCenter, JourneyPlayer } from './journey';
 import type { Route } from '../model/navigation';
-import { SceneLayer } from './SceneLayer';
+import { LIFT, SceneLayer, SLAB } from './SceneLayer';
+import { EYE, HEAD_ROOM, unstick, WalkController, type WalkPose } from './walk';
+import { inSpace, spaceAt, spacePoint } from '../model/spaces';
+import { servedFloors } from '../model/vertical';
 import { undergroundView } from './underground';
 import { loadBasemap } from './loadBasemap';
 
@@ -68,6 +78,11 @@ export interface MapCanvasProps {
   statuses: Map<string, StatusReading>;
   /** Draw the soil section around below-grade floors. */
   excavation?: boolean;
+  /** First-person walk mode: the camera becomes a person standing on `floorId`. Requires threeD.
+   *  While it is on the map's own gestures are off and the floor is drawn at ground level. */
+  walk?: boolean;
+  /** Walk mode wants out (Escape with nothing else to release). */
+  onWalkExit?: () => void;
   focusId?: string | null;
   alignment?: { image: Point[]; map: Point[] };
   /** Exact camera to restore (deep links); suppresses the automatic fit and 3D tilt-in on load. */
@@ -155,6 +170,14 @@ function planFeatures(p: MapCanvasProps, mapStyle?: MapStyleOptions): GeoJSON.Fe
  *  drawing was made in is the one to read it in, so north-up means site-up. A project with no
  *  bearing is unaffected: its frame IS north. */
 const siteBearing = (project: ProjectDocument) => project.origin[2] ?? 0;
+/** What walk mode tells the person walking: where they are, and what the level keys would do here. */
+interface WalkHint {
+  looking: boolean;
+  up: string | null;
+  down: string | null;
+  where: string;
+}
+const NO_HINT: WalkHint = { looking: false, up: null, down: null, where: '' };
 
 export function MapCanvas(props: MapCanvasProps) {
   const container = useRef<HTMLDivElement>(null),
@@ -1011,7 +1034,16 @@ export function MapCanvas(props: MapCanvasProps) {
       // keep their colour: a building with an orange box where its inside should be.
       for (const veil of ['kerros-dim', 'kerros-underground']) if (m.getLayer(veil)) m.moveLayer(veil, 'kerros-3d');
       scene.current?.setMapStyle(mapStyleRef.current);
-      scene.current?.update(p.project, p.floorId, p.stack, p.selected, p.sun, p.statuses, p.excavation ?? false);
+      scene.current?.update(
+        p.project,
+        p.floorId,
+        p.stack,
+        p.selected,
+        p.sun,
+        p.statuses,
+        p.excavation ?? false,
+        p.walk ?? false,
+      );
       scene.current?.setRoute(p.route ?? null, p.activeStep ?? null);
     } else if (m.getLayer('kerros-3d')) {
       m.removeLayer('kerros-3d');
@@ -1055,6 +1087,10 @@ export function MapCanvas(props: MapCanvasProps) {
         pitch: cam?.pitch ?? 0,
         maxZoom: 25,
         minZoom: 5,
+        // Walk mode puts the eye ~2 m above the slab, and the only way MapLibre expresses that is a
+        // very high zoom at a very steep pitch. The default ceiling of 60° leaves the horizon off
+        // screen and the eye a storey too high; 85° is as far as the projection stays sane.
+        maxPitch: 85,
         attributionControl: false,
         canvasContextAttributes: { antialias: true },
         dragRotate: false,
@@ -1082,7 +1118,7 @@ export function MapCanvas(props: MapCanvasProps) {
     let pitchTimer: ReturnType<typeof setTimeout> | undefined;
     m.on('pitchend', () => {
       const p = latest.current;
-      if (!p.threeD || !p.floorId || journey.current?.playing) return;
+      if (!p.threeD || !p.floorId || journey.current?.playing || p.walk) return;
       clearTimeout(pitchTimer);
       pitchTimer = setTimeout(() => {
         if (journey.current?.playing) return;
@@ -1231,6 +1267,8 @@ export function MapCanvas(props: MapCanvasProps) {
           f.properties.kind !== 'coverage' &&
           f.properties.kind !== 'status-halo',
       );
+      // Walking, a click is how you take hold of the pointer — not how you select a wall.
+      if (p.walk) return;
       p.onClick(
         toLocal([e.lngLat.lng, e.lngLat.lat], p.project.origin),
         p.threeD ? (scene.current?.pick(e.point) ?? null) : (hit?.properties.id ?? null),
@@ -1256,6 +1294,10 @@ export function MapCanvas(props: MapCanvasProps) {
     const m = map.current;
     if (!m) return;
     const p = latest.current;
+    // Walk mode owns the camera outright. A fit here — from the map's load, from the floor changing,
+    // from the fit button — would ease the eye a hundred metres into the air and leave it there,
+    // because the walker only writes a pose when the walker moves.
+    if (p.walk) return;
     const scoped =
       scopeFloor !== undefined
         ? [
@@ -1311,9 +1353,118 @@ export function MapCanvas(props: MapCanvasProps) {
     m.easeTo({ center: camera.center, zoom, bearing: m.getBearing(), duration: 650 });
   }
   useEffect(() => {
-    if (ready && !journey.current?.playing) fit(props.floorId); // journey floor switches must not trigger a competing fit ease
+    // A walker who climbs a stair stays where they are standing; re-fitting would throw them across
+    // the floor plate the moment they arrived.
+    if (ready && !journey.current?.playing && !props.walk) fit(props.floorId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.floorId, props.stack]);
+  // ---------------------------------------------------------------- walk mode
+  // The camera stops being a camera and becomes a person: WalkController owns the pose, this owns
+  // the things only the document knows — which walls are solid, what a stair leads to, and what the
+  // head-up display should say.
+  const walker = useRef<WalkController | null>(null);
+  const [walkHint, setWalkHint] = useState<WalkHint>(NO_HINT);
+  const hintRef = useRef<WalkHint>(NO_HINT);
+  const hintAt = useRef(0);
+  /** Wall bodies the walker's shoulders meet. wallPieces() already splits a wall at its openings, so
+   *  a doorway is a gap in this list and nothing has to know what a door is; the strip left over a
+   *  door is a piece lifted clear of head height, which you walk under. */
+  const walkWalls = useMemo(
+    () =>
+      props.walk
+        ? wallPieces(props.project, props.floorId, false)
+            .filter(piece => piece.base < HEAD_ROOM)
+            .map(piece => piece.ring)
+        : [],
+    [props.walk, props.project, props.floorId],
+  );
+  /** Where to stand when walk mode opens. Under the camera if that is somewhere on this floor —
+   *  entering walk mode should feel like stepping into the view you already had — and otherwise in
+   *  the middle of the floor's largest space, rather than in the car park across the street. */
+  const startPoint = (m: GLMap): Point => {
+    const p = latest.current;
+    const c = m.getCenter();
+    const here = toLocal([c.lng, c.lat], p.project.origin);
+    if (!p.floorId || spaceAt(p.project, p.floorId, here)) return here;
+    const spaces = p.project.objects
+      .filter(o => o.floorId === p.floorId && isSpace(o.kind) && o.rings?.length)
+      .sort((a, b) => objectArea(b) - objectArea(a));
+    // A concave plate's centroid can fall in its own courtyard, so take the largest space that
+    // actually contains the point it offers.
+    for (const space of spaces) {
+      const at = spacePoint(p.project, space);
+      if (inSpace(space, at)) return at;
+    }
+    return here;
+  };
+  /** The shaft the walker is standing in and where it could take them. */
+  const climb = (at: Point) => {
+    const p = latest.current;
+    const shaft = p.project.objects.find(
+      o => o.floorId === p.floorId && (o.kind === 'stairs' || o.kind === 'elevator') && inSpace(o, at),
+    );
+    const here = p.project.floors.find(f => f.id === p.floorId);
+    if (!shaft || !here) return { shaft: null, up: null, down: null };
+    const served = servedFloors(p.project, shaft);
+    // An escalator carries you one way. Offering the other is offering to walk up the down staircase.
+    const only = shaft.stairModel === 'escalator' ? (shaft.travel ?? 'up') : null;
+    const above = served.filter(f => f.elevation > here.elevation)[0] ?? null;
+    const below = served.filter(f => f.elevation < here.elevation).slice(-1)[0] ?? null;
+    return { shaft, up: only === 'down' ? null : above, down: only === 'up' ? null : below };
+  };
+  useEffect(() => {
+    const m = map.current;
+    if (!m || !ready || !props.walk) return;
+    const p = latest.current;
+    const controller = new WalkController({
+      onPose: (pose: WalkPose) => {
+        const now = performance.now();
+        if (now - hintAt.current < 150) return; // the pose changes every frame; what it means does not
+        hintAt.current = now;
+        const { up, down } = climb(pose.position);
+        const room = spaceAt(latest.current.project, latest.current.floorId, pose.position);
+        const next: WalkHint = {
+          looking: pose.looking,
+          up: up?.name ?? null,
+          down: down?.name ?? null,
+          where: room?.name ?? '',
+        };
+        if (
+          next.looking !== hintRef.current.looking ||
+          next.up !== hintRef.current.up ||
+          next.down !== hintRef.current.down ||
+          next.where !== hintRef.current.where
+        ) {
+          hintRef.current = next;
+          setWalkHint(next);
+        }
+      },
+      onUse: (down: boolean) => {
+        const target = climb(walker.current?.position ?? [0, 0]);
+        const floor = down ? target.down : target.up;
+        if (floor) latest.current.onRequestFloor?.(floor.id);
+      },
+      onExit: () => latest.current.onWalkExit?.(),
+    });
+    walker.current = controller;
+    if (import.meta.env.DEV) (window as unknown as { __kerrosWalk?: WalkController }).__kerrosWalk = controller;
+    controller.attach(m, p.project.origin, {
+      position: unstick(startPoint(m), walkWalls),
+      heading: m.getBearing() - (p.project.origin[2] ?? 0),
+    });
+    return () => {
+      controller.detach();
+      walker.current = null;
+      hintRef.current = NO_HINT;
+      setWalkHint(NO_HINT);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [ready, props.walk]);
+  useEffect(() => {
+    // Walk mode draws the active floor on the map's own ground plane (SceneLayer rebases it), so the
+    // eye is the same height above it on every storey — only the walls change.
+    walker.current?.setTerrain({ walls: walkWalls, eye: EYE + LIFT + SLAB });
+  }, [walkWalls]);
   // Journey floor barrier: resolves once the app shows the target floor AND the view has rebuilt —
   // in 3D when the SceneLayer revision advances past the value captured HERE, before React flushes
   // the floor change (do not insert an await between requestFloor and this call), in 2D after two
@@ -1443,7 +1594,7 @@ export function MapCanvas(props: MapCanvasProps) {
   useEffect(() => {
     const m = map.current;
     if (!m) return;
-    const skipEase = firstTilt.current && !!props.initialCamera;
+    const skipEase = (firstTilt.current && !!props.initialCamera) || props.walk;
     firstTilt.current = false;
     if (!skipEase)
       m.easeTo({
@@ -2098,6 +2249,42 @@ export function MapCanvas(props: MapCanvasProps) {
           <Compass size={18} />
         </button>
       </div>
+      {props.walk && (
+        <div className="walk-hud">
+          <div className="walk-status">
+            {walkHint.where && <b>{walkHint.where}</b>}
+            {walkHint.up && (
+              <span>
+                <kbd>F</kbd> up to {walkHint.up}
+              </span>
+            )}
+            {walkHint.down && (
+              <span>
+                <kbd>⇧F</kbd> down to {walkHint.down}
+              </span>
+            )}
+          </div>
+          <div className={`walk-keys ${walkHint.looking ? 'busy' : ''}`}>
+            <span>Drag to look around</span>
+            <span>
+              <kbd>W</kbd>
+              <kbd>A</kbd>
+              <kbd>S</kbd>
+              <kbd>D</kbd> walk
+            </span>
+            <span>
+              <kbd>←</kbd>
+              <kbd>→</kbd> turn
+            </span>
+            <span>
+              <kbd>Shift</kbd> hurry
+            </span>
+            <span>
+              <kbd>Esc</kbd> leave
+            </span>
+          </div>
+        </div>
+      )}
       <div className="map-scale">
         <span style={{ width: scaleWidth }} />
         10 m <i />{' '}

@@ -178,7 +178,14 @@ function Home() {
   // The host owns the URL: mirror the editor's view into a deep-link fragment as it changes.
   if (open) {
     const onViewChange = (v: ViewLink) =>
-      writeViewLink({ project: open.project.id, floor: v.floor, threeD: v.threeD, stack: v.stack, camera: v.camera });
+      writeViewLink({
+        project: open.project.id,
+        floor: v.floor,
+        threeD: v.threeD,
+        stack: v.stack,
+        walk: v.walk,
+        camera: v.camera,
+      });
     const hostProps = {
       adapters,
       initialView: open.view,

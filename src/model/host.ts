@@ -78,6 +78,8 @@ export interface ViewState {
   floor?: string | null;
   threeD?: boolean;
   stack?: boolean;
+  /** First-person walk-through. Implies threeD; stack is ignored while it is on. */
+  walk?: boolean;
   camera?: CameraState;
   /** Which surface to open on. Absent means the plan viewer — right for a link someone was sent,
    *  wrong for a project the host just created or imported, where the point is to start drawing. */

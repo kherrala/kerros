@@ -59,9 +59,9 @@ export const nestingLift = (area: number) => COPLANAR_STEP * (area > 2000 ? 0 : 
 // How far the contact shading rises off a slab, and how dark it gets right at the junction.
 const AO_RISE = 0.85,
   AO_FLOOR = 0.58;
-const LIFT = 0.15,
-  SLAB = 0.18,
-  ROOM = 0.05,
+export const LIFT = 0.15;
+export const SLAB = 0.18;
+const ROOM = 0.05,
   GROUND = 0.06;
 const wallBase = (floorId: string | null) => (floorId ? LIFT + SLAB : GROUND);
 
@@ -1046,6 +1046,9 @@ export class SceneLayer implements CustomLayerInterface {
     sun: Sun = FIXED.day,
     statuses: Map<string, StatusReading> | null = null,
     excavation = false,
+    /** Walk mode: put the floor being walked on the map's own ground plane. MapLibre's camera cannot
+     *  go below that plane, so a basement drawn at its true depth would be unreachable on foot. */
+    walk = false,
   ) {
     // Everything below still asks "is it evening?" — that question has an answer, it just is not a
     // switch any more. The sun's own angle and strength are read from `sun` where they matter.
@@ -1132,7 +1135,7 @@ export class SceneLayer implements CustomLayerInterface {
     this.buried = buried;
     this.depthScale = view.depthScale;
     this.presentedElevation = view.elevation;
-    this.rebase = stack ? 0 : view.focusElevation;
+    this.rebase = stack || walk ? 0 : view.focusElevation;
     // Deep stacks show the complete structure with detail on the selected floor. Building every
     // room and fitting hundreds of metres into a city camera wasted work on hidden geometry.
     const structureOverview = buried && stack && view.levels.length > 16 && !!activeF;
@@ -1164,6 +1167,12 @@ export class SceneLayer implements CustomLayerInterface {
     // the same fit-out, and lighting seventeen storeys three different colours at once would say
     // something about the building that is not true.
     const air = ambient(sun, project.floors.find(f => f.id === floorId)?.light);
+    // Walking, the eye is inside and adapted to the inside. The exposure that keeps a plan legible
+    // from above is set against the basemap — a small pale plate over a pale map — and at eye level
+    // that same plate fills the lower half of the frame and clips to white. A clipped floor has no
+    // contrast left to give: it is the flat grey field you see when you stand in one. Stopping down
+    // is what an eye does on the way through the door, and it hands the range back to the floor.
+    if (this.renderer) this.renderer.toneMappingExposure = walk ? 0.62 : 0.9;
     this.scene.environment = this.environmentMap(evening);
     this.scene.environmentRotation.set(Math.PI / 2, 0, 0);
     this.scene.environmentIntensity = air.environment;
@@ -1363,6 +1372,44 @@ export class SceneLayer implements CustomLayerInterface {
       }
       const z = floors.get(fid)?.elevation ?? 0;
       for (const pg of merged) this.surface(pg, z + LIFT + SLAB, SLAB, '#e5e4df', `shell:${fid}`, undefined, true);
+    }
+    // Walk mode gets a lid. An open-topped floor plate is not a room: the light has nothing to come
+    // off, the floor runs away to the horizon and a shop floor reads as grey tarmac. The ceiling is
+    // most of what makes an interior look like an interior from inside it. Cutaway keeps its open
+    // top — looking down into a storey is the whole point of that view.
+    if (walk && floorId && activeF) {
+      const areas = (index.objects.get(floorId) ?? []).filter(
+        o => o.rings?.length && (o.kind === 'room' || o.kind === 'zone'),
+      );
+      let lid: Ring[][] = [];
+      try {
+        const polygons = areas.map(o => [closeRing(o.rings![0])] as Ring[]);
+        if (polygons.length) {
+          lid = polygonClipping.union(polygons[0], ...polygons.slice(1)) as unknown as Ring[][];
+          // A stairwell is a hole in the ceiling as much as in the floor, and it is the hole you
+          // look up through on your way to the storey above.
+          const voids = shaftVoids(project, floorId, index.primary);
+          if (voids.length)
+            lid = polygonClipping.difference(lid as never, ...voids.map(v => [v] as never)) as unknown as Ring[][];
+        }
+      } catch {
+        lid = []; // degenerate footprint: an open ceiling beats a wrong one
+      }
+      // The structural slab sits at the top of the storey, so the soffit you see is a slab's depth
+      // below the next floor's datum.
+      const soffit = this.rebase + activeF.height - SLAB;
+      for (const pg of lid)
+        this.surface(
+          pg,
+          soffit,
+          SLAB,
+          '#f0f1ee',
+          `ceiling:${floorId}`,
+          undefined,
+          false,
+          false,
+          this.materials.luminous('#f0f1ee', air.interior, 0.35 * Math.min(1, air.interiorLevel / 2)),
+        );
     }
     // The level below brings its walls too, or its rooms read as floating colour.
     const allPieces = [...wallPieces(project, floorId, stack), ...(under ? wallPieces(project, under.id, false) : [])];

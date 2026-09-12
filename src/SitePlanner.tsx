@@ -14,6 +14,7 @@ import {
   Eye,
   Copy,
   FileImage,
+  Footprints,
   Hand,
   Landmark,
   Layers3,
@@ -182,6 +183,7 @@ export function SitePlanner({
     live = mode === 'live';
   const [threeD, setThreeD] = useState(initialView?.threeD ?? initialView?.mode !== 'edit'),
     [stack, setStack] = useState(initialView?.stack ?? false),
+    [walk, setWalk] = useState(initialView?.walk ?? false),
     [tool, setTool] = useState<Tool>('select'),
     [draft, setDraft] = useState<Point[]>([]),
     [hover, setHover] = useState<Point | null>(null),
@@ -296,23 +298,44 @@ export function SitePlanner({
   // The current view (floor, mode, camera pose) is emitted through onViewChange on state changes and
   // on every camera moveend; hosts persist it however they like (the reference app writes a deep-link
   // fragment). The library itself touches no URL. writeHash keeps its name for its call sites.
-  const viewRef = useRef({ floorId, threeD, stack });
-  viewRef.current = { floorId, threeD, stack };
-  const writeHash = useCallback(() => {
+  const viewRef = useRef({ floorId, threeD, stack, walk });
+  viewRef.current = { floorId, threeD, stack, walk };
+  const walkRef = useRef(walk);
+  walkRef.current = walk;
+  // `force` distinguishes a state change from a camera move. Walking writes a camera every animation
+  // frame, and every write here is a history.replaceState — so while walking only the mode change
+  // itself is published, and the pose it publishes is the one you set off from.
+  const writeHash = useCallback((force = false) => {
     const m = mapRef.current;
     if (!m || playingRef.current) return;
-    const v = viewRef.current,
-      c = m.getCenter();
+    const v = viewRef.current;
+    if (v.walk && !force) return;
+    const c = m.getCenter();
     onViewChangeRef.current?.({
       floor: v.floorId,
       threeD: v.threeD,
       stack: v.stack,
+      walk: v.walk,
       camera: { center: [c.lng, c.lat], zoom: m.getZoom(), bearing: m.getBearing(), pitch: m.getPitch() },
     });
   }, []);
   useEffect(() => {
-    writeHash();
-  }, [floorId, threeD, stack, writeHash]);
+    writeHash(true);
+  }, [floorId, threeD, stack, walk, writeHash]);
+  // The three ways of looking at a plan. 2D is the drawing, 3D is the model, walk is standing in it —
+  // one cycle so a single key reaches all three, and one setter so the modes cannot half-overlap
+  // (walking a stack of every floor at once is not a thing a person can do).
+  const viewMode: 'walk' | '3d' | '2d' = walk ? 'walk' : threeD ? '3d' : '2d';
+  const nextView = viewMode === '2d' ? '3d' : viewMode === '3d' ? 'walk' : '2d';
+  const chooseMode = (next: 'walk' | '3d' | '2d') => {
+    setWalk(next === 'walk');
+    setThreeD(next !== '2d');
+    if (next === 'walk') setStack(false);
+    if (next !== '2d') {
+      setTool('select');
+      setDraft([]);
+    }
+  };
   const theme = useKerrosTheme();
   const en = useStrings();
   const notify = useCallback(
@@ -1203,7 +1226,9 @@ export function SitePlanner({
         finish();
       }
       // Chrome shortcuts work in every mode; single letters stay free because tools use their own set.
+      // While walking, only the keys that change mode are ours — the rest belong to the walker.
       if (!cmd) {
+        if (walkRef.current && !['t', '1', '2', '3', '['.toLowerCase(), ']'].includes(e.key.toLowerCase())) return;
         const key = e.key.toLowerCase();
         if (e.key === '?') {
           setHelpOpen(true);
@@ -1222,15 +1247,10 @@ export function SitePlanner({
           return;
         }
         if (key === 't') {
-          if (threeD) setThreeD(false);
-          else {
-            setThreeD(true);
-            setTool('select');
-            setDraft([]);
-          }
+          chooseMode(nextView);
           return;
         }
-        if (key === 'x' && threeD) {
+        if (key === 'x' && threeD && !walk) {
           setStack(!stack);
           return;
         }
@@ -1293,6 +1313,10 @@ export function SitePlanner({
     // shift-pitch handling when the map canvas has focus. AltGr symbols are avoided on purpose.
     const floorKeys = (e: KeyboardEvent) => {
       if ((e.target as HTMLElement).closest('input, textarea, select, dialog')) return;
+      // Walking owns the movement keys outright. The walker stops these events before they get here,
+      // but "before" depends on listener registration order, and losing that race pans the map 140 px
+      // under the walker on every arrow — which reads as the arrows moving faster than W and S.
+      if (walkRef.current) return;
       const m = mapRef.current;
       if (e.key.startsWith('Arrow')) {
         e.preventDefault();
@@ -1823,13 +1847,15 @@ export function SitePlanner({
               onJourneyStep={index => setPlayStep(index)}
               onJourneyEnd={() => {
                 stopPlaying();
-                writeHash();
+                writeHash(true);
               }}
+              walk={walk}
+              onWalkExit={() => chooseMode('3d')}
               onRequestFloor={id => setFloorId(id)}
               onReady={map => {
                 mapRef.current = map;
-                map.on('moveend', writeHash);
-                writeHash();
+                map.on('moveend', () => writeHash());
+                writeHash(true);
               }}
               initialCamera={initialView?.camera}
             />
@@ -1858,22 +1884,23 @@ export function SitePlanner({
                 {keyHint('⇧↑↓')}
               </div>
               <div className="view-switch">
-                <button className={!threeD ? 'active' : ''} onClick={() => setThreeD(false)}>
-                  2D{threeD && keyHint('T')}
+                <button className={viewMode === '2d' ? 'active' : ''} onClick={() => chooseMode('2d')}>
+                  2D{nextView === '2d' && keyHint('T')}
+                </button>
+                <button className={viewMode === '3d' ? 'active' : ''} onClick={() => chooseMode('3d')}>
+                  <Box size={14} />
+                  3D{nextView === '3d' && keyHint('T')}
                 </button>
                 <button
-                  className={threeD ? 'active' : ''}
-                  onClick={() => {
-                    setThreeD(true);
-                    setTool('select');
-                    setDraft([]);
-                  }}
+                  className={viewMode === 'walk' ? 'active' : ''}
+                  title="Walk through the building at eye level"
+                  onClick={() => chooseMode('walk')}
                 >
-                  <Box size={14} />
-                  3D{!threeD && keyHint('T')}
+                  <Footprints size={14} />
+                  Walk{nextView === 'walk' && keyHint('T')}
                 </button>
               </div>
-              {threeD && (
+              {threeD && !walk && (
                 <button className={`stack-button ${stack ? 'active' : ''}`} onClick={() => setStack(!stack)}>
                   <Layers3 size={15} />
                   {stack ? 'All floors' : 'Cutaway'}

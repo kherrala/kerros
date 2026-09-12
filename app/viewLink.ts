@@ -2,7 +2,8 @@ import type { Map as GLMap } from 'maplibre-gl';
 
 // Deep links live in the URL fragment so a refresh restores the exact view — project, floor,
 // 2D/3D mode and the full camera pose (centre, zoom, bearing, pitch). Format:
-//   #p=<projectId>&f=<floorId|out>&v=2d|3d|stack&c=<lng>,<lat>,<zoom>,<bearing>,<pitch>
+//   #p=<projectId>&f=<floorId|out>&v=2d|3d|stack|walk&c=<lng>,<lat>,<zoom>,<bearing>,<pitch>
+// `walk` is a 3D mode, so a host that only knows about threeD still gets a sensible view from it.
 // The pose precision is deliberate: reloading a drift repro must land on the identical camera.
 export interface CameraPose {
   center: [number, number];
@@ -15,6 +16,8 @@ export interface ViewLink {
   floor?: string | null;
   threeD?: boolean;
   stack?: boolean;
+  /** First-person walk-through. Implies threeD and excludes stack. */
+  walk?: boolean;
   camera?: CameraPose;
 }
 
@@ -29,6 +32,7 @@ export function parseViewLink(hash = location.hash): ViewLink {
   if (v) {
     link.threeD = v !== '2d';
     link.stack = v === 'stack';
+    link.walk = v === 'walk';
   }
   const c = params.get('c')?.split(',').map(Number);
   if (c?.length === 5 && c.every(Number.isFinite))
@@ -40,7 +44,8 @@ export function formatViewLink(link: ViewLink): string {
   const params = new URLSearchParams();
   if (link.project) params.set('p', link.project);
   if (link.floor !== undefined) params.set('f', link.floor ?? 'out');
-  if (link.threeD !== undefined) params.set('v', link.threeD ? (link.stack ? 'stack' : '3d') : '2d');
+  if (link.threeD !== undefined)
+    params.set('v', link.walk ? 'walk' : link.threeD ? (link.stack ? 'stack' : '3d') : '2d');
   if (link.camera)
     params.set(
       'c',

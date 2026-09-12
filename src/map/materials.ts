@@ -37,6 +37,25 @@ export class MaterialLibrary {
     }
     return this.materials.get(key)!;
   }
+  /** A lit ceiling. Its underside faces down, so every light in the scene misses it and a plain
+   *  material renders it as the darkest thing in the room — which is the opposite of what a ceiling
+   *  full of fittings looks like from beneath. Emissive is the honest fix: the ceiling is not lit,
+   *  it is the thing doing the lighting, and `tint` is whatever the floor's lamps are. */
+  luminous(color: string, tint: string, strength: number) {
+    const key = `luminous:${color}:${tint}:${strength.toFixed(2)}`;
+    if (!this.materials.has(key)) {
+      const material = new THREE.MeshStandardMaterial({
+        color,
+        roughness: 0.9,
+        side: THREE.DoubleSide,
+        emissive: new THREE.Color(tint),
+        emissiveIntensity: strength,
+      });
+      material.userData.shared = true;
+      this.materials.set(key, material);
+    }
+    return this.materials.get(key)!;
+  }
   /** A vertex-coloured twin of an existing material, so geometry can carry baked shading without
    *  doubling the palette. Cached per source material: everything drawn with the twin must supply a
    *  colour attribute, since a merge needs matching attributes across all its geometries. */

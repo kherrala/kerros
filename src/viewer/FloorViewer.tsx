@@ -33,6 +33,10 @@ export interface FloorViewerProps {
   onHoverObject?: (id: string | null) => void;
   threeD?: boolean;
   stack?: boolean;
+  /** Walk the floor at eye level with keyboard and mouse. Implies threeD; stack is ignored.
+   *  This is the mode indoor navigation is meant to be read in — a visitor is standing in it. */
+  walk?: boolean;
+  onWalkExit?: () => void;
   dark?: boolean;
   showLabels?: boolean;
   showPlan?: boolean;
@@ -103,8 +107,11 @@ export function FloorViewer(props: FloorViewerProps) {
         tool="select"
         draft={EMPTY_DRAFT}
         hover={null}
-        threeD={props.threeD ?? false}
-        stack={props.stack ?? false}
+        threeD={props.threeD || props.walk || false}
+        stack={props.walk ? false : (props.stack ?? false)}
+        walk={props.walk ?? false}
+        onWalkExit={props.onWalkExit}
+        onRequestFloor={changeFloor}
         coverage={false}
         showLabels={props.showLabels ?? true}
         showPlan={props.showPlan ?? true}

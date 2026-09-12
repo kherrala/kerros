@@ -1523,6 +1523,68 @@
   background: var(--line);
   margin: 3px 4px;
 }
+/* Walk mode's head-up display: everything the person walking needs and nothing the map wants.
+   Pointer-events are off throughout — the canvas underneath has to receive the drag. */
+.walk-hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 24;
+  font-size: 12px;
+}
+.walk-status {
+  position: absolute;
+  left: 50%;
+  bottom: 78px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 7px 14px;
+  border-radius: 999px;
+  background: rgba(20, 26, 43, 0.6);
+  color: rgba(244, 245, 250, 0.86);
+  white-space: nowrap;
+}
+.walk-status:empty {
+  display: none;
+}
+.walk-status b {
+  color: #fff;
+  font-weight: 600;
+}
+.walk-keys {
+  position: absolute;
+  left: 50%;
+  bottom: 40px;
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgba(20, 26, 43, 0.42);
+  color: rgba(244, 245, 250, 0.76);
+  white-space: nowrap;
+  transition: opacity 0.25s;
+}
+/* While you are actually turning the view, the legend is in the way of the thing it explains. */
+.walk-keys.busy {
+  opacity: 0.25;
+}
+.walk-hud kbd {
+  display: inline-block;
+  min-width: 17px;
+  margin: 0 1px;
+  padding: 1px 4px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(255, 255, 255, 0.24);
+  font: inherit;
+  font-size: 11px;
+  color: #f4f5fa;
+  text-align: center;
+}
 .map-scale {
   position: absolute;
   right: 14px;
