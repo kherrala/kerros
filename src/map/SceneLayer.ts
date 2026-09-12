@@ -1483,6 +1483,12 @@ export class SceneLayer implements CustomLayerInterface {
               // one it starts from. Without this the flight you are standing at the top of is not
               // drawn.
               ...(floorId ? (index.reaching.get(floorId) ?? []) : []),
+              // And a driveway that surfaces belongs to the street as much as to the deck it leaves.
+              // It is filed on the deck, so the site view — which iterates the site's own objects —
+              // never saw it, and the garage came out with no mouth at the kerb.
+              ...(floorId === null
+                ? project.objects.filter(o => o.slope && Math.max(o.slope.high, o.slope.low) >= -0.01)
+                : []),
             ].map(o => [o.id, o] as const),
           ).values(),
         ];
@@ -1496,7 +1502,13 @@ export class SceneLayer implements CustomLayerInterface {
       // A shaft is the exception: it is filed under the lowest level it serves, which for a lift
       // running from a garage is below grade, and skipping it there would hide the whole shaft from
       // every storey above. It stands where it reaches, so it is judged by the level in focus.
-      if (!buried && belowGrade(o.floorId) && !(isVertical(o.kind) && reaches(project, o, floorId))) continue;
+      // And a driveway that surfaces is the second: a ramp climbing out of the garage belongs to the
+      // street as much as to the deck it leaves, so on the site view it is drawn diving into the
+      // ground where it really does. Hiding it left the garage with no mouth and the kerb with an
+      // unexplained gap in it.
+      const surfaces = floorId === null && !!o.slope && Math.max(o.slope.high, o.slope.low) >= -0.01;
+      if (!buried && belowGrade(o.floorId) && !(isVertical(o.kind) && reaches(project, o, floorId)) && !surfaces)
+        continue;
       // A twin of a shaft already drawn from its lowest level. One lift, one shaft.
       if (isVertical(o.kind) && !index.primary.has(o.id)) continue;
       // A shaft is filed under the LOWEST level it serves, and every rule that hides a storey under

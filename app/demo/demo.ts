@@ -772,4 +772,13 @@ function campusNav(p: ProjectDocument) {
     addNavNode(p, null, main.position, main.id);
     navPath(p, null, [...outs, main.position]);
   }
+  // The garage mouths surface a hundred metres out under the surrounding streets. They are part of
+  // the site's network too — a route to a parked car begins at the kerb, not at a shop door — so
+  // each one is walked back to the nearest entrance forecourt along the street it comes out on.
+  for (const gate of p.objects)
+    if (gate.floorId === null && gate.kind === 'gate' && gate.symbol === 'driveway' && outs.length) {
+      const near = outs.reduce((best, pt) => (distance(pt, gate.position) < distance(best, gate.position) ? pt : best));
+      const half: Point = [(near[0] + gate.position[0]) / 2, (near[1] + gate.position[1]) / 2];
+      navPath(p, null, [near, half, gate.position]);
+    }
 }

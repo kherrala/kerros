@@ -328,16 +328,41 @@ export function stockmannGarage(p: ProjectDocument): void {
   // out under the streets. That reach is exactly the case the excavation union exists to cover.
   const top = decks[0];
   const tc = centroid(top.ring);
+  const mouths: { gate: SiteObject; foot: Point }[] = [];
   for (const [name, dir, out] of [
     ['Entry ramp · Mannerheimintie', WEST, 132],
     ['Exit ramp · Kaivokatu', SOUTH, 128],
-  ] as [string, Point, number][])
-    ramp(p, name, add(tc, scale(dir, out)), add(tc, scale(dir, 26)), 4, 0, top.elevation, top.id);
+  ] as [string, Point, number][]) {
+    const mouth = add(tc, scale(dir, out)),
+      foot = add(tc, scale(dir, 26));
+    ramp(p, name, mouth, foot, 4, 0, top.elevation, top.id);
+    // The mouth is the one place the garage touches the outside world, so it is a real object on the
+    // site level rather than the far end of a buried zone: a gate you can route to, name and stand
+    // at. Without it the ramps ran a hundred metres out under the streets and connected to nothing.
+    const gate = createObject('gate', mouth, null, name.replace(' ramp', ' · garage'));
+    gate.symbol = 'driveway';
+    gate.width = 4.4;
+    gate.depth = 0.6;
+    gate.height = 3.2;
+    gate.rotation = heading(dir);
+    gate.color = '#6a7079';
+    p.objects.push(gate);
+    mouths.push({ gate, foot });
+  }
   // A flat service link east to the existing Keskuskatu loading dock.
   const link = area(p, 'zone', 'Service link · Keskuskatu', strip(at(tc, 24, 0), EAST, 40, 3.2), top.id, LANE);
   link.symbol = 'service';
 
   garageNav(p, decks);
+  // Down the ramp: a gate edge from the street into the top deck. A 'door' edge is what the model
+  // calls a way through with one end outside, which is exactly what a garage mouth is, and the walk
+  // run from the ramp's foot meets the deck's own cross corridor at its centre.
+  for (const { gate, foot } of mouths) {
+    const outside = addNavNode(p, null, gate.position, gate.id),
+      inside = addNavNode(p, top.id, foot);
+    addNavEdge(p, 'door', outside, inside, gate.id);
+    navPath(p, top.id, [foot, tc]);
+  }
 }
 /** Walking routes through the garage: aisle spines, a cross link to each core, and the vertical
  *  chain up into the store, so the router can take you from a shop floor to your car. */

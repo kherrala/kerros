@@ -1,7 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { createDemo } from './demo';
 import { GARAGE_FLOORS } from './stockmannGarage';
-import { findRoute, pointInRing, ringArea, slopeElevation, validateNavigation, validateProject } from '@kerros/schema';
+import {
+  distance,
+  findRoute,
+  pointInRing,
+  ringArea,
+  slopeElevation,
+  validateNavigation,
+  validateProject,
+} from '@kerros/schema';
 import type { Point } from '@kerros/schema';
 
 describe('Stockmann underground garage', () => {
@@ -91,5 +99,31 @@ describe('Stockmann underground garage', () => {
       const plate = on.find(o => o.name.startsWith('Parking deck'))!;
       expect(ringArea(plate.rings![0])).toBeGreaterThan(4000); // a genuinely vast deck, in m²
     }
+  });
+});
+
+describe('the garage mouths reach the street', () => {
+  const project = createDemo();
+
+  it('puts a gate on the site level where each driveway surfaces', () => {
+    const gates = project.objects.filter(o => o.floorId === null && o.kind === 'gate' && o.symbol === 'driveway');
+    expect(gates.map(g => g.name).sort()).toEqual(['Entry · garage · Mannerheimintie', 'Exit · garage · Kaivokatu']);
+    // Each one stands at the high end of its own ramp, which is the point that reaches grade.
+    for (const gate of gates) {
+      const ramp = project.objects.find(o => o.slope && o.name.includes(gate.name.split(' · ').at(-1)!));
+      expect(ramp, gate.name).toBeTruthy();
+      expect(distance(gate.position, ramp!.slope!.axis[0])).toBeLessThan(0.5);
+      expect(ramp!.slope!.high).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it('routes from the street, down a ramp, to a bay on the deepest deck', () => {
+    const gate = project.objects.find(o => o.floorId === null && o.kind === 'gate' && o.symbol === 'driveway')!;
+    const bay = project.objects.find(o => o.floorId === 'floor-p3' && o.name.startsWith('Bay '))!;
+    const route = findRoute(project, gate.id, bay.id);
+    expect(route, 'no route from the garage mouth to a bay').not.toBeNull();
+    // It has to leave the site, so the first level it reaches is the top deck.
+    expect(route!.steps.some(s => s.floorId === 'floor-p1')).toBe(true);
+    expect(route!.steps.at(-1)!.floorId).toBe('floor-p3');
   });
 });
