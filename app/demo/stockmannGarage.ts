@@ -118,6 +118,28 @@ function ramp(
   o.symbol = 'driveway';
   return o;
 }
+/** The colours a Helsinki car park is actually full of, in roughly the proportions you find them. */
+const CAR_PAINT = [
+  '#20232a',
+  '#20232a',
+  '#3c4149',
+  '#6f757c',
+  '#6f757c',
+  '#a7adb3',
+  '#a7adb3',
+  '#d9dbd8',
+  '#d9dbd8',
+  '#e8e9e6',
+  '#2d3d55',
+  '#4a5b4e',
+  '#6d2b2b',
+];
+/** A small stable hash, so a bay's car is the same colour every time the sample is generated. */
+const hashOf = (key: string) => {
+  let n = 0;
+  for (let i = 0; i < key.length; i++) n = (Math.imul(n, 31) + key.charCodeAt(i)) | 0;
+  return n;
+};
 function fixture(p: ProjectDocument, name: string, position: Point, floorId: string, model: 'car' | 'post', rot = 0) {
   const o = createObject('fixture', position, floorId, name);
   o.model = model;
@@ -126,6 +148,10 @@ function fixture(p: ProjectDocument, name: string, position: Point, floorId: str
     o.width = 4.5;
     o.depth = 1.85;
     o.height = 1.5;
+    // A real car park is nearly monochrome — black, grey, silver and white with the odd blue — and
+    // a deck of identical cream cars reads as a render rather than as a car park. Picked off the
+    // name so the same bay keeps the same car between rebuilds.
+    o.color = CAR_PAINT[Math.abs(hashOf(`${floorId}:${position[0]}:${position[1]}`)) % CAR_PAINT.length];
   } else {
     o.width = o.depth = 0.75;
     o.height = 3.2;

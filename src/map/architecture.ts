@@ -390,49 +390,118 @@ export function makeFixture(
       group.add(light);
     }
   } else if (o.model === 'car') {
-    // A car is built along its long axis whichever of width and depth the author made the long
-    // one: the garage draws its cars 4.5 wide and 1.85 deep, pointing down the bay, and a model
-    // that took depth for length put the cabin along the side, the glass on the flanks and the
-    // wheels face-on like discs. Local X is the length from here on.
+    // A car is built along its long axis whichever of width and depth the author made the long one:
+    // the garage draws its cars 4.5 wide and 1.85 deep, pointing down the bay. Local X is the
+    // length from here on, +X the nose.
+    //
+    // The proportions are a European saloon's, which is what a Helsinki car park is full of: a long
+    // bonnet, a short deck, and the glasshouse set well back over the rear axle. That set-back is
+    // most of what makes a car read as a car rather than as a box with a smaller box on it — get it
+    // wrong and you have drawn a van.
     const car = new THREE.Group();
-    const length = Math.max(w, d),
-      width = Math.min(w, d);
+    const L = Math.max(w, d),
+      W = Math.min(w, d),
+      H = Math.max(1.2, h);
     if (d > w) car.rotation.z = Math.PI / 2;
     group.add(car);
     const glass = materials.glass(evening);
-    // Body: a lower shell with a slightly narrower bonnet and boot on top, so the profile steps
-    // rather than slabs, and a cabin set back from the nose with a raked windscreen and rear glass.
-    box(car, length, width, 0.42, 0, 0, 0.3, paint);
-    box(car, length * 0.96, width * 0.94, 0.2, 0, 0, 0.72, paint);
-    const cabinLength = length * 0.46,
-      cabinAt = -length * 0.06;
-    box(car, cabinLength, width * 0.86, 0.5, cabinAt, 0, 0.9, paint);
+    const trim = materials.solid('#23262a', 0.62); // grille, sills, the shadow under the car
+    const chrome = materials.metal('#b3b8bc');
+    const tail = materials.solid('#9c2f28', 0.42);
+    // Heights, as fractions of the authored height so an odd one still builds a car.
+    const clear = H * 0.09, // the air under the sills
+      sill = H * 0.2, // where the painted flank starts
+      bonnet = H * 0.63, // the nose: a saloon's bonnet sits well below its door tops
+      belt = H * 0.73, // the shoulder: top of the doors, bottom of the glass
+      roof = H * 0.98;
+    // A 2.7 m wheelbase in a 4.5 m car — short overhangs, which is the other half of the look.
+    const axle = L * 0.3,
+      tyreR = H * 0.22,
+      tyreW = W * 0.12;
+    // The glasshouse, set back: the windscreen base sits just behind the front axle.
+    const screenFoot = L * 0.1,
+      backFoot = -L * 0.25,
+      screenTop = L * 0.02,
+      backTop = -L * 0.19;
+    box(car, L - 0.3, W - 0.16, sill - clear, 0, 0, clear, trim);
+    // The flank in bands. The whole length rises only to bonnet height; the shoulder — the top of
+    // the doors — is a second band over the rear two thirds. That step is the saloon profile, and
+    // it is what one full-length block gets wrong: carry the beltline forward over the wings and
+    // you have drawn a van, whatever you then put on the roof.
+    box(car, L - 0.5, W - 0.08, bonnet - sill, 0, 0, sill, paint);
+    // The last hand's width at each end is drawn in, so the car does not end in a flat wall.
+    for (const end of [-1, 1]) box(car, 0.3, W - 0.24, bonnet - sill - 0.04, end * (L / 2 - 0.14), 0, sill, paint);
+    for (const end of [-1, 1]) box(car, 0.34, W - 0.15, bonnet - sill - 0.02, end * (L / 2 - 0.29), 0, sill, paint);
+    box(car, L * 0.68, W, belt - (bonnet - 0.1), -L * 0.16, 0, bonnet - 0.1, paint);
+    // Blistered arches over each axle, so the wheels stand in something.
+    for (const x of [-axle, axle]) box(car, tyreR * 2.6, W + 0.05, H * 0.2, x, 0, H * 0.3, paint);
+    // The bonnet, dropping a little toward the nose, and the boot lid a touch above the shoulder.
+    const lid = box(car, L / 2 - screenFoot, W - 0.07, H * 0.05, (L / 2 + screenFoot) / 2, 0, bonnet - 0.03, paint);
+    lid.rotation.y = 0.03;
+    box(car, L / 2 + backFoot, W - 0.07, H * 0.05, (-L / 2 + backFoot) / 2, 0, belt - 0.02, paint);
+    // Roof, narrower than the shoulder: a greenhouse that tapers is what stops the cabin reading as
+    // a crate. The screens rake off it at each end.
+    box(car, screenTop - backTop, W * 0.84, H * 0.05, (screenTop + backTop) / 2, 0, roof - H * 0.05, paint);
     for (const side of [-1, 1]) {
-      const pane = box(car, cabinLength * 0.9, 0.03, 0.34, cabinAt, (side * width * 0.86) / 2, 0.98, glass);
-      pane.rotation.x = side * -0.12;
+      const pane = box(
+        car,
+        screenFoot - backFoot,
+        0.03,
+        roof - belt,
+        (screenFoot + backFoot) / 2,
+        side * W * 0.43,
+        belt,
+        glass,
+      );
+      pane.rotation.x = side * 0.1; // tumblehome: the glass leans in at the top
     }
-    const screen = box(car, 0.03, width * 0.8, 0.44, cabinAt + cabinLength / 2, 0, 0.98, glass);
-    screen.rotation.y = 0.55;
-    const rear = box(car, 0.03, width * 0.8, 0.4, cabinAt - cabinLength / 2, 0, 0.98, glass);
-    rear.rotation.y = -0.6;
-    // Wheels: axles across the car, with a lighter hub so a wheel reads as a wheel from the side.
-    const tyre = new THREE.CylinderGeometry(0.32, 0.32, 0.2, 18),
-      hub = new THREE.CylinderGeometry(0.17, 0.17, 0.21, 12);
-    for (const x of [-length * 0.34, length * 0.34])
-      for (const y of [-width * 0.42, width * 0.42]) {
+    const rake = (foot: number, top: number, material: THREE.Material) => {
+      const rise = roof - belt,
+        run = foot - top;
+      const pane = box(
+        car,
+        0.03,
+        W * 0.76,
+        Math.hypot(rise, run),
+        (foot + top) / 2,
+        0,
+        (belt + roof) / 2 - Math.hypot(rise, run) / 2,
+        material,
+      );
+      // A windscreen leans BACK: its top is rearward of its foot, which for a +X nose is a negative
+      // rotation about the width axis. The rear screen leans the other way by the same rule.
+      pane.rotation.y = -Math.atan2(run, rise);
+      return pane;
+    };
+    rake(screenFoot, screenTop, glass);
+    rake(backFoot, backTop, glass);
+    // Mirrors on the A-pillar, which is most of what a car's plan silhouette is.
+    for (const side of [-1, 1]) box(car, 0.16, 0.1, 0.09, screenFoot - 0.1, side * (W / 2 + 0.04), belt - 0.06, trim);
+    // Wheels: the axle runs across the car, so a cylinder's own Y axis is already the right way up.
+    const tyre = new THREE.CylinderGeometry(tyreR, tyreR, tyreW, 20),
+      rim = new THREE.CylinderGeometry(tyreR * 0.62, tyreR * 0.62, tyreW + 0.01, 14);
+    for (const x of [-axle, axle])
+      for (const y of [-1, 1]) {
+        const at = y * (W / 2 - tyreW / 2 - 0.015);
         const wheel = new THREE.Mesh(tyre, dark);
-        wheel.position.set(x, y, 0.32);
+        wheel.position.set(x, at, tyreR);
         car.add(wheel);
-        const cap = new THREE.Mesh(hub, metal);
-        cap.position.set(x, y, 0.32);
+        const cap = new THREE.Mesh(rim, chrome);
+        cap.position.set(x, at, tyreR);
         car.add(cap);
       }
-    // Lamps at both ends, and a plate.
-    for (const y of [-width * 0.32, width * 0.32]) {
-      box(car, 0.04, 0.3, 0.12, length / 2, y, 0.62, white);
-      box(car, 0.04, 0.26, 0.1, -length / 2, y, 0.6, materials.solid('#a83a30'));
+    // The face: a grille between the headlamps, an intake under it, and lamps that wrap a little
+    // way down the wing. Nothing here is fine detail — at eye level in a bay it is all you see.
+    // Proud of the chamfer, or the drawn-in nose swallows every one of them.
+    const nose = L / 2 + 0.03;
+    box(car, 0.06, W * 0.42, H * 0.13, nose, 0, H * 0.37, trim);
+    box(car, 0.06, W * 0.6, H * 0.09, nose - 0.01, 0, sill + 0.03, trim);
+    const lens = materials.solid('#cfd3d0', 0.22);
+    for (const y of [-1, 1]) {
+      box(car, 0.07, W * 0.18, H * 0.06, nose - 0.01, y * W * 0.28, H * 0.51, lens);
+      box(car, 0.07, W * 0.2, H * 0.07, -nose + 0.01, y * W * 0.27, H * 0.58, tail);
     }
-    box(car, 0.03, 0.44, 0.11, -length / 2 - 0.005, 0, 0.42, white);
+    box(car, 0.05, W * 0.26, 0.11, -nose + 0.01, 0, H * 0.25, white);
   } else if (o.model === 'chimney') {
     box(group, w, d, h, 0, 0, 0, materials.get('brick', o.color ?? '#c0b8a7'));
     box(group, w + 0.16, d + 0.16, 0.12, 0, 0, h, metal);
