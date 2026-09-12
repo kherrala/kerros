@@ -1,4 +1,5 @@
 import type { Point, ProjectDocument, SiteObject } from '@kerros/schema';
+import { SILO_ID } from './ids';
 import { addNavEdge, addNavNode, chainVertical, closeRing, createObject, geoOrigin, navPath } from '@kerros/schema';
 import { newProject } from './demo';
 import { attachOntology } from './ontology';
@@ -54,7 +55,7 @@ const SPECIALS: Record<number, [string, string]> = {
 
 export function createSilo(): ProjectDocument {
   const p = newProject('The Silo');
-  p.id = 'demo-silo-5';
+  p.id = SILO_ID;
   // Buried beneath Ympyrätalo (the round house) at Hakaniemi — the surface basemap shows the
   // real building footprint directly above the shaft.
   p.origin = geoOrigin([24.948866, 60.180343]);

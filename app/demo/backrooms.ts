@@ -9,7 +9,8 @@ import {
 } from '@kerros/schema';
 import { generateOfficeLayout, seedNumber } from './officeLayout';
 
-export const BACKROOMS_ID = 'sample-backrooms-v2';
+import { BACKROOMS_ID } from './ids';
+export { BACKROOMS_ID };
 export const BACKROOMS_SEED = 'the-yellow-office';
 export const OFFICE_CELL = 6;
 export interface BackroomsOptions {

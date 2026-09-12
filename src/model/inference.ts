@@ -16,6 +16,7 @@ import {
 } from './geometry';
 import { isSpace, type Point, type Portal, type ProjectDocument, type SiteObject } from './types';
 import { inSpace, spaceAt } from './spaces';
+import { isVertical, servedFloors, shaftKey } from './vertical';
 import { pruneOntology } from './ontology';
 
 /** How far past a wall face to look for the room on that side — enough to clear the leaf and any
@@ -86,12 +87,38 @@ const MIN_OPENING = 1.2;
  *  wall, accumulates that run. Runs long enough to walk through become portals. */
 export function inferOpenBoundaries(project: ProjectDocument): Portal[] {
   const byFloor = new Map<string, SiteObject[]>();
-  for (const space of project.objects) {
-    if (!isSpace(space.kind)) continue;
-    const key = space.floorId ?? '';
+  const standOn = (space: SiteObject, key: string) => {
     const list = byFloor.get(key);
     if (list) list.push(space);
     else byFloor.set(key, [space]);
+  };
+  // Which floors already have a landing of each shaft drawn on them. A plan drawn sheet by sheet
+  // gives one landing per storey and every one of them meets its own lobby without help.
+  const landed = new Map<string, Set<string>>();
+  for (const o of project.objects) {
+    if (!isVertical(o.kind) || !o.floorId) continue;
+    const key = shaftKey(o);
+    const floors = landed.get(key);
+    if (floors) floors.add(o.floorId);
+    else landed.set(key, new Set([o.floorId]));
+  }
+  for (const space of project.objects) {
+    if (!isSpace(space.kind)) continue;
+    standOn(space, space.floorId ?? '');
+    // A shaft is a column, and it stands on every floor it serves. A plan that draws the core once
+    // and lists the floors it serves makes the same claim as a hundred landings do, in one object —
+    // and walking only the floor that object happens to be filed under found a ten-storey lift
+    // exactly one way in, which reads as a cupboard in the basement rather than as a lift.
+    //
+    // Only where nothing of this shaft already stands, though. servedFloors unions what every twin
+    // declares, so a tower drawn landing by landing has each of its hundred landings claiming all
+    // hundred floors: lifting them all onto all of them is the same wall walked ten thousand times
+    // for the hundred placements that meant anything, and it took the Silo's inference from under a
+    // second to eight.
+    if (!isVertical(space.kind)) continue;
+    const here = landed.get(shaftKey(space));
+    for (const floor of servedFloors(project, space))
+      if (floor.id !== space.floorId && !here?.has(floor.id)) standOn(space, floor.id);
   }
   const wallsByFloor = new Map<string, [Point, Point][]>();
   for (const barrier of project.barriers) {

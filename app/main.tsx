@@ -24,12 +24,15 @@ import {
   IndexedProjectRepository,
   type PlannerAdapters,
 } from '@kerros/editor/host';
-import { createSilo } from './demo/silo';
-import { BACKROOMS_ID, createBackrooms, type BackroomsOptions } from './demo/backrooms';
+import type { BackroomsOptions } from './demo/backrooms';
+import { DEMO_IDS } from './demo/ids';
 import { BackroomsCard } from './BackroomsCard';
-import { createDemo, newProject } from './demo/demo';
+// The generators are dynamic: between them they build several thousand objects' worth of code, and
+// the page they would sit in mostly shows a picker. `newProject` is the one thing the picker itself
+// needs, so it keeps its own tiny module.
+import { newProject } from './demo/blank';
 import { mmlBasemap } from './mmlBasemap';
-import { importProjections } from './importProjections';
+import type { ImportProjection } from '@kerros/editor/host';
 import { clearViewLink, parseViewLink, writeViewLink, type ViewLink } from './viewLink';
 import { en } from './strings';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -51,6 +54,17 @@ const DEMOS = [
   },
 ] as const;
 
+/** The built-in samples, generated on demand. Only a deep link at a demo id needs all three at once,
+ *  and that is a page load that is already fetching a project. */
+async function builtIn() {
+  const [stockmann, silo, backrooms] = await Promise.all([
+    import('./demo/demo'),
+    import('./demo/silo'),
+    import('./demo/backrooms'),
+  ]);
+  return [stockmann.createDemo(), silo.createSilo(), backrooms.createBackrooms()];
+}
+
 function Home() {
   const [dark, toggleDark] = useDarkMode();
   // Start fetching the renderer while the picker is on screen. Keeping it out of the eager bundle is
@@ -70,20 +84,32 @@ function Home() {
   // No `status` adapter here: this reference app models premises, it does not monitor them. A host
   // with live data supplies its own StatusFeed implementation (see the viewer/editor reference docs).
   // The MML basemap (and its API key) are the host's concern: the env read lives here, not in the library editor.
-  const adapters = useMemo<PlannerAdapters>(
+  // proj4 and its projection table are 130 kB, and the only thing that asks for them is the CRS
+  // picker in the footprint-import dialog — which lives inside the editor, behind opening a project.
+  // Fetched when one is opened rather than before the picker has drawn, which is the same reason the
+  // renderer is lazy: the home screen has no use for either.
+  const [projections, setProjections] = useState<ImportProjection[]>();
+  const repositories = useMemo(
     () => ({
       projects: new IndexedProjectRepository(new LocalProjectRepository()),
       assets: new IndexedAssetRepository(),
       basemap: import.meta.env.VITE_MML_API_KEY ? mmlBasemap(import.meta.env.VITE_MML_API_KEY) : undefined,
-      importProjections,
     }),
     [],
+  );
+  const adapters = useMemo<PlannerAdapters>(
+    () => ({ ...repositories, importProjections: projections }),
+    [repositories, projections],
   );
   const [open, setOpen] = useState<{
     project: ProjectDocument;
     readOnly: boolean;
     view?: ViewLink & { mode?: 'view' | 'edit' | 'live' };
   } | null>(null);
+  useEffect(() => {
+    if (!open || projections) return;
+    void import('./importProjections').then(m => setProjections(m.importProjections));
+  }, [open, projections]);
   const [saved, setSaved] = useState<ProjectSummary[]>([]);
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
   const [error, setError] = useState('');
@@ -98,7 +124,7 @@ function Home() {
   // new content via deep links and the picker forever. Purge outdated demo saves on startup.
   useEffect(() => {
     (async () => {
-      const current = new Set([createDemo().id, createSilo().id, BACKROOMS_ID]);
+      const current = new Set(DEMO_IDS);
       for (const summary of await adapters.projects.list().catch(() => []))
         if (summary.id.startsWith('demo-') && !current.has(summary.id))
           await adapters.projects.delete(summary.id).catch(() => {});
@@ -112,7 +138,7 @@ function Home() {
     if (!link.project) return;
     (async () => {
       const saved = await adapters.projects.load(link.project!).catch(() => null);
-      const generators = [createDemo(), createSilo(), createBackrooms()];
+      const generators = await builtIn();
       // Old demo ids in bookmarks redirect to the current generation instead of dead-ending.
       const family = (id: string) => id.replace(/-\d+$/, '');
       const wanted = link.project!;
@@ -129,18 +155,18 @@ function Home() {
   }, [adapters.projects]);
   // Reopening a demo resumes its saved copy so edits survive the trip back home.
   async function openDemo(readOnly = false) {
-    const demo = createDemo();
+    const demo = (await import('./demo/demo')).createDemo();
     const existing = await adapters.projects.load(demo.id).catch(() => null);
     setOpen({ project: existing ?? demo, readOnly });
   }
   async function openSilo() {
-    const demo = createSilo();
+    const demo = (await import('./demo/silo')).createSilo();
     const existing = await adapters.projects.load(demo.id).catch(() => null);
     setOpen({ project: existing ?? demo, readOnly: false });
   }
   async function openBackrooms(options: BackroomsOptions) {
     try {
-      const demo = createBackrooms(options);
+      const demo = (await import('./demo/backrooms')).createBackrooms(options);
       const existing = await adapters.projects.load(demo.id).catch(() => null);
       setOpen({
         project: existing ?? demo,

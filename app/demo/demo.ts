@@ -1,4 +1,5 @@
 import { stockmannOffices } from './stockmannOffices';
+import { STOCKMANN_ID } from './ids';
 import { attachOntology } from './ontology';
 import { stockmannGarage } from './stockmannGarage';
 import type { ModelKind, ObjectKind, Point, ProjectDocument } from '@kerros/schema';
@@ -12,7 +13,6 @@ import {
   closeRing,
   createObject,
   distance,
-  emptyProject,
   geoOrigin,
   navPath,
   objectPosition,
@@ -21,13 +21,11 @@ import {
   segmentProjection,
 } from '@kerros/schema';
 
-// The reference app's default new project: a Helsinki-anchored empty site. The contract's factory
-// is emptyProject(origin, ...) in factory.ts; this just supplies an app default origin.
-export function newProject(name = 'Untitled site'): ProjectDocument {
-  const p = emptyProject(geoOrigin([24.946, 60.185]), name);
-  p.description = 'New site · Helsinki, Finland';
-  return p;
-}
+// The reference app's default new project lives in blank.ts, so the picker can offer an empty site
+// without loading the campus that happens to share this file. Re-exported here for the tests and
+// scripts that have always reached for it at this name.
+import { newProject } from './blank';
+export { newProject };
 export { createObject } from '@kerros/schema';
 function poly(
   p: ProjectDocument,
@@ -322,7 +320,7 @@ function core(
 function createCampus(): ProjectDocument {
   const p = newProject('Stockmann Helsinki');
 
-  p.id = 'demo-campus-12';
+  p.id = STOCKMANN_ID;
   p.referenceNote =
     'Office layouts are illustrative: façade-aligned workspaces and circulation, not surveyed Stockmann interiors.';
   p.buildings[0].exteriorPreset = 'darkBrick';

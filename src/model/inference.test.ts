@@ -9,7 +9,7 @@ import {
 } from './inference';
 import { spaces } from './spaces';
 import { validateProject } from './validate';
-import { addPortal as portal, addSpace as space, newProject } from './testFixtures';
+import { addFloor, addPortal as portal, addSpace as space, newProject } from './testFixtures';
 import { addBarrier, objectArea, rectangle } from './geometry';
 
 describe('open boundaries — the connections with no door in them', () => {
@@ -54,6 +54,55 @@ describe('open boundaries — the connections with no door in them', () => {
     const found = inferOpenBoundaries(p);
     expect(found).toHaveLength(1);
     expect([found[0].a, found[0].b].sort()).toEqual(['car', 'lobby']);
+  });
+});
+
+describe('a shaft stands on every floor it serves', () => {
+  /** One lift drawn once, told it serves three levels, with a lobby beside it on each. This is how a
+   *  plan that draws its cores once is authored; the alternative — a landing object per storey — is
+   *  covered by the cases above, because those landings are ordinary spaces on their own floors. */
+  const tower = () => {
+    const p = newProject();
+    addFloor(p, 'floor-1', 4);
+    addFloor(p, 'floor-2', 8);
+    space(p, 'lift', 'floor-ground', [0, 0], 'elevator');
+    p.objects.find(o => o.id === 'lift')!.servedFloorIds = ['floor-ground', 'floor-1', 'floor-2'];
+    for (const [id, floor] of [
+      ['lobby-g', 'floor-ground'],
+      ['lobby-1', 'floor-1'],
+      ['lobby-2', 'floor-2'],
+    ] as const)
+      space(p, id, floor, [4, 0]);
+    return p;
+  };
+
+  it('is entered from the lobby on each floor, not only the one it is filed under', () => {
+    // A ten-storey lift found exactly one way in reads as a cupboard in the basement. The floors a
+    // shaft serves are a claim about where it stands, and open-boundary inference has to walk it on
+    // all of them or the model says the lift only opens in the basement.
+    const found = inferOpenBoundaries(tower());
+    const lobbies = found
+      .filter(f => f.a === 'lift' || f.b === 'lift')
+      .map(f => (f.a === 'lift' ? f.b : f.a))
+      .sort();
+    expect(lobbies).toEqual(['lobby-1', 'lobby-2', 'lobby-g']);
+  });
+
+  it('does not join two lobbies to each other just because a lift passes both', () => {
+    // Standing the shaft on every floor must not smuggle those floors into one another: the lobbies
+    // meet the lift, and nothing else.
+    const found = inferOpenBoundaries(tower());
+    const between = found.filter(f => f.a.startsWith('lobby') && f.b.startsWith('lobby'));
+    expect(between).toEqual([]);
+  });
+
+  it('leaves a shaft that serves one floor where it is', () => {
+    const p = tower();
+    p.objects.find(o => o.id === 'lift')!.servedFloorIds = ['floor-ground'];
+    const lobbies = inferOpenBoundaries(p)
+      .filter(f => f.a === 'lift' || f.b === 'lift')
+      .map(f => (f.a === 'lift' ? f.b : f.a));
+    expect(lobbies).toEqual(['lobby-g']);
   });
 });
 
