@@ -96,3 +96,17 @@ severity. Unticked items are not yet done.
 - 3D edit handles (move/rotate/coverage) sit on the ground plane while the object is at floor
   elevation (`MapCanvas.tsx:1988`).
 - focusId and the route-step ease centre on the raw ground position in 3D.
+
+## Added after the note was first written (fifth reviewer)
+
+- **Walk lid sits 0.33 m below the storey's underside** (`SceneLayer.ts:1452`): the soffit is
+  `rebase + height - SLAB`, but fixtures are authored against the storey, so the garage's 3.1 m
+  luminaires and 4.2 m pillars poke through the ceiling. Use `soffit = rebase + height + LIFT`
+  and derive `wellHead` from the next storey's own elevation.
+- **Garage ramps** (`stockmannGarage.ts:270`): the P2→P3 ramp ends outside the P3 deck ring, both
+  inter-deck ramps share one strip, and a ramp is only drawn on the deck it starts from — never
+  cut from the plate it arrives under. Offset the second ramp to its own lane, assert
+  `pointInRing(lowEnd, to.ring)`, and include a ramp in `visibleObjects` for every level it spans.
+- **The street ramps are invisible from the site view** (`SceneLayer.ts:1309`): a sloped zone whose
+  `slope.high >= 0` reaches grade and should be exempt from the below-grade skip, so the garage
+  mouths read at street level.
