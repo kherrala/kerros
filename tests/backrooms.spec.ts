@@ -35,10 +35,30 @@ test('generates, renders, walks, and restores the office sample', async ({ page 
     return map && !map.isMoving() && (map.getLayer('kerros-3d')?.implementation.diagnostics?.drawCalls ?? 0) > 0;
   });
   await page.waitForTimeout(800);
-  const calls = await page.evaluate(
-    () => (window as any).__kerrosMap.getLayer('kerros-3d').implementation.diagnostics.drawCalls,
-  );
-  expect(calls).toBeLessThan(100);
+  // The budget this guards is batching: 3,734 objects drawn one at a time would be thousands of
+  // calls, and the scene has to stay merged by material however many rooms the seed makes. The
+  // number is not the count of objects on screen — it is the count of CELLS, because the walk cuts
+  // each material's batch into 20 m squares so the frustum and the shadow passes can drop what is
+  // behind you. Two deliberate changes have moved it since it was first set at 100: that cell
+  // chunking, and a 90 degree walk lens, which between them put roughly half the floor in frame.
+  // Assert the invariant as well as the ceiling, so a regression to per-object drawing still fails
+  // here even if someone widens the lens again.
+  const budget = await page.evaluate(() => {
+    const layer = (window as any).__kerrosMap.getLayer('kerros-3d').implementation;
+    const materials = new Set<string>();
+    let meshes = 0;
+    layer.scene.traverse((o: any) => {
+      if (!o.isMesh) return;
+      meshes++;
+      materials.add((Array.isArray(o.material) ? o.material[0] : o.material).uuid);
+    });
+    return { calls: layer.diagnostics.drawCalls, meshes, materials: materials.size };
+  });
+  expect(budget.calls).toBeLessThan(250);
+  // A handful of finishes, not one material per room.
+  expect(budget.materials).toBeLessThan(16);
+  // And every mesh is a merged run of many objects: 468 rooms and 5,466 barriers in ~300 meshes.
+  expect(budget.meshes).toBeLessThan(600);
   await page.screenshot({ path: testInfo.outputPath('office-cutaway.png') });
   await page.getByRole('button', { name: '2D', exact: true }).click();
   await expect(page).toHaveURL(/v=2d/);
