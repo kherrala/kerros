@@ -164,27 +164,63 @@ export function snapPoint(
   tolerance: number,
   previous?: Point,
   grid = true,
-  /** Direction the segment from `previous` is held to, with its 45° multiples. Default 0 is the site
+  /** Direction the segment from `previous` is held to, with its 15° multiples. Default 0 is the site
    *  grid; pass `referenceAxis(...).angle` to hold to the building or to a neighbouring wall instead. */
   axis = 0,
 ): { point: Point; label: string } {
   let best = tolerance,
     result: Point | null = null,
     label = '';
+  let junctionScore = 1;
+  const degrees = new Map<string, number>();
+  for (const b of project.barriers) for (const id of [b.startId, b.endId]) degrees.set(id, (degrees.get(id) ?? 0) + 1);
   for (const junction of project.junctions.filter(j => j.floorId === floorId)) {
     const d = distance(point, junction.position);
-    if (d < best) {
-      best = d;
+    const degree = degrees.get(junction.id) ?? 0;
+    // A T junction attracts the fourth branch before a projection onto an adjacent wall can
+    // create a second, almost coincident T. All four branches reuse the same junction identity.
+    const score = d / (tolerance * (degree >= 3 ? 1.5 : 1));
+    if (score < junctionScore) {
+      junctionScore = score;
       result = junction.position;
-      label = 'Endpoint';
+      label = degree >= 3 ? 'Junction' : 'Endpoint';
     }
   }
   if (result) return { point: result, label };
+  const angleLabel = (quarter: number) => {
+    const turn = Math.round(quarter * 45);
+    const acute = turn > 90 ? 180 - turn : turn;
+    return acute === 0 ? 'Parallel' : acute === 90 ? 'Square' : `${acute}°`;
+  };
+  const held = previous && holdAngle(previous, point, axis, tolerance);
+  if (held && previous) {
+    const dx = held.point[0] - previous[0],
+      dy = held.point[1] - previous[1];
+    for (const barrier of project.barriers.filter(b => b.floorId === floorId)) {
+      const [a, b] = barrierEnds(project, barrier);
+      const ex = b[0] - a[0],
+        ey = b[1] - a[1];
+      const denom = dx * ey - dy * ex;
+      if (Math.abs(denom) < 1e-9) continue;
+      const ax = a[0] - previous[0],
+        ay = a[1] - previous[1];
+      const t = (ax * ey - ay * ex) / denom,
+        u = (ax * dy - ay * dx) / denom;
+      if (t <= 0 || u < 0 || u > 1) continue;
+      const hit: Point = [previous[0] + dx * t, previous[1] + dy * t];
+      const d = distance(point, hit);
+      if (d >= best) continue;
+      best = d;
+      result = barrierJoinPoint(project, hit, floorId);
+      label = distance(result, hit) < 1e-6 ? angleLabel(held.quarter) : 'Endpoint';
+    }
+    if (result) return { point: result, label };
+  }
   for (const barrier of project.barriers.filter(b => b.floorId === floorId)) {
     const projected = segmentProjection(point, ...barrierEnds(project, barrier));
     if (projected.distance < best) {
       best = projected.distance;
-      result = projected.point;
+      result = barrierJoinPoint(project, projected.point, floorId);
       label = 'On segment';
     }
   }
@@ -194,12 +230,12 @@ export function snapPoint(
     const held = holdAngle(previous, p, axis, tolerance);
     if (held) {
       p = held.point;
-      label = held.quarter === 0 ? 'Parallel' : held.quarter === 2 ? 'Square' : '45°';
+      label = angleLabel(held.quarter);
     }
   }
   return { point: p, label: label || (grid ? '0.5 m grid' : '') };
 }
-/** Hold a segment to the directions a building actually uses: `axis` and every 45° off it. See
+/** Hold a segment to `axis` and every 15° off it (including 45° and 90°). See
  *  `referenceAxis` in ./walls for where a meaningful axis comes from; 0 is the site's own grid.
  *
  *  The test is perpendicular distance from the candidate ray, not an angle, so the tolerance stays a
@@ -217,8 +253,8 @@ export function holdAngle(
     vy = point[1] - previous[1];
   if (Math.hypot(vx, vy) < 1e-6) return null;
   let best: { point: Point; degrees: number; quarter: number; offset: number } | null = null;
-  for (let k = 0; k < 8; k++) {
-    const degrees = axis + k * 45,
+  for (let k = 0; k < 24; k++) {
+    const degrees = axis + k * 15,
       rad = (degrees * Math.PI) / 180,
       // cos(90°) comes back as 6e-17 rather than 0, which would leave a wall a hair off the very axis
       // it was just held to — harmless on screen, but it is what gets written to the document.
@@ -228,34 +264,69 @@ export function holdAngle(
     if (along <= 0) continue; // the opposing ray of a pair already covered by its partner
     const offset = Math.abs(vx * dy - vy * dx);
     if (offset >= tolerance || (best && offset >= best.offset)) continue;
-    best = { point: [previous[0] + dx * along, previous[1] + dy * along], degrees, quarter: k % 4, offset };
+    best = { point: [previous[0] + dx * along, previous[1] + dy * along], degrees, quarter: (k % 12) / 3, offset };
   }
   return best && { point: best.point, degrees: best.degrees, quarter: best.quarter };
 }
-/** The shortest wall or fence the model will accept: half a metre, one snap-grid cell. Anything
- *  shorter cannot be meaningfully grabbed, selected or dragged in the editor, so a segment below
- *  this is not a small feature — it is debris, usually left by a split or a clip landing near an
- *  existing vertex. Operations weld instead of leaving debris, and validation refuses documents
- *  that carry any. */
-export const MIN_SEGMENT = 0.5;
-/** The shortest segment that may carry an opening. A door needs a wall to hang in, not a post: a
- *  barrier shorter than this cannot hold a leaf and its frame, so an opening attached to one is a
- *  modelling accident — usually a door that welded onto the wrong stub while being placed. */
-export const OPENING_MIN_SEGMENT = 1;
+/** One centimetre is the model's degeneracy guard, independent of the drawing grid and zoom.
+ *  Short returns, jambs and staggered junctions are real geometry; their screen handles spread
+ *  apart when necessary so they remain editable. */
+export const MIN_SEGMENT = 0.01;
+/** An opening needs a valid wall AND enough length for its actual width. Kept as an exported
+ *  base limit for callers; there is no additional one-metre restriction on narrow doors/windows. */
+export const OPENING_MIN_SEGMENT = MIN_SEGMENT;
+/** Automatic joins only absorb sub-millimetre coordinate noise. Interactive snapping has its
+ *  own screen-based reach, so a deliberate centimetre-scale feature survives with snapping off. */
+const JOIN_EPS = 0.001;
+
+/** Weld a connection near the end of a wall to that end. The snap preview and the actual
+ *  junction use the same rule, so an ordinary T-junction cannot leave an uneditable stub. */
+export function barrierJoinPoint(project: ProjectDocument, point: Point, floorId: string | null): Point {
+  const existing = project.junctions.find(j => j.floorId === floorId && distance(j.position, point) < JOIN_EPS);
+  if (existing) return existing.position;
+  for (const barrier of project.barriers) {
+    if (barrier.floorId !== floorId) continue;
+    const [a, b] = barrierEnds(project, barrier);
+    const hit = segmentProjection(point, a, b);
+    if (hit.distance > JOIN_EPS) continue;
+    const nearest = hit.t <= 0.5 ? a : b;
+    if (distance(hit.point, nearest) < MIN_SEGMENT - 1e-6) return nearest;
+  }
+  return point;
+}
+
+/** A preview can check a connection without partially splitting any walls. */
+export function junctionIssue(project: ProjectDocument, point: Point, floorId: string | null): string | null {
+  point = barrierJoinPoint(project, point, floorId);
+  if (project.junctions.some(j => j.floorId === floorId && distance(j.position, point) < JOIN_EPS)) return null;
+  for (const barrier of project.barriers.filter(b => b.floorId === floorId)) {
+    const [a, b] = barrierEnds(project, barrier);
+    const hit = segmentProjection(point, a, b);
+    if (hit.distance > JOIN_EPS || hit.t <= 0 || hit.t >= 1) continue;
+    const cut = distance(a, point);
+    for (const o of project.objects.filter(o => o.barrierId === barrier.id)) {
+      if (Math.abs((o.offset ?? 0) - cut) < o.width / 2) return 'A junction cannot split an opening.';
+      if (((o.offset ?? 0) < cut ? cut : distance(point, b)) < OPENING_MIN_SEGMENT - 1e-6)
+        return `Leave at least ${OPENING_MIN_SEGMENT} m of wall around an opening.`;
+    }
+  }
+  return null;
+}
 
 export function joinAt(project: ProjectDocument, point: Point, floorId: string | null): string {
-  const existing = project.junctions.find(j => j.floorId === floorId && distance(j.position, point) < 0.025);
+  point = barrierJoinPoint(project, point, floorId);
+  const existing = project.junctions.find(j => j.floorId === floorId && distance(j.position, point) < JOIN_EPS);
   if (existing) return existing.id;
+  const issue = junctionIssue(project, point, floorId);
+  if (issue) throw new Error(issue);
   const id = uid();
   project.junctions.push({ id, floorId, position: point });
   for (const barrier of [...project.barriers].filter(b => b.floorId === floorId)) {
     const [a, b] = barrierEnds(project, barrier);
     const hit = segmentProjection(point, a, b);
-    if (hit.distance > 0.025 || hit.t < 0.001 || hit.t > 0.999) continue;
+    if (hit.distance > JOIN_EPS || hit.t <= 0 || hit.t >= 1) continue;
     const cut = distance(a, point);
     const attachments = project.objects.filter(o => o.barrierId === barrier.id);
-    if (attachments.some(o => Math.abs((o.offset ?? 0) - cut) < o.width / 2))
-      throw new Error('A junction cannot split an opening.');
     const newId = uid();
     const oldEnd = barrier.endId;
     barrier.endId = id;
@@ -302,10 +373,24 @@ export function addBarrier(
   floorId: string | null,
   kind: 'wall' | 'fence',
 ) {
-  if (distance(a, b) < MIN_SEGMENT) throw new Error(`A segment must be at least ${MIN_SEGMENT} m long.`);
+  if (distance(a, b) < MIN_SEGMENT - 1e-6) throw new Error(`A segment must be at least ${MIN_SEGMENT} m long.`);
+  a = barrierJoinPoint(project, a, floorId);
+  b = barrierJoinPoint(project, b, floorId);
+  // Snapping can collapse a stroke back onto its start. Repeated clicks are harmless.
+  if (distance(a, b) < MIN_SEGMENT - 1e-6) return;
   const startId = joinAt(project, a, floorId),
     endId = joinAt(project, b, floorId);
-  project.barriers.push({
+  if (
+    startId === endId ||
+    project.barriers.some(
+      w =>
+        w.floorId === floorId &&
+        w.kind === kind &&
+        ((w.startId === startId && w.endId === endId) || (w.startId === endId && w.endId === startId)),
+    )
+  )
+    return;
+  const barrier: Barrier = {
     id: uid(),
     floorId,
     startId,
@@ -314,7 +399,9 @@ export function addBarrier(
     name: kind === 'wall' ? 'Wall' : 'Site fence',
     thickness: kind === 'wall' ? 0.3 : 0.1,
     height: kind === 'wall' ? 3.5 : 2,
-  });
+  };
+  project.barriers.push(barrier);
+  return barrier;
 }
 // Splits a room/zone along the infinite line drawn through `pa`→`pb`. Because the line is treated as
 // unbounded, the stroke may start and end well past the walls — the room is divided wherever the line
@@ -360,11 +447,8 @@ export function splitRoom(
       throw new Error('That cut would leave disconnected pieces — draw a single straight line across the room.');
     return usable[0].map(closeRing);
   };
-  // Weld cut vertices onto drawn ones. A cut landing a hair from an existing corner would leave a
-  // ring edge millimetres long — a segment nobody can grab in the editor, i.e. debris. Only vertices
-  // the clip introduced are dropped, never one somebody drew; the cut edge shifts by under
-  // MIN_SEGMENT, which the partition wall's thickness swallows. If welding would degenerate the
-  // ring, the unwelded ring stands — better a sliver than a broken shape, and validation still runs.
+  // Only weld numerical duplicates. Removing a real cut vertex changes the boundary and can
+  // lose floor area or erase a small notch; the wall minimum and drawing grid do not govern rings.
   const drawnKey = (p: Point) => `${p[0].toFixed(4)},${p[1].toFixed(4)}`;
   const drawn = new Set(poly.flat().map(drawnKey));
   const weld = (rings: Ring[]): Ring[] =>
@@ -374,11 +458,21 @@ export function splitRoom(
         if (drawn.has(drawnKey(p))) return true;
         const prev = r[(i + r.length - 1) % r.length],
           next = r[(i + 1) % r.length];
-        if (drawn.has(drawnKey(prev)) && distance(p, prev) < MIN_SEGMENT) return false;
-        if (drawn.has(drawnKey(next)) && distance(p, next) < MIN_SEGMENT) return false;
+        if (drawn.has(drawnKey(prev)) && distance(p, prev) < JOIN_EPS) return false;
+        if (drawn.has(drawnKey(next)) && distance(p, next) < JOIN_EPS) return false;
         return true;
       });
-      return kept.length >= 3 && ringArea(kept) >= 0.01 ? closeRing(kept) : closed;
+      // Removing a cut vertex can connect across a concave notch or reverse a boundary edge.
+      // Keep the clipper's valid boundary if that shortcut would cross another edge.
+      const crossing = kept.some((p, i) =>
+        kept.some(
+          (q, j) =>
+            j > i + 1 &&
+            !(i === 0 && j === kept.length - 1) &&
+            intersects(p, kept[(i + 1) % kept.length], q, kept[(j + 1) % kept.length]),
+        ),
+      );
+      return kept.length >= 3 && ringArea(kept) >= 0.01 && !crossing ? closeRing(kept) : closed;
     });
   const right = weld(clip(1)); // original keeps the right-hand side …
   const left = weld(clip(-1)); // … the twin takes the left
@@ -425,7 +519,7 @@ export function splitRoom(
   for (let i = 0; i + 1 < deduped.length; i += 2) {
     const s: Point = [pa[0] + dir[0] * deduped[i], pa[1] + dir[1] * deduped[i]];
     const e: Point = [pa[0] + dir[0] * deduped[i + 1], pa[1] + dir[1] * deduped[i + 1]];
-    if (distance(s, e) >= MIN_SEGMENT) addBarrier(project, s, e, o.floorId, 'wall');
+    if (distance(s, e) >= MIN_SEGMENT - 1e-6) addBarrier(project, s, e, o.floorId, 'wall');
   }
   project.barriers.slice(from).forEach(b => {
     b.name = 'Partition';

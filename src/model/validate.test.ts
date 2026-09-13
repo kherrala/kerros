@@ -65,11 +65,11 @@ describe('rules the schema refuses outright', () => {
       p.junctions.push({ id: 'j-far', floorId: 'floor-ground', position: [200_000, 0] });
     }, /junction coordinates/);
   });
-  it('a wall too short to grab in the editor is debris, not a feature', () => {
+  it('rejects a wall below the numerical minimum', () => {
     refuses(p => {
       p.junctions.push(
         { id: 'j1', floorId: 'floor-ground', position: [0, 0] },
-        { id: 'j2', floorId: 'floor-ground', position: [0.3, 0] },
+        { id: 'j2', floorId: 'floor-ground', position: [0.0005, 0] },
       );
       p.barriers.push({
         id: 'b1',
@@ -81,23 +81,23 @@ describe('rules the schema refuses outright', () => {
         thickness: 0.3,
         height: 3,
       });
-    }, /at least 0.5 m/);
+    }, /at least 0.01 m/);
   });
-  it('a door on a sub-metre stub is a placement accident, not an entrance', () => {
+  it('refuses a door wider than its supporting wall', () => {
     refuses(p => {
       addBarrier(p, [0, 0], [0.8, 0], 'floor-ground', 'wall');
       space(p, 'door-1', 'floor-ground', [0.4, 0], 'door');
       const door = p.objects.find(o => o.id === 'door-1')!;
       door.rings = undefined;
-      door.width = 0.7; // narrow enough to fit — the rule is about the wall, not the fit
+      door.width = 0.9;
       door.barrierId = p.barriers.at(-1)!.id;
       door.offset = 0.4;
-    }, /at least 1 m long to sit in/);
+    }, /too short for its attached opening/);
   });
 });
 
-describe('splitting cannot leave segments too short to edit', () => {
-  it('welds a cut that lands a hand-width from a drawn corner', () => {
+describe('splitting preserves small architectural features', () => {
+  it('keeps a cut and a drawn corner a hand-width apart', () => {
     // A cut vertex on a *straight* run can never leave a sliver — the clip simplifies collinear
     // vertices away. The dangerous case is a cut passing close to a drawn CORNER, where the sliver
     // edge survives simplification. Build a notched hall whose notch corner sits 0.3 m from the cut.
@@ -115,7 +115,7 @@ describe('splitting cannot leave segments too short to edit', () => {
     ];
     splitRoom(p, 'hall', [0, -8], [0, 9]);
     expect(() => validateProject(p)).not.toThrow();
-    // No ring edge of either half, and no partition wall, is shorter than the editor can grab.
+    // No degenerate edges, but real 0.3 m edges remain rather than being welded away.
     for (const o of p.objects)
       for (const ring of o.rings ?? []) {
         const r = openRing(ring);
@@ -126,9 +126,10 @@ describe('splitting cannot leave segments too short to edit', () => {
       const ends = [p.junctions.find(j => j.id === b.startId)!, p.junctions.find(j => j.id === b.endId)!];
       expect(distance(ends[0].position, ends[1].position)).toBeGreaterThanOrEqual(MIN_SEGMENT);
     }
-    // The drawn notch corner survived; the cut vertex 0.3 m from it welded away.
+    // Both the drawn notch corner and the cut vertex survive.
     const halls = p.objects.filter(o => o.rings);
     expect(halls.some(o => o.rings![0].some(pt => pt[0] === 0.3 && pt[1] === 7))).toBe(true);
+    expect(halls.some(o => o.rings![0].some(pt => pt[0] === 0 && pt[1] === 7))).toBe(true);
   });
 });
 

@@ -9,8 +9,10 @@ import polygonClipping from 'polygon-clipping';
 import {
   OPENING_MIN_SEGMENT,
   barrierEnds,
+  barrierJoinPoint,
   closeRing,
   distance,
+  junctionIssue,
   openRing,
   pointInRing,
   rectangle,
@@ -160,7 +162,7 @@ export function mainAxis(project: ProjectDocument, floorId: string | null): numb
 const axisCache = new WeakMap<ProjectDocument, Map<string, number>>();
 
 export interface AxisReference {
-  /** Degrees in [0, 180). New walls are held to this and its 45° multiples. */
+  /** Degrees in [0, 180). New walls are held to this and its 15° multiples. */
   angle: number;
   source: 'wall' | 'exterior' | 'building';
 }
@@ -242,9 +244,13 @@ export function proposeWall(
     }
     return Number.isFinite(best) ? [point[0] + d[0] * best, point[1] + d[1] * best] : null;
   };
-  const a = end(1),
-    b = end(-1);
-  return a && b && distance(a, b) >= 1 ? { segment: [a, b], axis, reference } : null;
+  const start = end(1),
+    finish = end(-1);
+  if (!start || !finish) return null;
+  const a = barrierJoinPoint(project, start, floorId),
+    b = barrierJoinPoint(project, finish, floorId);
+  if (junctionIssue(project, a, floorId) || junctionIssue(project, b, floorId)) return null;
+  return distance(a, b) >= 1 ? { segment: [a, b], axis, reference } : null;
 }
 
 /** Where an opening would land if you placed it here. */
@@ -270,6 +276,7 @@ export function fitOpening(
   at: Point,
   width: number,
   reach: number,
+  ignoreId?: string,
 ): OpeningFit | null {
   const wanted = kind === 'gate' ? 'fence' : 'wall';
   let best: OpeningFit | null = null,
@@ -278,14 +285,30 @@ export function fitOpening(
     if (barrier.floorId !== floorId || barrier.kind !== wanted) continue;
     const [a, b] = barrierEnds(project, barrier);
     const hit = segmentProjection(at, a, b);
-    // The segment must hold the leaf AND be long enough to carry an opening at all — validation
-    // refuses openings on sub-metre stubs, and offering one here would make the preview a lie.
+    // Match validation: the segment must be nondegenerate and hold the actual leaf width.
     if (hit.distance >= bestDistance || hit.length < Math.max(width, OPENING_MIN_SEGMENT)) continue;
-    bestDistance = hit.distance;
-    const offset = Math.max(width / 2, Math.min(hit.length - width / 2, hit.t * hit.length));
+    // Search the free stretches, not just the whole segment: a preview over an existing door
+    // used to promise a placement which validation would then refuse. Sliding a leaf excludes
+    // that leaf's old position from the occupied stretches.
+    const occupied = project.objects
+      .filter(o => o.barrierId === barrier.id && o.id !== ignoreId)
+      .map(o => [Math.max(0, (o.offset ?? 0) - o.width / 2), Math.min(hit.length, (o.offset ?? 0) + o.width / 2)])
+      .sort((a, b) => a[0] - b[0]);
+    let cursor = 0;
+    const offsets: number[] = [];
+    for (const [start, end] of [...occupied, [hit.length, hit.length]]) {
+      if (start - cursor >= width - 1e-9)
+        offsets.push(Math.max(cursor + width / 2, Math.min(start - width / 2, hit.t * hit.length)));
+      cursor = Math.max(cursor, end);
+    }
+    if (!offsets.length) continue;
+    const offset = offsets.sort((a, b) => Math.abs(a - hit.t * hit.length) - Math.abs(b - hit.t * hit.length))[0];
     const ux = (b[0] - a[0]) / hit.length,
       uy = (b[1] - a[1]) / hit.length;
     const centre: Point = [a[0] + ux * offset, a[1] + uy * offset];
+    const fitDistance = distance(at, centre);
+    if (fitDistance >= bestDistance) continue;
+    bestDistance = fitDistance;
     best = {
       barrierId: barrier.id,
       offset,

@@ -32,6 +32,7 @@ export default defineConfig({
           items: [
             { text: 'Getting started', link: '/guide/getting-started' },
             { text: 'Core concepts', link: '/guide/concepts' },
+            { text: 'Space geometry & walls', link: '/guide/geometry' },
             { text: 'Spaces, zones & portals', link: '/guide/ontology' },
             { text: 'Glossary', link: '/guide/glossary' },
             { text: 'The editor', link: '/guide/editor' },

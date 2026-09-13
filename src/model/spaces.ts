@@ -72,7 +72,14 @@ export function enclosedRegions(project: ProjectDocument, floorId: string | null
     const len = distance(a, c) || 0.001;
     const angle = (Math.atan2(c[1] - a[1], c[0] - a[0]) * 180) / Math.PI;
     const mid: Point = [(a[0] + c[0]) / 2, (a[1] + c[1]) / 2];
-    return [closeRing(rectangle(mid, len + b.thickness, b.thickness, angle))];
+    // Shared corners reached through different rotations differ at floating-point precision.
+    // Quantise before clipping (as floorOutline does), or even a closed rectangle can fail
+    // polygon-clipping's sweep and appear to enclose no space at all.
+    return [
+      closeRing(rectangle(mid, len + b.thickness, b.thickness, angle)).map(
+        q => [Math.round(q[0] * 1e4) / 1e4, Math.round(q[1] * 1e4) / 1e4] as Point,
+      ),
+    ];
   });
   let open: Ring[][];
   try {
@@ -90,9 +97,8 @@ export function enclosedRegions(project: ProjectDocument, floorId: string | null
   // Clipping leaves vertices the document will not hold: a point repeated where two solids met, and
   // the collinear ones left along a straight edge that was cut and rejoined.
   const tidy = (ring: Ring): Ring => {
-    // 0.1 mm: finer than anything a floor plan means, coarse enough to swallow the near-duplicate a
-    // clipped corner leaves behind. The document refuses a ring with repeated vertices.
-    const EPS = 1e-4;
+    // Use the document's 1 mm minimum edge, including near-duplicates introduced by clipping.
+    const EPS = 0.001;
     const out: Ring = [];
     for (const q of ring) if (!out.length || distance(out[out.length - 1], q) > EPS) out.push(q);
     if (out.length > 1 && distance(out[0], out[out.length - 1]) <= EPS) out.pop();

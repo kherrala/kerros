@@ -1,4 +1,5 @@
 import {
+  Fragment,
   useEffect,
   useMemo,
   useRef,
@@ -379,8 +380,8 @@ export function MapCanvas(props: MapCanvasProps) {
         }
       } else {
         const s = m.project(toLngLat([Number(wx), Number(wy)], p.project.origin));
-        child.style.left = `${s.x}px`;
-        child.style.top = `${s.y}px`;
+        child.style.left = `${s.x + Number(child.dataset.screenDx ?? 0)}px`;
+        child.style.top = `${s.y + Number(child.dataset.screenDy ?? 0)}px`;
         child.style.visibility = '';
       }
     }
@@ -2099,13 +2100,17 @@ export function MapCanvas(props: MapCanvasProps) {
     if (!m || !props.canEdit || (kind === 'node' ? !routeTool : props.tool !== 'select')) return;
     m.dragPan.disable();
     const target = event.currentTarget;
+    // A spread handle keeps its screen offset while dragging, so grabbing it does not make
+    // the actual endpoint jump out to the handle's display position.
+    const screenDx = Number(target.dataset.screenDx ?? 0),
+      screenDy = Number(target.dataset.screenDy ?? 0);
     const origin = { x: event.clientX, y: event.clientY };
     let moved = false;
     // Live preview: temporary lines track the cursor through the lightweight draft source, so the
     // full plan only rebuilds once on release.
     const preview = (clientX: number, clientY: number) => {
       const rect = m.getContainer().getBoundingClientRect();
-      const ll = m.unproject([clientX - rect.left, clientY - rect.top]);
+      const ll = m.unproject([clientX - rect.left - screenDx, clientY - rect.top - screenDy]);
       const local = toLocal([ll.lng, ll.lat], latest.current.project.origin);
       const p = latest.current;
       const lines: Point[][] = [];
@@ -2263,7 +2268,7 @@ export function MapCanvas(props: MapCanvasProps) {
       if (moved) {
         suppressClick.current = true;
         const rect = m.getContainer().getBoundingClientRect();
-        const ll = m.unproject([e.clientX - rect.left, e.clientY - rect.top]);
+        const ll = m.unproject([e.clientX - rect.left - screenDx, e.clientY - rect.top - screenDy]);
         latest.current.onVertexMove(
           kind,
           id,
@@ -2588,17 +2593,48 @@ export function MapCanvas(props: MapCanvasProps) {
           selectedBarrier &&
           barrierEnds(props.project, selectedBarrier).map((p, i) => {
             const s = screen(p);
-            return s ? (
-              <button
-                key={i}
-                className="vertex-handle"
-                aria-label={`Move wall endpoint ${i + 1}`}
-                data-wx={p[0]}
-                data-wy={p[1]}
-                style={{ left: s.x, top: s.y }}
-                onPointerDown={e => startDrag(e, 'junction', i ? selectedBarrier.endId : selectedBarrier.startId)}
-              />
-            ) : null;
+            const other = screen(barrierEnds(props.project, selectedBarrier)[1 - i]);
+            if (!s || !other) return null;
+            // Short walls still need three independently grabbable controls. Spread endpoint
+            // handles along the wall's axis, with a tether back to the actual junction.
+            const dx = s.x - other.x,
+              dy = s.y - other.y;
+            const span = Math.hypot(dx, dy);
+            const pad = Math.max(0, 32 - span / 2);
+            const ux = span ? dx / span : i ? 1 : -1,
+              uy = span ? dy / span : 0;
+            return (
+              <Fragment key={i}>
+                {pad > 0 && (
+                  <span
+                    aria-hidden="true"
+                    data-wx={p[0]}
+                    data-wy={p[1]}
+                    style={{
+                      position: 'absolute',
+                      pointerEvents: 'none',
+                      left: s.x,
+                      top: s.y,
+                      width: pad,
+                      height: 1,
+                      background: 'var(--accent)',
+                      transformOrigin: '0 0',
+                      transform: `rotate(${Math.atan2(uy, ux)}rad)`,
+                    }}
+                  />
+                )}
+                <button
+                  className="vertex-handle"
+                  aria-label={`Move wall endpoint ${i + 1}`}
+                  data-wx={p[0]}
+                  data-wy={p[1]}
+                  data-screen-dx={ux * pad}
+                  data-screen-dy={uy * pad}
+                  style={{ left: s.x + ux * pad, top: s.y + uy * pad }}
+                  onPointerDown={e => startDrag(e, 'junction', i ? selectedBarrier.endId : selectedBarrier.startId)}
+                />
+              </Fragment>
+            );
           })}
         {props.canEdit &&
           props.tool === 'select' &&

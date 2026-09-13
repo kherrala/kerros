@@ -1,7 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { ProjectDocument } from '../src/model/types';
 import { newProject } from '../src/model/testFixtures';
-import { toLngLat } from '../src/model/geometry';
+import { MIN_SEGMENT, barrierEnds, distance, toLngLat } from '../src/model/geometry';
+import { validateProject } from '../src/model/validate';
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/vectortiles/stylejson/**', route =>
@@ -520,7 +521,7 @@ test('walls hold to the building axis, and the partition tool offers the wall a 
   await page.getByRole('button', { name: 'Wall tool' }).click();
   await clickAt(page, start);
   await page.mouse.move(start.x + 600, start.y + 6);
-  await expect(page.locator('.tool-instruction')).toContainText('Parallel to building');
+  await expect(page.locator('.tool-instruction')).toContainText('Parallel to floor axis');
   await clickAt(page, { x: start.x + 600, y: start.y + 6 });
   await page.keyboard.press('Enter');
   const [held, heldTo] = ends(await savedProject(page), 0);
@@ -767,4 +768,166 @@ test('a wall divides a space, and removing it asks how to rejoin', async ({ page
     kept.objects.filter(o => o.rings),
     'both spaces survive',
   ).toHaveLength(2);
+});
+
+test('a bad polygon click leaves an editable draft with undo point', async ({ page }) => {
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: /New blank site/ }).click();
+  await ready(page);
+  await flatCamera(page);
+  await page.getByRole('button', { name: 'Zone polygon tool' }).click();
+  for (const [x, y] of [
+    [0.3, 0.35],
+    [0.7, 0.35],
+    [0.7, 0.65],
+  ])
+    await clickAt(page, await canvasPoint(page, x, y));
+  await clickAt(page, await canvasPoint(page, 0.5, 0.25)); // crosses the first edge
+  await expect(page.getByText(/That edge crosses the outline/)).toBeVisible();
+  await expect(page.locator('.tool-instruction')).toContainText('3 points');
+  await page.getByRole('button', { name: 'Undo last point' }).click();
+  await expect(page.locator('.tool-instruction')).toContainText('2 points');
+  await page.keyboard.press('Backspace');
+  await expect(page.locator('.tool-instruction')).toContainText('1 point');
+  for (const [x, y] of [
+    [0.7, 0.35],
+    [0.7, 0.65],
+    [0.3, 0.65],
+  ])
+    await clickAt(page, await canvasPoint(page, x, y));
+  await page.keyboard.press('Enter');
+  const saved = await savedProject(page);
+  expect(saved.objects).toHaveLength(1);
+  expect(() => validateProject(saved)).not.toThrow();
+});
+
+test('a wall endpoint drag stops at valid geometry and the next drag still works', async ({ page }) => {
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: /New blank site/ }).click();
+  await ready(page);
+  await flatCamera(page);
+  await page.getByRole('button', { name: 'Wall tool' }).click();
+  await clickAt(page, await canvasPoint(page, 0.3, 0.5));
+  await clickAt(page, await canvasPoint(page, 0.7, 0.5));
+  await page.keyboard.press('Enter');
+  await clickAt(page, await canvasPoint(page, 0.5, 0.5));
+  const start = page.getByRole('button', { name: 'Move wall endpoint 1' });
+  const end = page.getByRole('button', { name: 'Move wall endpoint 2' });
+  await expect(end).toBeVisible();
+  const target = await start.boundingBox();
+  const source = await end.boundingBox();
+  await page.mouse.move(source!.x + source!.width / 2, source!.y + source!.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(target!.x + target!.width / 2, target!.y + target!.height / 2, { steps: 5 });
+  await page.mouse.up();
+  const limited = await savedProject(page);
+  expect(distance(...barrierEnds(limited, limited.barriers[0]))).toBeCloseTo(MIN_SEGMENT, 3);
+  expect(() => validateProject(limited)).not.toThrow();
+  const limitedHandle = await end.boundingBox();
+  await page.mouse.move(limitedHandle!.x + limitedHandle!.width / 2, limitedHandle!.y + limitedHandle!.height / 2);
+  await page.mouse.down();
+  const next = await canvasPoint(page, 0.6, 0.5);
+  await page.mouse.move(next.x, next.y, { steps: 5 });
+  await page.mouse.up();
+  const continued = await savedProject(page);
+  expect(distance(...barrierEnds(continued, continued.barriers[0]))).toBeGreaterThan(1);
+  expect(() => validateProject(continued)).not.toThrow();
+});
+
+test('the fourth wall snaps to the shared T junction', async ({ page }) => {
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: /New blank site/ }).click();
+  await ready(page);
+  await flatCamera(page);
+  for (const [a, b] of [
+    [
+      [0.3, 0.5],
+      [0.7, 0.5],
+    ],
+    [
+      [0.5, 0.5],
+      [0.5, 0.7],
+    ],
+  ]) {
+    await page.getByRole('button', { name: 'Wall tool' }).click();
+    await clickAt(page, await canvasPoint(page, a[0], a[1]));
+    await clickAt(page, await canvasPoint(page, b[0], b[1]));
+    await page.keyboard.press('Enter');
+  }
+  const before = await savedProject(page);
+  const common = before.junctions.find(
+    j => before.barriers.filter(b => b.startId === j.id || b.endId === j.id).length === 3,
+  )!;
+  expect(common).toBeTruthy();
+  await page.getByRole('button', { name: 'Wall tool' }).click();
+  await clickAt(page, await canvasPoint(page, 0.5, 0.3));
+  const near = await canvasPoint(page, 0.505, 0.497);
+  await page.mouse.move(near.x, near.y);
+  await expect(page.locator('.tool-instruction')).toContainText('Junction');
+  await clickAt(page, near);
+  await page.keyboard.press('Enter');
+  const saved = await savedProject(page);
+  expect(saved.barriers.filter(b => b.startId === common.id || b.endId === common.id)).toHaveLength(4);
+  expect(saved.junctions).toHaveLength(5);
+  expect(() => validateProject(saved)).not.toThrow();
+});
+
+test('draws a 12 cm wall return with precise positioning and keeps it through undo and redo', async ({ page }) => {
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: /New blank site/ }).click();
+  await ready(page);
+  await flatCamera(page);
+  const empty = await savedProject(page);
+  await page.getByRole('button', { name: 'Map settings', exact: true }).click();
+  await page.getByRole('switch', { name: 'Snap to geometry & grid' }).click();
+  await page.getByRole('button', { name: 'Close map settings', exact: true }).click();
+  await page.evaluate(
+    center => {
+      const map = (window as unknown as { __kerrosMap: { jumpTo(options: unknown): void } }).__kerrosMap;
+      // Resolve the 12 cm return while keeping the whole three-metre run inside the canvas.
+      map.jumpTo({ center, zoom: 22.5, pitch: 0, bearing: 0 });
+    },
+    toLngLat([0.5, 0.06], empty.origin),
+  );
+  await flatCamera(page);
+  await page.getByRole('button', { name: 'Wall tool' }).click();
+  for (const point of [
+    [-1, 0],
+    [1, 0],
+    [1, 0.12],
+    [2, 0.12],
+  ] as [number, number][]) {
+    const target = await page.evaluate(
+      lngLat => {
+        const map = (
+          window as unknown as {
+            __kerrosMap: {
+              project(p: [number, number]): { x: number; y: number };
+              getContainer(): HTMLElement;
+            };
+          }
+        ).__kerrosMap;
+        const s = map.project(lngLat),
+          rect = map.getContainer().getBoundingClientRect();
+        return { x: s.x + rect.left, y: s.y + rect.top };
+      },
+      toLngLat(point, empty.origin),
+    );
+    await clickAt(page, target);
+  }
+  await page.keyboard.press('Enter');
+  const saved = await savedProject(page);
+  expect(saved.barriers).toHaveLength(3);
+  expect(saved.junctions).toHaveLength(4);
+  expect(distance(...barrierEnds(saved, saved.barriers[1]))).toBeGreaterThan(0.1);
+  expect(distance(...barrierEnds(saved, saved.barriers[1]))).toBeLessThan(0.14);
+  expect(saved.barriers[0].endId).toBe(saved.barriers[1].startId);
+  expect(saved.barriers[1].endId).toBe(saved.barriers[2].startId);
+  expect(() => validateProject(saved)).not.toThrow();
+  await page.getByRole('button', { name: 'Undo', exact: true }).click();
+  expect((await savedProject(page)).barriers).toHaveLength(2);
+  await page.getByRole('button', { name: 'Redo', exact: true }).click();
+  const redone = await savedProject(page);
+  expect(redone.barriers).toEqual(saved.barriers);
+  expect(redone.junctions).toEqual(saved.junctions);
 });

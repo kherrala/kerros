@@ -29,7 +29,7 @@ Need survey-grade coordinates from a projected CRS? Convert them to lng/lat with
 
 ## Objects, barriers and openings
 
-Walls and fences are **barriers**, defined by junction endpoints — they are the authoritative geometry, and wall surfaces are derived at render time. **Openings** (doors, windows, gates) attach to a barrier via `barrierId` + an `offset` along it. Areas (rooms, zones) are polygons (`rings`); a zone may contain child zones.
+Walls and fences are **barriers**, defined by shared junction endpoints — they are the authoritative wall geometry, and wall surfaces are derived at render time. **Openings** (doors, windows, gates) attach to a barrier via `barrierId` + an `offset` along it. Areas (rooms, drawn zones) store separate polygons (`rings`), and may contain child areas. Their corners do not reference wall junctions. See [Space geometry & walls](/guide/geometry) for how outlines follow wall edits, the limits of that consistency, and why the document is not a shared mesh.
 
 ## Live status
 
@@ -55,6 +55,9 @@ goes through one gate: `transact` clones the document, applies the change, runs 
 (structure, geometry, spatial relationships, ontology, navigation), and only then returns the
 result, deep-frozen so nothing can alter it except the next transaction. If the change throws or
 breaks any rule, you get the reason back and the original document, untouched.
+
+Valid means the document passes those checks. It does not mean every independent space polygon
+tiles the floor without gaps or follows every wall; see [what validation guarantees](/guide/geometry#what-validation-guarantees).
 
 For changes worth naming there is also a data form: a `Mutation` (`{ kind: 'addZone', … }`) applied
 with `applyMutations` — a sequence lands whole or not at all, which is what makes migrations and

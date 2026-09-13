@@ -472,7 +472,8 @@ export function bridgeDoorways(
     // The doorway fills the span but for a jamb at each end — a door flush to a wall end is one the
     // document will not hold.
     const clear = distance(a, b) - 2 * (thickness + 0.02);
-    if (clear < OPENING_MIN_SEGMENT / 2) {
+    // Detection heuristic, not a schema limit: do not infer a doorway from a tiny gap.
+    if (clear < 0.5) {
       report.skipped.push(`bridged doorway too narrow to hold a door at ${a.map(v => v.toFixed(1))}`);
       continue;
     }

@@ -4,6 +4,8 @@
 
 ![Reference editor in 3D](/media/editor-3d.png)
 
+For drawing behavior, read [Space geometry & walls](/guide/geometry): how **Space from walls** builds an outline, what follows a moved wall, how splitting and merging work, and how snapping differs from coordinate precision.
+
 ## Adapters
 
 The editor is storage- and integration-agnostic. You pass a `PlannerAdapters` object:

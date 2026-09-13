@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { bridgeDoorways, importPlanEntities, type PlanEntity } from './planImport';
 import {
   addBarrier,
+  MIN_SEGMENT,
   enclosedRegions,
   flights,
   primaryShafts,
@@ -94,11 +95,9 @@ describe('deterministic plan import', () => {
     const rooms = new Set(p.objects.filter(o => o.kind === 'room').map(o => o.id));
     expect((p.portals ?? []).some(x => rooms.has(x.a) && rooms.has(x.b))).toBe(true);
   });
-  it('retracts one end of a staggered junction instead of leaving sub-minimum wall debris', () => {
-    // Two partitions meet the central wall from opposite sides only 0.3 m apart — a staggered
-    // junction. An end landing on the wall's centreline welds a junction that splits it, so
-    // welding BOTH would leave a 0.3 m piece the document refuses; one end must retract to the
-    // wall's face instead.
+  it('imports staggered junctions and retains the doors beside them', () => {
+    // Opposing partitions meet a central wall 0.3 m apart. Short pieces are legal, and the
+    // imported layout must remain enclosed with all of its doorways.
     const entities: PlanEntity[] = [
       ...HOUSE,
       { type: 'LINE', layer: '196_SIS_EI-K_SEINÄ_ÄÄRIVII', a: [0.4, 1.95], b: [5.95, 1.95] },
@@ -112,10 +111,10 @@ describe('deterministic plan import', () => {
     const at = (id: string) => p.junctions.find(j => j.id === id)!.position;
     for (const b of p.barriers) {
       const [a, z] = [at(b.startId), at(b.endId)];
-      expect(Math.hypot(z[0] - a[0], z[1] - a[1])).toBeGreaterThanOrEqual(0.5);
+      expect(Math.hypot(z[0] - a[0], z[1] - a[1])).toBeGreaterThanOrEqual(MIN_SEGMENT - 1e-6);
     }
     expect(report.rooms).toBe(4);
-    // The central wall was split by the surviving weld — its doorway still found a piece to sit in.
+    // The central doorway still found a piece to sit in.
     expect(report.doors).toBe(2);
   });
   it('turns a symbol-less partition gap into an open passage, not a sealed wall', () => {

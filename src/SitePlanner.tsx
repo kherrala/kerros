@@ -64,7 +64,6 @@ import {
   addBarrier,
   alignDrawing,
   barrierEnds,
-  segmentProjection,
   centroid,
   closeRing,
   distance,
@@ -73,7 +72,6 @@ import {
   removeFloor,
   objectArea,
   objectPosition,
-  openRing,
   pointInRing,
   ringArea,
   rectangle,
@@ -81,8 +79,8 @@ import {
   splitRoom,
   toLngLat,
 } from './model/geometry';
-import { fitOpening, proposeWall, referenceAxis, type OpeningFit, type WallProposal } from './model/walls';
-import { divideSpaces, mergeSpaces, spacesRejoinedBy } from './model/inference';
+import { fitOpening, mainAxis, proposeWall, type OpeningFit, type WallProposal } from './model/walls';
+import { mergeSpaces, spacesRejoinedBy } from './model/inference';
 import { enclosedRegion, enclosedRegions, refitEnclosedRooms } from './model/spaces';
 import { pruneOntology } from './model/ontology';
 import { derivedGraph } from './model/topology';
@@ -93,6 +91,7 @@ import { transformObject } from './model/project';
 import { commitHistory, makeHistory, redoHistory, undoHistory } from './model/history';
 import { exportProject } from './adapters/persistence';
 import { transact } from './model/validate';
+import { appendAreaPoint, dragGeometry, drawBarrier, encloseRoom } from './model/authoring';
 import { useProjectPersistence } from './adapters/useProjectPersistence';
 import { neutralBasemap } from './adapters/basemap';
 import { openingFloorId } from './model/project';
@@ -119,7 +118,7 @@ interface Alignment {
 }
 const DRAW_TOOLS: Tool[] = ['wall', 'fence', 'zone', 'room', 'rectangle', 'hole', 'measure', 'evacuation'];
 /** Snap labels that mean "an angle is being held", and so deserve naming what it is held to. */
-const HELD = new Set(['Parallel', 'Square', '45°']);
+const HELD = new Set(['Parallel', 'Square', '15°', '30°', '45°', '60°', '75°']);
 /** Default leaf widths, so the preview can size itself before the object exists. Matches factory.ts. */
 const OPENING_WIDTH: Record<string, number> = { door: 0.9, window: 1.2, gate: 3.5 };
 const PLACE_TOOLS: Tool[] = [
@@ -629,8 +628,7 @@ export function SitePlanner({
       const offer = proposeWall(project, floorId, raw);
       if (offer)
         commit(p => {
-          addBarrier(p, offer.segment[0], offer.segment[1], floorId, 'wall');
-          divideSpaces(p, floorId, offer.segment[0], offer.segment[1]);
+          drawBarrier(p, floorId, offer.segment[0], offer.segment[1]);
         });
       setProposal(null);
       return;
@@ -644,57 +642,33 @@ export function SitePlanner({
         notify('Nothing encloses that point. The walls around it have a gap, or it is outside the building.');
         return;
       }
-      const existing = project.objects.find(
-        o => o.floorId === floorId && o.kind === 'room' && o.rings?.length && pointInRing(raw, o.rings[0]),
-      );
+      let existing = false;
+      let roomName = '';
       const done = commit(p => {
-        if (existing) {
-          // Clicking inside a room that has drifted from its walls re-fits it instead of stacking a
-          // second room on top of the first. Same operation as a wall drag performs, asked for
-          // directly — and it keeps the room's name and bindings, which a delete-and-redraw loses.
-          const room = p.objects.find(o => o.id === existing.id)!;
-          room.rings = [closeRing(ring), ...(room.rings ?? []).slice(1)];
-          room.position = centroid(ring);
-          const xs = ring.map(q => q[0]),
-            ys = ring.map(q => q[1]);
-          room.width = Math.max(...xs) - Math.min(...xs);
-          room.depth = Math.max(...ys) - Math.min(...ys);
-          setSelected(room.id);
-          return;
-        }
-        const room = createObject('room', centroid(ring), floorId, 'Room');
-        room.rings = [closeRing(ring)];
-        const xs = ring.map(q => q[0]),
-          ys = ring.map(q => q[1]);
-        room.width = Math.max(...xs) - Math.min(...xs);
-        room.depth = Math.max(...ys) - Math.min(...ys);
-        p.objects.push(room);
-        setSelected(room.id);
+        const result = encloseRoom(p, floorId, raw);
+        if (!result) return;
+        existing = result.existing;
+        roomName = result.room.name;
+        setSelected(result.room.id);
       });
       // Only when it took. A rejected commit has already said why, and a second toast claiming
       // success on top of it would contradict the first.
       if (done)
         notify(
           existing
-            ? `“${existing.name}” re-fitted to the walls around it · ${Math.abs(ringArea(ring)).toFixed(1)} m²`
+            ? `“${roomName}” re-fitted to the walls around it · ${Math.abs(ringArea(ring)).toFixed(1)} m²`
             : `Space taken from the walls · ${Math.abs(ringArea(ring)).toFixed(1)} m²`,
         );
       return;
     }
     const anchor = draft.at(-1);
-    const axis = snapping && anchor ? heldAxis(anchor).angle : 0;
+    const axis = snapping && anchor ? mainAxis(project, floorId) : 0;
     const point = snapping ? snapPoint(project, floorId, raw, toleranceRef.current, anchor, true, axis).point : raw;
     if (tool === 'wall' || tool === 'fence') {
       if (!draft.length) setDraft([point]);
       else if (
         commit(p => {
-          addBarrier(p, draft.at(-1)!, point, floorId, tool);
-          // A wall across a space really does divide it. Leaving the space whole would model both
-          // halves as the same place: routing walks through the wall, and they cannot be told apart
-          // by a zone. Walls only: a fence is left to enclose ground without carving it up, since
-          // outdoor space is usually one large area and splitting it at every fence line surprises
-          // more often than it helps. Draw the compound as its own space when you want that.
-          if (tool === 'wall') divideSpaces(p, floorId, draft.at(-1)!, point);
+          drawBarrier(p, floorId, draft.at(-1)!, point, tool);
         })
       )
         setDraft([point]);
@@ -723,7 +697,11 @@ export function SitePlanner({
     }
     if (['zone', 'room', 'hole', 'evacuation'].includes(tool)) {
       if (draft.length >= 3 && distance(point, draft[0]) < toleranceRef.current) finish();
-      else setDraft([...draft, point]);
+      else {
+        const next = appendAreaPoint(draft, point);
+        setDraft(next.points);
+        if (next.error) notify(next.error);
+      }
       return;
     }
     if (tool === 'measure') {
@@ -879,13 +857,9 @@ export function SitePlanner({
       );
     }
   }
-  /** How far away a wall can be and still be the thing a new wall lines up with. Derived from the
-   *  view's own tolerance so it stays a roughly constant distance on screen at any zoom. */
-  const axisReach = () => toleranceRef.current * 8;
   /** How far an opening looks for a wall. Shared, so a preview cannot promise a fit the click refuses. */
   const openingReach = () => Math.max(2, toleranceRef.current * 2);
   const isOpeningTool = (t: string) => t === 'door' || t === 'window' || t === 'gate';
-  const heldAxis = (anchor: Point) => referenceAxis(project, floorId, anchor, axisReach());
   const onHover = (point: Point, tolerance: number) => {
     toleranceRef.current = tolerance;
     if (tool === 'select' || tool === 'pan' || threeD || !editing) return;
@@ -905,16 +879,16 @@ export function SitePlanner({
       return;
     }
     const anchor = draft.at(-1);
-    // The wall lines up with what is near where it starts, not where the pointer has wandered to —
-    // otherwise the reference flips mid-drag and the wall swings with it.
-    const axis = snapping && anchor ? heldAxis(anchor) : null;
+    // The floor defines the angular grid throughout the stroke. A pointer crossing a nearby
+    // angled wall must not rotate that grid halfway through drawing; junctions still snap exactly.
+    const axis = snapping && anchor ? mainAxis(project, floorId) : null;
     const snap = snapping
-      ? snapPoint(project, floorId, point, tolerance, anchor, true, axis?.angle ?? 0)
+      ? snapPoint(project, floorId, point, tolerance, anchor, true, axis ?? 0)
       : { point, label: '' };
-    const holding = !!axis && HELD.has(snap.label);
+    const holding = axis !== null && HELD.has(snap.label);
     setHover(snap.point);
     setHeld(holding);
-    setSnapLabel(holding ? `${snap.label} to ${axis.source}` : snap.label);
+    setSnapLabel(holding ? `${snap.label} to floor axis` : snap.label);
   };
   /** What the map draws to explain the wall about to exist: the axis a wall is being held to — run
    *  past both ends so it reads as a line the wall lies on rather than as the wall — or the whole
@@ -963,14 +937,16 @@ export function SitePlanner({
       const opening = project.objects.find(o => o.id === id);
       const barrier = project.barriers.find(b => b.id === opening?.barrierId);
       if (!opening || !barrier) return;
-      const [a, b] = barrierEnds(project, barrier);
-      const hit = segmentProjection(raw, a, b);
-      const half = opening.width / 2;
-      if (hit.length < opening.width) return;
-      const offset = Math.max(half, Math.min(hit.length - half, hit.t * hit.length));
-      const ux = (b[0] - a[0]) / hit.length,
-        uy = (b[1] - a[1]) / hit.length;
-      updateObject(id, { offset, position: [a[0] + ux * offset, a[1] + uy * offset] });
+      const fit = fitOpening(
+        { ...project, barriers: [barrier] },
+        opening.floorId,
+        opening.kind as 'door' | 'window' | 'gate' | 'turnstile',
+        raw,
+        opening.width,
+        Infinity,
+        id,
+      );
+      if (fit) updateObject(id, { offset: fit.offset, position: fit.position });
       return;
     }
     if (kind === 'rotate') {
@@ -1005,41 +981,24 @@ export function SitePlanner({
       });
       return;
     }
-    reshape(p => {
-      if (kind === 'junction') {
-        const j = p.junctions.find(j => j.id === id)!;
-        j.position = point;
-        for (const b of p.barriers.filter(b => b.startId === id || b.endId === id))
-          if (distance(...barrierEnds(p, b)) < 0.1) throw new Error('A wall must remain at least 0.1 m long.');
-      } else if (kind === 'barrier') {
-        // Whole-wall translation constrained to the wall's normal: the wall slides orthogonally to
-        // itself (resizing the rooms it separates); junctions are shared so adjacent walls stretch
-        // to follow and the mesh stays connected. Snapping quantises the slide distance.
-        const b = p.barriers.find(b => b.id === id)!;
-        const [a, c] = barrierEnds(p, b);
-        const len = distance(a, c);
-        const nx = -(c[1] - a[1]) / len,
-          ny = (c[0] - a[0]) / len;
-        let s = (raw[0] - (a[0] + c[0]) / 2) * nx + (raw[1] - (a[1] + c[1]) / 2) * ny;
-        if (snapping) s = Math.round(s * 2) / 2;
-        const dx = nx * s,
-          dy = ny * s;
-        for (const jid of [b.startId, b.endId]) {
-          const j = p.junctions.find(j => j.id === jid)!;
-          j.position = [j.position[0] + dx, j.position[1] + dy];
-        }
-        for (const other of p.barriers.filter(
-          x => x.startId === b.startId || x.endId === b.startId || x.startId === b.endId || x.endId === b.endId,
-        ))
-          if (distance(...barrierEnds(p, other)) < 0.1) throw new Error('A wall must remain at least 0.1 m long.');
-      } else {
-        const o = p.objects.find(o => o.id === id)!;
-        const points = openRing(o.rings![ringIndex]);
-        points[index] = point;
-        o.rings![ringIndex] = closeRing(points);
-        o.position = centroid(o.rings![0]);
-      }
-    });
+    if (!editing) return;
+    let destination = point;
+    if (kind === 'barrier') {
+      const wall = project.barriers.find(b => b.id === id)!;
+      const [a, b] = barrierEnds(project, wall);
+      const length = distance(a, b);
+      const nx = -(b[1] - a[1]) / length,
+        ny = (b[0] - a[0]) / length;
+      let slide = (raw[0] - (a[0] + b[0]) / 2) * nx + (raw[1] - (a[1] + b[1]) / 2) * ny;
+      if (grid) slide = Math.round(slide * 2) / 2;
+      destination = [(a[0] + b[0]) / 2 + nx * slide, (a[1] + b[1]) / 2 + ny * slide];
+    }
+    const next = dragGeometry(
+      project,
+      floorId,
+      kind === 'ring' ? { kind, id, point: destination, ringIndex, index } : { kind, id, point: destination },
+    );
+    if (next !== project) setHistory(current => commitHistory(current, next));
   }
   /** Write the derived graph into the document, so it can be edited.
    *
@@ -1220,6 +1179,10 @@ export function SitePlanner({
       const cmd = e.metaKey || e.ctrlKey;
       if (cmd && e.key.toLowerCase() === 'z' && editing) {
         e.preventDefault();
+        if (draft.length && !e.shiftKey) {
+          setDraft(draft.slice(0, -1));
+          return;
+        }
         setHistory(h => (e.shiftKey ? redoHistory(h) : undoHistory(h)));
         setDraft([]);
         setRouteAnchor(null);
@@ -1311,6 +1274,11 @@ export function SitePlanner({
         }
       }
       if (!editing) return;
+      if ((e.key === 'Backspace' || e.key === 'Delete') && draft.length) {
+        e.preventDefault();
+        setDraft(draft.slice(0, -1));
+        return;
+      }
       if ((e.key === 'Delete' || e.key === 'Backspace') && selected) {
         e.preventDefault();
         setDeleteOpen(true);
@@ -2142,6 +2110,11 @@ export function SitePlanner({
                         Finish <kbd>↵</kbd>
                       </button>
                     )}
+                    {draft.length > 0 && (
+                      <button aria-label="Undo last point" onClick={() => setDraft(draft.slice(0, -1))}>
+                        Undo point <kbd>⌫</kbd>
+                      </button>
+                    )}
                     <button aria-label="Cancel drawing" onClick={() => chooseTool('select')}>
                       <X size={14} />
                     </button>
@@ -2368,7 +2341,7 @@ export function SitePlanner({
               {project.floors.length} floors
             </span>
             <span>
-              {snapping ? 'Snapping on · 0.5 m' : 'Free positioning'}
+              {snapping ? 'Snapping on · 0.5 m · 15°' : 'Free positioning'}
               <kbd>?</kbd>
             </span>
           </div>

@@ -130,7 +130,7 @@ export const AI_IMPORT_TOOLS: AiToolSpec[] = [
 export const AI_IMPORT_SYSTEM = `You are converting an architectural CAD drawing (already parsed for you) into a Kerros indoor-map document. Work in metres; the extraction tools already output metres in a shared coordinate frame. The y axis points up in the data and in every rendering.
 
 The Kerros document model, briefly:
-- barriers: wall/fence segments between junctions. Create with {kind:'addBarrier', a:[x,y], b:[x,y], floorId:'floor-ground', barrierKind:'wall'}. Walls must be >= 0.5 m; a wall carrying an opening must be >= 1 m.
+- barriers: wall/fence segments between junctions. Create with {kind:'addBarrier', a:[x,y], b:[x,y], floorId:'floor-ground', barrierKind:'wall'}. Walls must be >= 0.01 m; an attached opening must fit wholly within its wall and must not overlap another opening. Preserve short returns and jambs.
 - spaces: rooms and other areas. Create with {kind:'addObject', objectKind:'room', name, position:[x,y], floorId:'floor-ground', set:{rings:[[[x,y],...closed ring...]], width, depth}}. Rings are closed (first point repeated last), non-self-intersecting. Other kinds: 'zone' (drawn area), 'stairs', 'elevator', 'door', 'window', 'poi', 'parcel' (outdoor ground, floorId null).
 - openings: doors/windows placed with addObject (objectKind 'door'/'window'), either free-standing (position+rotation) or bound to a wall via set:{barrierId, offset} where offset is metres along the wall from its start. Bound openings must fit their wall.
 - After geometry, {kind:'refreshPortals'} reads doorways and open boundaries off the plan automatically, and {kind:'addZone', name, spaceIds:[...]} groups spaces.

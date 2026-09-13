@@ -19,6 +19,20 @@ The Silo — a fictional hundred-level shaft), generate a Backrooms office compl
 site, or import a portable project JSON. Projects and reference drawings autosave to IndexedDB;
 older projects saved in `localStorage` remain readable.
 
+Run `npm run test:geometry` for repeatable randomized building authoring and geometry regressions.
+The tests draw rotated buildings and try mixed sequences of walls, suggested partitions, rooms,
+rectangles, doors, wall drags, deletion, undo and redo through the editor's model operations.
+They also exercise centimetre-scale returns, closely spaced junctions, narrow openings,
+centimetre-rounded pointer input, and preservation of floor area when splitting small alcoves.
+Every accepted edit must pass full validation and a JSON save/load round trip; failures include
+the seed and action history. Ordinary generated edits must succeed, so rejecting all changes
+cannot make this test pass. Dedicated cases also check safe recovery from impossible gestures.
+
+```sh
+GEOMETRY_FUZZ_CASES=1000 npm run test:geometry  # longer stress run
+GEOMETRY_FUZZ_SEED=12 npm run test:geometry    # replay one seed
+```
+
 The **Backrooms · Offices** sample has a live plan preview, a repeatable seed, and 144–216 m floor
 sizes. Its three office levels contain hundreds of connected rooms each, carpet and wallpaper
 materials, and flickering fluorescent panels in walk mode. Room labels stay in the walk caption;
@@ -36,10 +50,14 @@ browser-restricted public key.
 
 - **Editor** — connected walls and fences (shared junctions; new segments split existing ones),
   rooms/zones with polygon holes and parent/child nesting, rectangle tool, measuring, metric
-  0.5 m grid + endpoint/segment/orthogonal snapping, undo/redo, keyboard shortcuts (see the
+  0.5 m grid + 15° angular snapping relative to the floor's main axis, shared T/four-way junction
+  snapping, undo/redo, keyboard shortcuts (see the
   in-app help), vertex/endpoint drag editing.
 - **Attached openings** — doors and windows attach to walls, gates to fences, positioned by
   offset along the segment; they follow barrier edits and reject invalid placements.
+- **Small details** — walls and fences can be as short as 1 cm. Short returns and jambs stay in
+  place, and openings use their actual width to determine whether they fit. Turn snapping off
+  for details smaller than the 0.5 m drawing grid; internal intersections retain full precision.
 - **Imports** — GeoJSON building/parcel footprints (lng/lat, or any CRS via a host-supplied
   converter), PNG/JPEG/WebP/PDF reference drawings aligned by two point pairs or a known distance,
   and portable project JSON.
@@ -80,7 +98,9 @@ app/mmlBasemap.ts  Reference MML (Finnish land survey) BasemapConfig — region-
 Geometry is stored in **local metric coordinates** (metres) relative to a WGS84 lng/lat project
 origin, via an ellipsoidal local-tangent-plane — no projection library, works anywhere — and
 converted to lng/lat only at the map boundary. Wall junctions and segments are the authoritative
-geometry; wall surfaces and openings are derived at render time.
+wall geometry; wall surfaces and openings are derived at render time. Spaces keep separate polygons,
+with supported editor operations refitting matching enclosed rooms after wall changes. See
+[Space geometry & walls](docs/guide/geometry.md) for the connections, consistency limits and mesh tradeoff.
 
 ### Facades & layering
 

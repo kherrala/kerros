@@ -1,0 +1,34 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 360" role="img" aria-labelledby="title desc">
+  <title id="title">Wall junctions and independent space polygons</title>
+  <desc id="desc">A partition separates two space polygons. Its dashed centreline connects junctions j1 and j2 at the outer walls. The space polygons stop at either face of the partition and do not reference the junctions.</desc>
+  <rect width="760" height="360" rx="12" fill="#f4f6f8"/>
+  <g font-family="system-ui, sans-serif" fill="#263445">
+    <text x="30" y="35" font-size="17" font-weight="600">Spaces taken from wall faces</text>
+    <path d="M 45 80 H 425 V 310 H 45 Z M 235 80 V 310" fill="none" stroke="#8995a3" stroke-width="16"/>
+    <rect x="53" y="88" width="174" height="214" fill="#deeee9" stroke="#137961" stroke-width="2"/>
+    <rect x="243" y="88" width="174" height="214" fill="#e2eafa" stroke="#4269ad" stroke-width="2"/>
+    <path d="M 45 80 H 425 V 310 H 45 Z M 235 80 V 310" fill="none" stroke="#334155" stroke-width="1.5" stroke-dasharray="5 5"/>
+    <g fill="#263445">
+      <circle cx="235" cy="80" r="5"/>
+      <circle cx="235" cy="310" r="5"/>
+    </g>
+    <text x="247" y="69" font-size="14" font-weight="600">j1</text>
+    <text x="247" y="338" font-size="14" font-weight="600">j2</text>
+    <text x="140" y="176" text-anchor="middle" font-size="18" font-weight="600">Space A</text>
+    <text x="140" y="201" text-anchor="middle" font-size="13">Own polygon</text>
+    <text x="330" y="176" text-anchor="middle" font-size="18" font-weight="600">Space B</text>
+    <text x="330" y="201" text-anchor="middle" font-size="13">Own polygon</text>
+    <text x="468" y="95" font-size="15" font-weight="600">Shared wall junctions</text>
+    <text x="468" y="118" font-size="13">The partition and outer wall</text>
+    <text x="468" y="137" font-size="13">segments reference j1 or j2.</text>
+    <path d="M 468 164 H 510" stroke="#334155" stroke-width="1.5" stroke-dasharray="5 5"/>
+    <text x="522" y="169" font-size="13">Wall centreline</text>
+    <path d="M 468 193 H 510" stroke="#8995a3" stroke-width="12"/>
+    <text x="522" y="198" font-size="13">Wall thickness</text>
+    <path d="M 468 222 H 510" stroke="#137961" stroke-width="2"/>
+    <text x="522" y="227" font-size="13">Space A boundary</text>
+    <text x="468" y="268" font-size="15" font-weight="600">Separate space corners</text>
+    <text x="468" y="291" font-size="13">Coordinates on wall faces,</text>
+    <text x="468" y="310" font-size="13">with no junction or wall IDs.</text>
+  </g>
+</svg>

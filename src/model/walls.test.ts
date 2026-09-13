@@ -194,12 +194,11 @@ describe('proposing a wall', () => {
 });
 
 describe('fitting an opening', () => {
-  it('refuses a segment too short to carry an opening, exactly as validation would', () => {
-    // The hover preview and the click that commits must agree: validation refuses openings on
-    // sub-metre stubs, so the fit must never offer one.
+  it('uses the opening width to decide whether a short wall can carry it', () => {
     const p = newProject();
     addBarrier(p, [0, 0], [0.8, 0], 'floor-ground', 'wall');
-    expect(fitOpening(p, 'floor-ground', 'door', [0.4, 0.1], 0.7, 1)).toBeNull();
+    expect(fitOpening(p, 'floor-ground', 'door', [0.4, 0.1], 0.7, 1)).not.toBeNull();
+    expect(fitOpening(p, 'floor-ground', 'door', [0.4, 0.1], 0.9, 1)).toBeNull();
     addBarrier(p, [0, 5], [1.4, 5], 'floor-ground', 'wall');
     const fit = fitOpening(p, 'floor-ground', 'door', [0.7, 5.1], 0.7, 1);
     expect(fit).not.toBeNull();

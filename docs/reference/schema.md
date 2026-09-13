@@ -94,6 +94,8 @@ rather than hanging in open air.
 
 ## Geometry
 
+See [Space geometry & walls](/guide/geometry) for the relationship between shared wall junctions, independent space polygons and generated rendering meshes.
+
 `geoOrigin`, `toLngLat`, `toLocal` (coordinate conversions), `rectangle`, `rotate`, `centroid`, `distance`, `closeRing`, `openRing`, `ringArea`, `objectArea`, `pointInRing`, `objectPosition`, `objectRotation`, `addBarrier`, `barrierEnds`, `segmentProjection`, `slopeElevation`.
 
 ## Documents
@@ -122,10 +124,10 @@ transaction that cannot produce an invalid result.
   `transact`. A sequence applies whole or not at all, and `outcomes` reports what each step
   returned. Because mutations are plain data they can be logged, replayed over a wire, and
   table-tested.
-- The limits that keep a plan editable: `MIN_SEGMENT` (0.5 m — no wall or fence shorter than the
-  editor can grab; splitting welds rather than leaving debris), `OPENING_MIN_SEGMENT` (1 m — a door
-  needs a wall to hang in, not a post), `COORD_LIMIT` (100 km — a corruption guard, not a site
-  size).
+- Geometry limits: `MIN_SEGMENT` (0.01 m — rejects degenerate walls while preserving short returns
+  and jambs), `OPENING_MIN_SEGMENT` (the same base limit; actual opening width determines how much
+  wall is needed), `COORD_LIMIT` (100 km — a corruption guard, not a site size). The 0.5 m drawing
+  grid is independent of validation; turn snapping off for precise small details.
 
 ## Spaces, zones and portals
 
@@ -136,6 +138,8 @@ graph (`model/topology.ts`) — all exported flat from `@kerros/schema`.
 
 ### Space queries
 
+- `enclosedRegion(project, floorId, point)` / `enclosedRegions(project, floorId, minArea?)` — derive enclosed outer outlines from barrier footprints; the default minimum region area is 1 m². See the [current limits](/guide/geometry#current-limits) for holes and small spaces.
+- `refitEnclosedRooms(project, floorId, before)` — update room outlines that matched the pre-edit enclosed regions, where the replacement is unambiguous. Call inside a transaction after changing walls; `transact` itself does not perform refitting.
 - `spaces(project)` — every space; a room *is* a space, nothing is duplicated.
 - `spaceAt(project, floorId, point)` — the **smallest** space containing a point.
 - `spacePoint(project, space)` — where a space sits for routing (footprint centroid).

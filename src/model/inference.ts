@@ -216,11 +216,20 @@ export function spacesDividedBy(project: ProjectDocument, floorId: string | null
   const out: SiteObject[] = [];
   for (const space of project.objects) {
     if (space.floorId !== floorId || !isSpace(space.kind)) continue;
+    // A containing area names the whole floor/department. Split its rooms, keeping their
+    // parent intact; cutting the parent first strands children outside their parent polygon.
+    if (project.objects.some(o => o.parentId === space.id)) continue;
     const ring = footprint(space)[0];
     if (!ring?.length) continue;
     // Both ends outside, and some part of the run inside. Testing the midpoint alone is not enough:
     // a wall crossing two rooms has its midpoint in the gap between them and would divide neither.
-    if (inSpace(space, a) || inSpace(space, b)) continue;
+    const interior = (point: Point) =>
+      inSpace(space, point) &&
+      !footprint(space).some(closed => {
+        const r = openRing(closed);
+        return r.some((q, i) => segmentProjection(point, q, r[(i + 1) % r.length]).distance < 1e-6);
+      });
+    if (interior(a) || interior(b)) continue;
     const steps = Math.max(8, Math.min(200, Math.round(distance(a, b) / 0.25)));
     let entered = false;
     for (let i = 1; i < steps && !entered; i++) {

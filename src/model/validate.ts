@@ -67,13 +67,10 @@ export function validateRings(rings: Ring[]): string | null {
 /** Spatial relationships between entities: ring sanity per object, parent containment without
  *  cycles, and openings that actually fit the barriers they sit in. */
 export function validateRelationships(project: ProjectDocument): string | null {
-  // No debris segments: a wall or fence shorter than MIN_SEGMENT cannot be grabbed, selected or
-  // dragged in the editor, so once it exists nobody can fix it from the UI. Splits and clips weld
-  // rather than emit them; this rule is the guarantee that nothing else emits them either.
+  // Reject degenerate segments, while allowing real returns and jambs below the drawing-grid size.
   for (const barrier of project.barriers) {
     const [a, b] = barrierEnds(project, barrier);
-    if (distance(a, b) < MIN_SEGMENT - 1e-6)
-      return `A wall or fence must be at least ${MIN_SEGMENT} m long — anything shorter cannot be edited on the plan.`;
+    if (distance(a, b) < MIN_SEGMENT - 1e-6) return `A wall or fence must be at least ${MIN_SEGMENT} m long.`;
   }
   for (const object of project.objects) {
     if (object.rings) {
@@ -105,9 +102,7 @@ export function validateRelationships(project: ProjectDocument): string | null {
       if (!barrier || barrier.floorId !== object.floorId)
         return 'Opening references a missing barrier or a different floor.';
       const [a, b] = barrierEnds(project, barrier);
-      // A door needs a wall to hang in, not a post. An opening on a sub-metre stub is almost always
-      // a placement accident (the door welded onto the wrong segment), and every portal read off it
-      // would inherit the mistake — refuse it while it is still one object on one wall.
+      // Actual opening width decides the required wall length, including narrow windows and doors.
       if (distance(a, b) < OPENING_MIN_SEGMENT - 1e-6)
         return `A door, window or gate needs a segment at least ${OPENING_MIN_SEGMENT} m long to sit in.`;
       const offset = object.offset ?? 0;
