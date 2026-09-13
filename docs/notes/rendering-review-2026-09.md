@@ -13,9 +13,13 @@ They are not a current open-item checklist.
   the map lens, and the preference survives reloads.
 - **Still open:** walk collision uses active-floor walls and fixtures. Lift shells, escalator rails,
   walls beneath a mezzanine and plate edges need a shared collision representation.
-- **Under investigation:** the reported underground and entresol appearance problems. A browser
-  capture pass exercises the entresol, ground hall, Herkku and P1/P2 without WebGL or geometry
-  exceptions. That smoke check does not establish that their visual geometry is correct.
+- **Fixed and visually checked in Walk:** entresol uses its host storey's ceiling across the open
+  hall. Garage perimeter walls reach the ceiling, with gaps preserved for ramps and service access.
+  Browser captures cover entresol, ground hall, Herkku and P1/P2 without rendering exceptions.
+- **Added and browser-tested:** rectangular gallery openings land on the lower double-height hall;
+  two bath levels have tiled chambers, transparent basins, slides and submerged blue lighting.
+  Pool reflections and animated caustics illuminate tiled walls and ceilings with ceiling lamps and
+  daylight fill disabled. The overlapping office/bath stair shafts are now one shared object.
 
 Checkpoint commit: `25b65fe`. Two background workflows were running when this was written:
 a verify pass over the findings below, and an implementation pass on the demo data and the

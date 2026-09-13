@@ -302,9 +302,13 @@ export interface WalkTerrain {
   walls: Ring[];
   /** Eye height above the presented ground plane: EYE plus whatever lifts the slab. */
   eye: number;
+  floorId?: string | null;
+  dropAt?: (at: Point) => { floorId: string; distance: number } | undefined;
 }
 
 export interface WalkCallbacks {
+  /** A real opening has a landing below. Rebase the scene onto that floor before animating descent. */
+  onDrop?(floorId: string): void;
   /** Fired once per frame in which anything changed — position, heading, pitch or pointer lock. */
   onPose(pose: WalkPose): void;
   /** The walker asked to change level (F, or Shift+F for down). The host decides whether there is
@@ -364,6 +368,7 @@ export class WalkController {
   private path: Point[] | null = null;
   private travelled = 0;
   private arrive?: () => void;
+  private fall?: { floorId: string; remaining: number; speed: number; ready: boolean };
   position: Point = [0, 0];
   heading = 0;
   pitch = REST_PITCH;
@@ -374,6 +379,7 @@ export class WalkController {
     this.map = map;
     this.origin = origin;
     this.position = start.position;
+    this.fall = undefined;
     this.heading = wrap(start.heading);
     this.pitch = clamp(start.pitch ?? REST_PITCH, MIN_PITCH, MAX_PITCH);
     this.running = true;
@@ -442,6 +448,10 @@ export class WalkController {
   /** The floor under the walker changed, or its walls were edited. */
   setTerrain(terrain: WalkTerrain) {
     this.terrain = terrain;
+    if (this.fall) {
+      if (terrain.floorId === this.fall.floorId) this.fall.ready = true;
+      else this.fall = undefined;
+    }
     if (this.running) this.apply();
   }
 
@@ -486,6 +496,7 @@ export class WalkController {
 
   /** Put the walker somewhere — arriving at a new floor, or jumping to a route's start. */
   place(position: Point, heading = this.heading) {
+    this.fall = undefined;
     this.position = position;
     this.heading = wrap(heading);
     if (this.running) this.apply();
@@ -632,6 +643,15 @@ export class WalkController {
     // missing time out of your stride and makes the whole walk slow.
     const dt = Math.min((now - this.last) / 1000, 0.25);
     this.last = now;
+    if (this.fall) {
+      if (this.fall.ready) {
+        this.fall.remaining = Math.max(0, this.fall.remaining - this.fall.speed * dt - 0.5 * 9.81 * dt * dt);
+        this.fall.speed += 9.81 * dt;
+        if (this.fall.remaining === 0) this.fall = undefined;
+        this.apply();
+      }
+      return;
+    }
     if (this.path) {
       // Touching a movement key takes the tour back off the route; aiming the view does not,
       // because looking about you while the route carries you on is the whole point of watching it.
@@ -643,6 +663,13 @@ export class WalkController {
     this.heading = moved.heading;
     if (moved.step)
       this.position = unstick([this.position[0] + moved.step[0], this.position[1] + moved.step[1]], this.terrain.walls);
+    const drop = this.terrain.dropAt?.(this.position);
+    if (drop && this.on.onDrop) {
+      this.cancelFollow();
+      this.fall = { floorId: drop.floorId, remaining: drop.distance, speed: 0, ready: false };
+      this.on.onDrop(drop.floorId);
+      return;
+    }
     this.apply();
   };
 
@@ -671,7 +698,13 @@ export class WalkController {
     if (!map) return;
     const bearing = wrap(this.heading + (this.origin[2] ?? 0));
     const eye = toLngLat(this.position, this.origin);
-    const camera = eyeCamera(map.transform, [eye[0], eye[1]], this.terrain.eye, bearing, this.pitch);
+    const camera = eyeCamera(
+      map.transform,
+      [eye[0], eye[1]],
+      this.terrain.eye + (this.fall?.ready ? this.fall.remaining : 0),
+      bearing,
+      this.pitch,
+    );
     map.jumpTo({ center: camera.center, zoom: camera.zoom, bearing, pitch: this.pitch });
     this.on.onPose(this.pose);
   }

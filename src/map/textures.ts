@@ -13,7 +13,8 @@ const SCALE: Record<SurfaceFinish, [number, number]> = {
   plaster: [3, 3],
   timber: [2.4, 1.44],
   oak: [2.4, 1.44],
-  tile: [2.4, 2.4],
+  // Four columns and six rows of 150 mm square swimming-hall / bathroom tiles.
+  tile: [0.6, 0.9],
   grass: [3.2, 3.2],
   paving: [1.6, 1.6],
   roof: [2.4, 3.6],
@@ -77,15 +78,16 @@ export function surfaceTextures(kind: SurfaceFinish) {
         const cell = u * columns + stagger;
         const fu = fract(cell),
           fv = fract(v * rows);
-        const gapU = kind === 'brick' ? 0.022 : 0.008;
-        const gapV = kind === 'brick' ? 0.065 : 0.015;
+        const gapU = kind === 'brick' ? 0.022 : kind === 'tile' ? 0.012 : 0.008;
+        const gapV = kind === 'brick' ? 0.065 : kind === 'tile' ? 0.012 : 0.015;
         const edge = Math.min(Math.min(fu, 1 - fu) / gapU, Math.min(fv, 1 - fv) / gapV);
         const face = smooth(Math.min(1, edge));
         const variation = hash(Math.floor(cell) % columns, row) - 0.5;
         tone *= 1 + variation * (kind === 'brick' ? 0.12 : 0.06);
         // Mortar sat a third darker than the stone, so every joint drew a hard black line and the
         // wall read as a grid before it read as a surface. Mortar is paler than brick in life.
-        tone = tone * face + (kind === 'brick' ? 0.86 : 0.88) * (1 - face);
+        if (kind === 'tile') tone = 0.98 + variation * 0.02 + (grain - 0.5) * 0.005;
+        tone = tone * face + (kind === 'tile' ? 0.42 : kind === 'brick' ? 0.86 : 0.88) * (1 - face);
         relief = 0.18 + face * (0.56 + (grain - 0.5) * (kind === 'tile' ? 0.015 : 0.12));
         roughness = kind === 'tile' ? 0.35 + weather * 0.16 + (1 - face) * 0.4 : 0.84 + grain * 0.12;
       } else if (kind === 'oak' || kind === 'timber') {

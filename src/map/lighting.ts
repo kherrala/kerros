@@ -13,7 +13,8 @@
 // power cut, not an evening. So the interior term here does not follow the sun at all: it is what
 // the building itself contributes, and the sun is added on top of it. That is also why the sun is
 // weaker than it used to be — it is no longer carrying the whole scene.
-import type { Point } from '../model/types';
+import type { InteriorLight, Point } from '../model/types';
+export type { InteriorLight } from '../model/types';
 
 /** The sun at the top of its scale, before the air takes its cut. Deliberately modest: see
  *  `sunlight` for why the beam is no longer the thing lighting the model. */
@@ -205,13 +206,6 @@ export const sunlight = (sun: Sun) => {
  *  as much about a space as its plan does: a 4000 K fluorescent office, a 2700 K hotel corridor and
  *  a 5000 K operating theatre are three different rooms before anything is drawn in them. So it is
  *  a property of the floor, authored like its name and its height, rather than a render setting. */
-export interface InteriorLight {
-  /** Colour temperature in kelvin. 2700 is a tungsten lamp, 4000 a fluorescent tube, 6500 daylight. */
-  kelvin: number;
-  /** How brightly, 0 (dark — an unlit store or a shell) to 1 (a fully lit workplace). */
-  level: number;
-}
-
 /** The lamps a floor is likely to be fitted with, warmest first. Fluorescent is the default because
  *  it is what is actually overhead in most of the buildings anyone draws: offices, shops, schools,
  *  hospitals, car parks. */
@@ -305,10 +299,10 @@ export function ambient(sun: Sun, light: InteriorLight = DEFAULT_LIGHT) {
      *  direction it lit the underside of a landing as brightly as the floor under it, and to get a
      *  floor bright enough it had to be turned up until the walls glowed — so the floor takes the
      *  full value and a wall about half of it, which is what a room of downlights actually does. */
-    interior: kelvinColor(light.kelvin),
+    interior: light.tint ?? kelvinColor(light.kelvin),
     /** What comes back UP off the floor: the same lamps, much weaker, which is the half of the
      *  picture that keeps a soffit from going black. */
-    interiorBounce: blend(kelvinColor(light.kelvin), '#000000', 0.6),
+    interiorBounce: blend(light.tint ?? kelvinColor(light.kelvin), '#000000', 0.6),
     // The ceiling makes up the difference between what the sky is giving and what a lit interior is
     // supposed to sit at — which is what a real building does. A workplace is designed to a lux
     // level and modern lighting control holds it there, dimming as the sun comes round and coming up

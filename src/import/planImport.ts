@@ -8,21 +8,24 @@
 // envelope ring; this file turns walls into a document.
 //
 // The method leans on machinery the editor already trusts rather than new geometry: walls become
-// barriers; ONE interior plate is traced from the envelope's inner face; each partition then
-// divides the plate with the same divideSpaces/splitRoom path a hand-drawn wall takes; labels name
-// whatever room they stand in via spaceAt. Runs inside a transact like every other authoring
+// barriers; doorless passages become virtual boundaries; rooms follow the bounded faces of that
+// shared network. Their usable polygons are generated from the walls, including wall thickness
+// and holes. Labels name whatever room they stand in via spaceAt. Runs inside a transact like every other authoring
 // operation, so a drawing this cannot digest refuses cleanly instead of importing garbage.
 import {
   MIN_SEGMENT,
   OPENING_MIN_SEGMENT,
   addBarrier,
+  addVirtualBoundary,
   barrierEnds,
+  bindSpaceToRegion,
+  boundaryEdges,
+  boundaryRegions,
   centroid,
-  closeRing,
   createObject,
   distance,
-  divideSpaces,
   enclosedRegions,
+  normalizeBoundaries,
   refreshPortals,
   segmentProjection,
   spaceAt,
@@ -173,7 +176,7 @@ function emitBarriers(
     }
     report.passages += (passages.get(w) ?? []).length;
   }
-  dropStubs(draft, report);
+  dropStubs(draft, floorId, report);
 }
 
 /** Adding a wall welds a junction wherever its end lands, which splits whatever already crossed
@@ -181,11 +184,12 @@ function emitBarriers(
  *  allowed to hold. The document is then refused, and the refusal names the rule rather than the
  *  drawing, which is no help at all to someone importing one. Drop the stubs instead, and the
  *  junctions they leave orphaned, and report how many. */
-function dropStubs(draft: ProjectDocument, report: PlanImportReport) {
+function dropStubs(draft: ProjectDocument, floorId: string | null, report: PlanImportReport) {
   const at = new Map(draft.junctions.map(j => [j.id, j.position]));
   const stubs = new Set(
     draft.barriers
       .filter(b => {
+        if (b.floorId !== floorId) return false;
         const p = at.get(b.startId),
           q = at.get(b.endId);
         return p && q && Math.hypot(q[0] - p[0], q[1] - p[1]) < MIN_SEGMENT;
@@ -195,13 +199,12 @@ function dropStubs(draft: ProjectDocument, report: PlanImportReport) {
   if (!stubs.size) return;
   draft.barriers = draft.barriers.filter(b => !stubs.has(b.id));
   draft.objects = draft.objects.filter(o => !o.barrierId || !stubs.has(o.barrierId));
-  const used = new Set(draft.barriers.flatMap(b => [b.startId, b.endId]));
+  const used = new Set(boundaryEdges(draft).flatMap(b => [b.startId, b.endId]));
   draft.junctions = draft.junctions.filter(j => used.has(j.id));
   report.skipped.push(`${stubs.size} wall stub${stubs.size > 1 ? 's' : ''} under ${MIN_SEGMENT} m`);
 }
 
-/** One interior plate traced from the envelope, then divided along each partition — the same
- *  divideSpaces path a hand-drawn wall takes, so rooms come from battle-tested geometry. */
+/** Rooms share the measured wall network, including virtual edges across doorless passages. */
 function emitRooms(
   draft: ProjectDocument,
   floorId: string | null,
@@ -209,35 +212,27 @@ function emitRooms(
   passages: Map<Wall, [number, number][]>,
   report: PlanImportReport,
 ) {
-  // Every region the walls enclose, in one read. The previous approach traced a single plate from
-  // the envelope and then cut it once per partition, which asked far more of the drawing than it
-  // could give: a partition had to span the whole plate to divide it, so a floor laid out around a
-  // hall — partitions meeting each other rather than crossing the building — came back as one room.
-  // A basement whose envelope did not quite close came back as none at all, plate and rooms both.
-  //
-  // The walls already say where the rooms are. Subtracting their bodies from the floor's extent
-  // falls apart into exactly those rooms, whatever shape they are and whatever meets what.
-  const regions = enclosedRegions(draft, floorId);
+  // A passage has no physical wall, but still divides two named rooms. Add only its missing
+  // centreline span; normalization joins it to both jambs and keeps the neighbouring wall IDs.
+  for (const w of partitions)
+    for (const [lo, hi] of passages.get(w) ?? []) addVirtualBoundary(draft, floorId, along(w, lo), along(w, hi));
+  normalizeBoundaries(draft, floorId);
+  const regions = boundaryRegions(draft, floorId);
   if (!regions.length) {
     report.skipped.push('no enclosed regions: the walls do not close around anything');
     return;
   }
-  for (const ring of regions) {
-    const room = createObject('room', centroid(ring as Point[]), floorId, 'Room');
-    room.rings = [closeRing(ring)];
-    const xs = ring.map((p: Point) => p[0]),
-      ys = ring.map((p: Point) => p[1]);
-    room.width = Math.max(...xs) - Math.min(...xs);
-    room.depth = Math.max(...ys) - Math.min(...ys);
+  for (const region of regions) {
+    const room = createObject('room', centroid(region.rings[0]), floorId, 'Room');
+    try {
+      bindSpaceToRegion(draft, room, region);
+    } catch (error) {
+      // Tiny or disconnected usable pieces cannot become labelled spaces. Keep their measured
+      // boundaries and report the unresolved region instead of exporting a stale polygon.
+      report.skipped.push(`room near ${room.position.map(v => v.toFixed(2))}: ${(error as Error).message}`);
+      continue;
+    }
     draft.objects.push(room);
-  }
-  // A doorless passage is a gap in a partition, so the regions either side of it are one region —
-  // the walls really do leave them open to each other. The drawing still says they are two places
-  // with a way through, which is what an open boundary means, so cut along those partitions and let
-  // portal inference call the result open.
-  for (const w of partitions) {
-    if (!(passages.get(w) ?? []).length) continue;
-    divideSpaces(draft, floorId, along(w, w.lo - 0.25), along(w, w.hi + 0.25));
   }
   report.rooms = draft.objects.filter(o => o.kind === 'room' && o.floorId === floorId).length;
 }

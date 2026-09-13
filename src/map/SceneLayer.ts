@@ -10,6 +10,7 @@ import type { Floor, MaterialKind, Point, ProjectDocument, Ring, SiteObject, Slo
 import type { Route } from '../model/navigation';
 import { legStepIndices, ROUTE_COLOR, routeTrackImage, TRACK_PIXELS, TRACK_TILE } from './route';
 import {
+  barrierEnds,
   closeRing,
   objectArea,
   objectPosition,
@@ -54,6 +55,8 @@ import type { SurfaceFinish } from './textures';
 import { ambient, FIXED, type Sun, sunlight } from './lighting';
 import { FixtureLights } from './FixtureLights';
 import { EYE } from './walk';
+import { tallSpaceContext } from './walkSurfaces';
+import { applyPoolCaustics, makePool, makeWaterSlide } from './water';
 
 // Building geometry floats slightly above the basemap so slabs never z-fight with map tiles.
 // Each floor gets an opaque slab; rooms sit on top of it with enough clearance to stay artifact-free.
@@ -74,6 +77,21 @@ const ROOM = 0.05,
   GROUND = 0.06;
 /** Head clearance over the eye. A ceiling you can see the top of is not a ceiling. */
 const HEAD_CLEAR = 0.35;
+/** How much of the storey in focus everything stacked above it must leave, and how much the storeys
+ *  under it leave of one another. The per-storey ghost strength is solved from these and the level
+ *  count — see ghostAlpha. Below is the harder read (it comes through the focus's own plate as well)
+ *  and so is allowed to be the stronger layer. */
+const FOCUS_SEEN = 0.62,
+  UNDER_SEEN = 0.3;
+/** The envelope and the partitions of the storeys not in focus: the things a stack is looked THROUGH
+ *  rather than at. Flat, and not a share of the plates' strength, because the case has a job of its
+ *  own — saying where the building is and how it is banded — that does not get easier or harder with
+ *  the level count. A plate is one layer between the eye and what is under it; the façade is a solid
+ *  band at every one of seventeen storeys, two faces deep, covering the whole plan, and at the
+ *  plates' strength it closed the building into a brick box. Glass, not masonry. */
+const CASE_ALPHA = 0.055;
+/** And the floor under a shaft's ghosted upper run — see lift(). */
+const SHAFT_GHOST = 0.17;
 
 /** How far an absolutely-placed piece of geometry has to move to join the rest of the scene.
  *
@@ -108,6 +126,26 @@ export const sceneElevation = (view: UndergroundView, walk: boolean, z: number) 
  *  glowing plane at 1.42 m, a good half metre under the walker's eye. */
 export const walkSoffit = (rebase: number, height: number) =>
   Math.max(rebase + height + LIFT, rebase + LIFT + SLAB + EYE + HEAD_CLEAR);
+
+/** A mezzanine shares the surrounding hall's roof. Its own partial footprint cannot close the
+ *  space seen beyond the gallery edge. Other floors keep their own ceiling. */
+export function walkCeiling(project: ProjectDocument, floorId: string): { floor: Floor; soffit: number } | undefined {
+  const active = project.floors.find(f => f.id === floorId);
+  if (!active) return;
+  const host = active.mezzanine
+    ? project.floors
+        .filter(
+          f =>
+            !f.mezzanine &&
+            f.buildingId === active.buildingId &&
+            f.elevation < active.elevation &&
+            f.elevation + f.height > active.elevation,
+        )
+        .sort((a, b) => b.elevation - a.elevation)[0]
+    : undefined;
+  const floor = host ?? active;
+  return { floor, soffit: walkSoffit(0, floor.elevation + floor.height - active.elevation) };
+}
 
 /** Coordinates a clipper can close a ring with. Two plates drawn to the same edge arrive here
  *  differing in the fifteenth decimal, and polygon-clipping answers that by losing the ring. */
@@ -294,8 +332,15 @@ export class SceneLayer implements CustomLayerInterface {
    *  turns the general ceiling light down; a floor without any keeps the general light, or it is
    *  a dark floor with a bright lid. */
   private lampLit = false;
-  /** Per-storey ghost strength, shared out across however many levels the stack layers up. */
+  private poolLitOnly = false;
+  /** Per-storey ghost strength for the things a stack is FOR — the floor plates that carry each
+   *  storey's plan — on the storeys ABOVE the one in focus. Shared out across however many of them
+   *  the stack layers up between the eye and the focus. */
   private ghostAlpha = 0.17;
+  /** And for the storeys UNDER the one in focus, which are read through the active plate as well as
+   *  through everything above it and need the strength to survive both. Keeping the two apart is
+   *  also what lets the active plate be drawn between them — see the render-order pass. */
+  private underAlpha = 0.27;
   private activeFloor: string | null = null;
   private hovered: string | null = null;
   private rebase = 0;
@@ -305,6 +350,8 @@ export class SceneLayer implements CustomLayerInterface {
   private growthStart = 0;
   private materials = new MaterialLibrary();
   private fixtureLights?: FixtureLights;
+  private waterTime = { value: 0 };
+  private hasWater = false;
   private batch = new SurfaceBatch();
   private highlight = new THREE.Group();
   private selected: string | null = null;
@@ -435,17 +482,17 @@ export class SceneLayer implements CustomLayerInterface {
    *  only while the dusk treatment is unchanged — see the caller. */
   private relight(project: ProjectDocument, floorId: string | null, sun: Sun) {
     const air = ambient(sun, project.floors.find(f => f.id === floorId)?.light);
-    this.scene.environmentIntensity = air.environment;
+    this.scene.environmentIntensity = this.poolLitOnly ? 0 : air.environment;
     this.skyLight?.color.set(air.sky);
     this.skyLight?.groundColor.set(air.ground);
-    if (this.skyLight) this.skyLight.intensity = air.hemisphere;
+    if (this.skyLight) this.skyLight.intensity = this.poolLitOnly ? 0 : air.hemisphere;
     this.roomLight?.color.set(air.interior);
     this.roomLight?.groundColor.set(air.interiorBounce);
     if (this.roomLight) this.roomLight.intensity = air.interiorLevel * (this.walking && this.lampLit ? 0.45 : 1);
     const beam = sunlight(sun);
     if (this.sun) {
       this.sun.color.set(beam.color);
-      this.sun.intensity = beam.intensity;
+      this.sun.intensity = this.poolLitOnly ? 0 : beam.intensity;
       this.sun.position.set(...beam.position);
       this.fitShadowCamera();
     }
@@ -615,7 +662,9 @@ export class SceneLayer implements CustomLayerInterface {
     color: string,
     id: string,
     material?: SurfaceFinish,
-    ghost = false,
+    // True for the shared per-storey plate strength; a number for a surface whose own storey has
+    // asked for a different one — see ghostStrength.
+    ghost: boolean | number = false,
     // Bake contact shading into the lower part of the surface. Where a wall meets a floor there is
     // almost no sky reaching the junction, and without that darkening every wall looks like it is
     // hovering a millimetre above the slab rather than standing on it.
@@ -660,7 +709,7 @@ export class SceneLayer implements CustomLayerInterface {
     const surfaceMaterial =
       override ??
       (ghost
-        ? this.materials.ghost(color, this.ghostAlpha)
+        ? this.materials.ghost(color, typeof ghost === 'number' ? ghost : this.ghostAlpha)
         : material
           ? this.materials.get(material, color)
           : this.materials.solid(color));
@@ -669,7 +718,14 @@ export class SceneLayer implements CustomLayerInterface {
   /** A sloped area (garage ramp, loading incline): the plate's own footprint, but each vertex lifted
    *  to its elevation along the slope axis, then given thickness along -Z so the deck reads solid
    *  from below. Depth compression is applied per-vertex, exactly as for flat surfaces. */
-  private slopedSurface(o: SiteObject, slope: Slope, lift: number, thickness: number, color: string) {
+  private slopedSurface(
+    o: SiteObject,
+    slope: Slope,
+    lift: number,
+    thickness: number,
+    color: string,
+    ghost: boolean | number = false,
+  ) {
     const shape = new THREE.Shape(o.rings![0].map(p => new THREE.Vector2(...this.xy(p))));
     shape.holes = o.rings!.slice(1).map(r => new THREE.Path(r.map(p => new THREE.Vector2(...this.xy(p)))));
     const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
@@ -691,7 +747,13 @@ export class SceneLayer implements CustomLayerInterface {
       positions.setZ(i, this.present(positions.getZ(i) + slope.high + (slope.low - slope.high) * t + lift));
     }
     geometry.computeVertexNormals();
-    this.batch.add(geometry, this.materials.solid(color), o.id);
+    this.batch.add(
+      geometry,
+      ghost
+        ? this.materials.ghost(color, typeof ghost === 'number' ? ghost : this.ghostAlpha)
+        : this.materials.solid(color),
+      o.id,
+    );
   }
   /** The façade envelope for a set of levels: each level's slab, its exterior walls with their
    *  authored finish, and the glazing punched into them. Interior partitions are deliberately left
@@ -833,24 +895,29 @@ export class SceneLayer implements CustomLayerInterface {
     const outline = floorOutline(project, piece.floorId ?? floorId);
     if (!outline.length) return null;
     const ring = openRing(piece.ring);
-    if (ring.length !== 4) return null;
-    // A wall piece is a rectangle: one pair of sides is its length, the other its thickness.
-    const e1 = distance(ring[0], ring[1]),
-      e2 = distance(ring[1], ring[2]);
-    const [along, thickness] = e1 >= e2 ? [[ring[0], ring[1]] as const, e2] : [[ring[1], ring[2]] as const, e1];
-    const len = distance(along[0], along[1]);
-    if (len < 0.05 || thickness < 0.03) return null;
-    const angle = (Math.atan2(along[1][1] - along[0][1], along[1][0] - along[0][0]) * 180) / Math.PI;
-    const nx = -(along[1][1] - along[0][1]) / len,
-      ny = (along[1][0] - along[0][0]) / len;
-    const mid: Point = [ring.reduce((t, q) => t + q[0], 0) / 4, ring.reduce((t, q) => t + q[1], 0) / 4];
-    const skin = Math.min(0.05, thickness / 3);
-    for (const sign of [1, -1]) {
-      const probe: Point = [mid[0] + nx * sign * (thickness / 2 + 0.3), mid[1] + ny * sign * (thickness / 2 + 0.3)];
+    if (ring.length < 3) return null;
+    const wall = project.barriers.find(b => b.id === piece.id);
+    if (!wall || wall.thickness < 0.03) return null;
+    const [start, end] = barrierEnds(project, wall);
+    const length = distance(start, end),
+      ux = (end[0] - start[0]) / length,
+      uy = (end[1] - start[1]) / length;
+    // Joined pieces are trapezoids at corners. Find the actual long faces parallel to the wall,
+    // rather than treating a mitred end as another long side or inferring thickness from it.
+    for (let i = 0; i < ring.length; i++) {
+      const a = ring[i],
+        b = ring[(i + 1) % ring.length],
+        len = distance(a, b);
+      if (len < 0.05 || Math.abs((b[0] - a[0]) * uy - (b[1] - a[1]) * ux) > 1e-6 * len) continue;
+      const nx = (b[1] - a[1]) / len,
+        ny = -(b[0] - a[0]) / len;
+      const mid: Point = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      const probe: Point = [mid[0] + nx * 0.3, mid[1] + ny * 0.3];
       if (!outline.some(r => pointInRing(probe, r))) continue;
-      // Sitting just proud of the wall's own face, or the two fight for the same pixels.
-      const out = thickness / 2 - skin / 2 + 0.003;
-      return closeRing(rectangle([mid[0] + nx * sign * out, mid[1] + ny * sign * out], len, skin, angle));
+      const skin = Math.min(0.05, wall.thickness / 3),
+        out = 0.003 - skin / 2;
+      const angle = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
+      return closeRing(rectangle([mid[0] + nx * out, mid[1] + ny * out], len, skin, angle));
     }
     return null;
   }
@@ -887,7 +954,12 @@ export class SceneLayer implements CustomLayerInterface {
       // it and the ramp was invisible from the deck it leaves. Where ramp and deck meet they are
       // level with each other, so the ramp fills exactly what it cuts. Floors only: nothing drives
       // up out of the storey overhead into the ceiling.
-      if (through === 'floor') voids = [...voids, ...rampVoids(project, floorId)];
+      if (through === 'floor')
+        voids = [
+          ...voids,
+          ...rampVoids(project, floorId),
+          ...project.objects.filter(o => o.floorId === floorId && o.water && o.rings?.length).map(o => o.rings![0]),
+        ];
       this.voidCache.set(key, voids);
     }
     if (!voids.length || !rings.length) return rings;
@@ -1114,7 +1186,14 @@ export class SceneLayer implements CustomLayerInterface {
         // box wide, not a lane and a half of it hanging out over the floor beside the core, and as
         // deep as the run the treads did not need, so you turn on floor rather than on air.
         const depth = Math.max(going * 1.7, run.length - steps * going);
-        this.surface([rectangle(at(-half + depth / 2), o.width, depth, rotation)], from - 0.05, 0.11, color, o.id);
+        this.surface(
+          [rectangle(at(-half + depth / 2), o.width, depth, rotation)],
+          from - 0.05,
+          0.11,
+          color,
+          o.id,
+          o.material,
+        );
       }
       for (let i = 0; i < steps; i++) {
         this.surface(
@@ -1123,6 +1202,7 @@ export class SceneLayer implements CustomLayerInterface {
           climb / steps + 0.04,
           color,
           o.id,
+          o.material,
         );
       }
     }
@@ -1155,7 +1235,7 @@ export class SceneLayer implements CustomLayerInterface {
     const top = rel(levels[levels.length - 1]) + (levels[levels.length - 1].height ?? o.height);
     // Split at the level in focus: solid to the head of this storey, ghost for whatever is above it.
     const cut = active ? Math.min(top, z + (active.elevation - own) + wallBase(o.floorId) + (active.height ?? 3)) : top;
-    const shell = (from: number, to: number, ghost: boolean) => {
+    const shell = (from: number, to: number, ghost: boolean | number) => {
       if (to - from < 0.05) return;
       const t = 0.09;
       for (const [w, d, dx, dy] of [
@@ -1177,7 +1257,11 @@ export class SceneLayer implements CustomLayerInterface {
       }
     };
     shell(bottom, cut, false);
-    shell(cut, top, true);
+    // Not at the plates' strength. A shaft is one thin column, not a layer over the plan, so it pays
+    // none of the veil the stacked storeys are sharing out — and on a tall building that share falls
+    // low enough to erase it, which takes with it the one thing in the stack that says how the
+    // storeys are joined.
+    shell(cut, top, Math.max(this.ghostAlpha, SHAFT_GHOST));
     // The landing doors, on the storey in focus, facing the way the lift is turned. Two leaves that
     // part: closed unless the feed says this car is standing here with its doors open.
     const reading = this.statuses?.get(o.feedId ?? '');
@@ -1331,6 +1415,9 @@ export class SceneLayer implements CustomLayerInterface {
     this.walking = walk;
     this.lampLit =
       !!walk && !!floorId && project.objects.some(o => o.floorId === floorId && o.kind === 'light' && !!o.light);
+    this.poolLitOnly =
+      project.floors.find(f => f.id === floorId)?.light?.level === 0 &&
+      project.objects.some(o => o.floorId === floorId && !!o.water);
     this.activeFloor = floorId;
     this.selected = selected;
     this.sunState = sun;
@@ -1432,8 +1519,8 @@ export class SceneLayer implements CustomLayerInterface {
     if (this.renderer) this.renderer.toneMappingExposure = walk ? 0.68 : 0.9;
     this.scene.environment = this.environmentMap(evening);
     this.scene.environmentRotation.set(Math.PI / 2, 0, 0);
-    this.scene.environmentIntensity = air.environment;
-    const sky = new THREE.HemisphereLight(air.sky, air.ground, air.hemisphere);
+    this.scene.environmentIntensity = this.poolLitOnly ? 0 : air.environment;
+    const sky = new THREE.HemisphereLight(air.sky, air.ground, this.poolLitOnly ? 0 : air.hemisphere);
     sky.position.set(0, 0, 1);
     sky.layers.enableAll();
     this.scene.add(sky);
@@ -1455,11 +1542,14 @@ export class SceneLayer implements CustomLayerInterface {
     this.scene.add(room);
     this.roomLight = room;
     const beam = sunlight(sun);
-    const light = new THREE.DirectionalLight(beam.color, beam.intensity);
+    const light = new THREE.DirectionalLight(beam.color, this.poolLitOnly ? 0 : beam.intensity);
     light.position.set(...beam.position);
     // A dim, cool fill from the opposite quarter. Real interiors and streets bounce light back into
     // the shadow side; without it every unlit façade collapses to the same dead tone.
-    const fill = new THREE.DirectionalLight(evening ? '#7f90bd' : '#cfe0f2', evening ? 0.16 : 0.18);
+    const fill = new THREE.DirectionalLight(
+      evening ? '#7f90bd' : '#cfe0f2',
+      this.poolLitOnly ? 0 : evening ? 0.16 : 0.18,
+    );
     fill.layers.enableAll();
     fill.position.set(evening ? -80 : 85, evening ? 60 : 55, 45);
     this.scene.add(fill);
@@ -1481,9 +1571,31 @@ export class SceneLayer implements CustomLayerInterface {
     // to be see-through — on a ground floor or a single-storey site it stays solid.
     const levelsBelowActive =
       !!activeF && view.levels.some(f => f.buildingId === activeF.buildingId && f.elevation < activeF.elevation);
-    // Ghosts do not sort, so each layer multiplies into the next: the strength that lets a house's
-    // two storeys read through one another turns a tower into a solid block. Share one budget out.
-    this.ghostAlpha = Math.max(0.17, Math.min(0.38, 1 / Math.max(1, view.levels.length)));
+    // Ghosts do not sort and do not cancel: each layer multiplies into the next, so the strength
+    // that lets a house's two storeys read through one another turns a tower into a solid block.
+    //
+    // The share used to be 1/levels clamped into [0.17, 0.38], which stops sharing at six levels and
+    // hands seventeen the same 0.17 it hands six — measured on Stockmann, every one of the seventeen
+    // drew at the floor of the clamp. n layers at a each pass (1-a)^n of whatever is behind them, so
+    // the only arithmetic that means anything on a tall building is to fix what must come through
+    // and solve for a. And to count each side of the storey in focus separately, because the two
+    // sides are asked for different things: what is ABOVE stands between the eye and the focus and
+    // has to leave most of it, while what is BELOW is already behind the focus's own half-clear
+    // plate and needs the strength to show through it. One number for both is why picking a low
+    // floor of a tall building used to bury it under everything it was picked out of.
+    const share = (transmit: number, levels: number) =>
+      Math.max(0.035, Math.min(0.38, 1 - transmit ** (1 / Math.max(1, levels))));
+    this.ghostAlpha = share(FOCUS_SEEN, view.levels.filter(f => f.elevation > (activeF?.elevation ?? 0)).length);
+    this.underAlpha = share(UNDER_SEEN, view.levels.filter(f => f.elevation < (activeF?.elevation ?? 0)).length);
+    /** How strongly a storey that is not the one in focus draws — and, since a batch is cut by
+     *  material, which side of the active plate its geometry ends up being drawn on. `kase` is the
+     *  envelope and the partitions, which are looked through rather than at. */
+    const ghostStrength = (fid: string | null | undefined, kase = false) =>
+      kase
+        ? CASE_ALPHA
+        : activeF && (floors.get(fid ?? '')?.elevation ?? 0) < activeF.elevation
+          ? this.underAlpha
+          : this.ghostAlpha;
     // An entresol is a partial level — a gallery ringing a void — so on its own it is a thin loop
     // floating over nothing. The storey it overlooks is what gives it something to be above, and in
     // 2D the plan has always drawn that; 3D showed the loop alone. Carry the level below with it.
@@ -1533,8 +1645,12 @@ export class SceneLayer implements CustomLayerInterface {
             .sort((a, b) => b.elevation - a.elevation)[0]
         : undefined;
     // Every storey this view actually builds below the one in focus.
+    const spanningObjects = walk ? tallSpaceContext(project, floorId) : [];
+    const contextFloors = new Set(spanningObjects.map(o => o.floorId).filter(Boolean) as string[]);
     const drawnLevels = new Set<string>(
-      [...shellBelow, ...lower.keys(), under?.id, belowShell?.id, floorId].filter(Boolean) as string[],
+      [...shellBelow, ...lower.keys(), ...contextFloors, under?.id, belowShell?.id, floorId].filter(
+        Boolean,
+      ) as string[],
     );
     /** Does a hole in this level's plate open onto a storey that is drawn? A stairwell punched
      *  through a floor with nothing under it is not a stairwell: on the ground floor all twelve of
@@ -1563,6 +1679,7 @@ export class SceneLayer implements CustomLayerInterface {
               ...(index.objects.get(null) ?? []),
               ...(under ? (index.objects.get(under.id) ?? []) : []),
               ...over.flatMap(f => index.objects.get(f.id) ?? []),
+              ...spanningObjects,
               ...(floorId ? (index.objects.get(floorId) ?? []) : []),
               // A stair that climbs to this level belongs on it, even though it is filed under the
               // one it starts from. Without this the flight you are standing at the top of is not
@@ -1615,7 +1732,19 @@ export class SceneLayer implements CustomLayerInterface {
       // storey, it is between them — exempt, the way an exterior wall already is.
       const spanning = isVertical(o.kind);
       if (o.floorId && outlineOnly.has(o.floorId) && !spanning) continue;
-      if (o.floorId && shellBelow.has(o.floorId) && !spanning) continue;
+      // A storey under the one in focus keeps its PLAN and loses its fit-out. It used to lose both:
+      // the shell replaced every level below with one union slab in one flat grey, which on
+      // Stockmann turned ten storeys of plan into ten identical rectangles — and a mode called "All
+      // floors" that shows none of them is the whole complaint. The plates are what a doll's house
+      // is for, and they are also the cheap half: a retail storey is a plate and a room, and even
+      // an office fit-out is a hundred flat shapes against its hundreds of extruded partitions.
+      // Partitions and fittings stay dropped, because looking down through a stack a partition is a
+      // smear and the plate is the thing that says what the storey is.
+      // Not on a stack deep enough to be compressed: structureOverview exists precisely so that a
+      // hundred-metre shaft does not build every bay on every deck, and there the shell slab goes on
+      // standing in for the plans.
+      const planPlate = !structureOverview && (o.kind === 'room' || o.kind === 'zone' || !!o.slope);
+      if (o.floorId && shellBelow.has(o.floorId) && !spanning && !planPlate) continue;
       if (structureOverview && o.floorId !== floorId && o.kind !== 'zone') continue;
       const z = stack ? (floors.get(o.floorId ?? '')?.elevation ?? 0) : relative(o.floorId);
       const indoorFinish = o.floorId !== null && (o.kind === 'room' || o.kind === 'zone');
@@ -1626,19 +1755,40 @@ export class SceneLayer implements CustomLayerInterface {
       // beneath it, so a seventeen-level building rendered as a single shelf in a closed brick box
       // and "All floors" showed exactly one. Whatever is below has to be see-through as well, or
       // there is nothing to see through to.
+      //
+      // And a ghost keeps the colour it was authored in. `ghost` darkens rather than tints precisely
+      // so that it can — the comment on it says as much — but every ghosted plate was arriving here
+      // already repainted the one neutral the carried levels under a cutaway want, so seventeen
+      // storeys came out the same grey and the stack could not tell you that any of them differed.
       const activeLevel = floorId !== null && o.floorId === floorId;
       const ghosted = !!(stack && floorId !== null && o.floorId && o.floorId !== floorId);
+      // A plate is the plan; anything standing up on a storey you are not looking at is in the way.
+      const ghostFill = ghosted && ghostStrength(o.floorId, !(o.kind === 'room' || o.kind === 'zone'));
       // Looking down a stack, the active storey's plate is a lid over everything beneath it: pick the
       // top floor and the ones below vanish, however faithfully they are drawn. Only its own plate
       // has to give — its walls stay solid, so the level still reads as the one in focus.
       const lidsOverBelow = stack && activeLevel && levelsBelowActive;
       const color =
         this.mapStyle.objectColor?.(o) ??
-        (activeLevel
+        (activeLevel || ghosted
           ? (o.color ?? COLORS[o.kind] ?? '#e6e8e1')
           : indoorFinish && !o.material
-            ? '#e5e4df'
+            ? // A carried level under a cutaway is background: one neutral, so it reads as context
+              // for the storey in focus rather than competing with it.
+              '#e5e4df'
             : (o.color ?? COLORS[o.kind] ?? '#e6e8e1'));
+      if (o.water && o.rings?.length) {
+        if (!ghosted) {
+          this.scene.add(makePool(o, pt => this.xy(pt), this.present(z + LIFT + SLAB), this.materials, this.waterTime));
+          this.hasWater = true;
+        }
+        continue;
+      }
+      if (o.slide) {
+        if (!ghosted)
+          this.scene.add(makeWaterSlide(o, pt => this.xy(pt), this.present(z + LIFT + SLAB), this.materials));
+        continue;
+      }
       if (o.kind === 'fixture' || o.kind === 'landscape') {
         if (ghosted) continue;
         const fixture = makeFixture(
@@ -1663,7 +1813,12 @@ export class SceneLayer implements CustomLayerInterface {
       if (o.rings && o.slope) {
         // A sloped deck carries its own authored elevations, so it ignores the floor's plate height
         // and has to be brought into the scene's frame by hand — see sceneGround.
-        if (!ghosted) this.slopedSurface(o, o.slope, LIFT + SLAB + ground, SLAB, color);
+        //
+        // Ghosted too, in the stack. A ramp is a storey's plan as much as its deck is, and skipping
+        // it left the driveway out of every level but the one in focus — the shell slab used to
+        // carry the ramp's footprint flat, and now that the storey draws its own plates it has to
+        // draw its own slopes with them or the garage loses its way in and out.
+        this.slopedSurface(o, o.slope, LIFT + SLAB + ground, SLAB, color, ghostFill);
         continue;
       }
       if (o.rings) {
@@ -1693,7 +1848,7 @@ export class SceneLayer implements CustomLayerInterface {
           // the levels below — it is subtle enough not to compete with the plan, and without it a
           // whole storey reads as paper.
           ghosted ? undefined : (o.material ?? (indoorFinish ? 'plaster' : undefined)),
-          ghosted,
+          ghostFill,
           false,
           lidsOverBelow && indoorFinish
             ? this.materials.plate(color)
@@ -1718,7 +1873,7 @@ export class SceneLayer implements CustomLayerInterface {
           color,
           o.id,
           ghosted ? undefined : o.material,
-          ghosted,
+          ghostFill,
           false,
           undefined,
           o.floorId === null,
@@ -1728,13 +1883,18 @@ export class SceneLayer implements CustomLayerInterface {
     // One slab per shell storey — the ceiling you look down onto — merged from its top-level plates
     // so a wing or a ramp is included and the interior divisions are not. One surface, one union,
     // per storey: the whole point of the shell is that it costs a fraction of the real floor.
-    for (const fid of [...shellBelow, ...(belowShell ? [belowShell.id] : [])]) {
+    //
+    // The cutaway's one shelled storey, and a compressed stack's. An ordinary stack no longer shells
+    // the levels below its focus: they draw their own plates and their own ramps now, so the union
+    // would be the same ground covered a second time — in one flat grey over the colours that had
+    // just been recovered.
+    for (const fid of [...(structureOverview ? shellBelow : []), ...(belowShell ? [belowShell.id] : [])]) {
       // Standing above ground you cannot see through the earth, and the object and wall loops both
       // say so — but the shell did not, so ghost slabs for the basements hung under the streets.
       if (!buried && belowGrade(fid)) continue;
       const z = stack ? (floors.get(fid)?.elevation ?? 0) : relative(fid);
       for (const pg of shellPlate(project, fid, index.primary, { lowest: buried ? -Infinity : -0.01 }))
-        this.surface(pg, z + LIFT + SLAB, SLAB, '#e5e4df', `shell:${fid}`, undefined, stack);
+        this.surface(pg, z + LIFT + SLAB, SLAB, '#e5e4df', `shell:${fid}`, undefined, stack && ghostStrength(fid));
     }
     // Walk mode gets a lid. An open-topped floor plate is not a room: the light has nothing to come
     // off, the floor runs away to the horizon and a shop floor reads as grey tarmac. The ceiling is
@@ -1750,26 +1910,39 @@ export class SceneLayer implements CustomLayerInterface {
     // and is also true of every fit-out inside a bigger space.
     if (walk && floorId && activeF) {
       // The underside of the storey above, and never below the walker's own eye — see walkSoffit.
-      const soffit = walkSoffit(this.rebase, activeF.height);
+      const { floor: ceilingFloor, soffit } = walkCeiling(project, floorId)!;
       // Lit by how much the floor's lamps are ON, not by how hard they are working. The room light
       // dims as daylight comes in, and tying the soffit to that made the ceiling go dark at noon —
       // the one time of day a room is unmistakably bright. A ceiling is the source, so it is the
       // brightest plane in the room or it is not a ceiling.
       const lit = this.materials.luminous('#f0f1ee', air.interior, 0.8 * (activeF.light?.level ?? 1), 'ceiling');
-      for (const o of index.objects.get(floorId) ?? []) {
+      const tiled = this.materials.luminous('#f2f3ef', air.interior, 0.7 * (activeF.light?.level ?? 1), 'tile');
+      const tallRoofs = spanningObjects.filter(
+        o => o.ceilingHeight && o.rings?.length && (floors.get(o.floorId!)?.elevation ?? 0) < activeF.elevation,
+      );
+      for (const o of [...(index.objects.get(ceilingFloor.id) ?? []), ...tallRoofs]) {
         if (!o.rings?.length || (o.kind !== 'room' && o.kind !== 'zone')) continue;
+        if (o.water || o.slope) continue;
+        if (!o.ceilingHeight && tallRoofs.some(hall => pointInRing(o.position, hall.rings![0]))) continue;
+        const roof =
+          o.ceilingHeight !== undefined
+            ? walkSoffit(
+                0,
+                (floors.get(o.floorId!)?.elevation ?? activeF.elevation) + o.ceilingHeight - activeF.elevation,
+              )
+            : soffit;
         this.surface(
           // The lid is open where a flight sets OFF through it, which is not where the floor is open:
           // the bottom of a run departs without arriving, and a run's top arrives without departing.
-          this.withVoids(project, o.rings, floorId, index.primary, 'ceiling'),
-          soffit - nestingLift(objectArea(o)),
+          this.withVoids(project, o.rings, ceilingFloor.id, index.primary, 'ceiling'),
+          roof - nestingLift(objectArea(o)),
           SLAB,
           '#f0f1ee',
           `ceiling:${o.id}`,
           undefined,
           false,
           false,
-          lit,
+          o.material === 'tile' ? tiled : lit,
         );
       }
       // The wells the stairs and escalators climb through are punched out of the lid, and only this
@@ -1781,13 +1954,16 @@ export class SceneLayer implements CustomLayerInterface {
       // next level up: a mezzanine hanging inside this storey is drawn in the room with you, and
       // taking its lid for the well head would have put the cap below the ceiling it is capping.
       const overhead = project.floors
-        .filter(f => f.buildingId === activeF.buildingId && f.elevation >= activeF.elevation + activeF.height - 0.01)
+        .filter(
+          f =>
+            f.buildingId === activeF.buildingId && f.elevation >= ceilingFloor.elevation + ceilingFloor.height - 0.01,
+        )
         .sort((a, b) => a.elevation - b.elevation)[0];
       const wellHead = Math.max(
         soffit + SLAB,
         overhead ? walkSoffit(relative(overhead.id), overhead.height) : soffit + activeF.height,
       );
-      const wells = shaftVoids(project, floorId, index.primary, {
+      const wells = shaftVoids(project, ceilingFloor.id, index.primary, {
         through: 'ceiling',
         lowest: buried ? -Infinity : -0.01,
       });
@@ -1799,6 +1975,15 @@ export class SceneLayer implements CustomLayerInterface {
       ...wallPieces(project, floorId, stack),
       ...(under ? wallPieces(project, under.id, false) : []),
       ...over.flatMap(f => wallPieces(project, f.id, false)),
+      ...[...contextFloors]
+        .filter(id => id !== under?.id && !over.some(f => f.id === id))
+        .flatMap(id =>
+          wallPieces(project, id, false).filter(piece =>
+            spanningObjects.some(
+              o => o.floorId === id && o.rings?.length && piece.ring.some(pt => pointInRing(pt, o.rings![0])),
+            ),
+          ),
+        ),
     ];
     for (const p of allPieces) {
       if (buried && (p.floorId === null || (activeF && floors.get(p.floorId)?.buildingId !== activeF.buildingId)))
@@ -1812,7 +1997,14 @@ export class SceneLayer implements CustomLayerInterface {
       // storeys *below*, which used to stay solid. "Cutaway" has to actually cut something away: with
       // eight solid storeys of brick under the selected floor, a seventeen-level building showed one
       // plate inside a closed box, and the mode that promises all floors delivered none of them.
-      const wallGhost = !!(stack && floorId !== null && p.floorId && p.floorId !== floorId);
+      //
+      // Translucent was not nearly enough on its own. A wall is an extruded solid, so a sight line
+      // crosses two of its faces, and the façade band of seventeen storeys stands between the camera
+      // and every plate in the building — at the plates' own strength that measured out as a closed
+      // brick box with a plate floating in it. The envelope gets the case budget instead: strong
+      // enough to say where the building is and how it is banded, weak enough to see the floors.
+      const wallGhost =
+        stack && floorId !== null && !!p.floorId && p.floorId !== floorId && ghostStrength(p.floorId, true);
       this.surface(
         [p.ring],
         p.base + wallBase(p.floorId) + (stack ? 0 : relative(p.floorId)),
@@ -1951,12 +2143,42 @@ export class SceneLayer implements CustomLayerInterface {
       this.cage.setBearing(this.map?.getBearing() ?? 0);
       this.scene.add(this.cage);
     }
-    if (walk && floorId) {
-      const fixtures = (index.objects.get(floorId) ?? []).filter(o => o.kind === 'light' && o.light);
+    const fixtureBase = this.present((stack ? (activeF?.elevation ?? 0) : relative(floorId)) + LIFT + SLAB);
+    if ((walk || this.hasWater) && floorId) {
+      const fixtures = [...(index.objects.get(floorId) ?? []), ...spanningObjects]
+        .filter(o => o.kind === 'light' && o.light && (walk || (o.light.mountHeight ?? 0) < 0))
+        .map(o => (o.floorId === floorId ? o : { ...o, height: o.height + relative(o.floorId) }));
       if (fixtures.length)
-        this.fixtureLights = new FixtureLights(this.scene, fixtures, pt => this.xy(pt), LIFT + SLAB, this.materials);
+        this.fixtureLights = new FixtureLights(this.scene, fixtures, pt => this.xy(pt), fixtureBase, this.materials);
     }
     this.batch.finish(this.scene);
+    if (this.hasWater && floorId)
+      applyPoolCaustics(this.scene, project, floorId, point => this.xy(point), fixtureBase, this.waterTime);
+    // Sort the stack around the storey in focus. This is the thing that was actually hiding it.
+    //
+    // A batch merges everything sharing a material into one mesh at the scene origin, so three.js's
+    // painter sort — which orders transparent objects by their origin's view depth — sees every mesh
+    // at the same depth and falls through to the order they were created in. The active storey's
+    // plate is transparent AND keeps depthWrite on (it has to occlude its own walls' hidden faces),
+    // and it happened to be created before the ghost meshes. It therefore stamped the depth buffer
+    // over its whole footprint before a single ghost was drawn, and every storey underneath was
+    // depth-rejected: sixteen plans, built, blended with nothing, thrown away. "All floors" showed
+    // one floor because the other sixteen were behind a depth test they could not pass.
+    //
+    // Nothing here can sort per fragment — a merged mesh is one draw — but a stack does not need it
+    // to: the one plane everything is either above or below is the active plate. So the ghosts under
+    // it draw first, the plate over them, and the ghosts above it last, which is back-to-front for
+    // the only camera this view has. Ghosts write no depth, so ordering them occludes nothing; it
+    // only decides what blends over what. A mesh that straddles the plate — a shaft running the
+    // height of the building — goes under it, where it belongs for most of its length.
+    if (stack && activeF)
+      for (const mesh of this.scene.children)
+        if (mesh instanceof THREE.Mesh) {
+          const material = Array.isArray(mesh.material) ? mesh.material[0] : mesh.material;
+          if (!material.transparent || material.depthWrite) continue;
+          mesh.geometry.computeBoundingBox();
+          mesh.renderOrder = (mesh.geometry.boundingBox?.min.z ?? 0) >= this.present(activeF.elevation) ? 1 : -1;
+        }
     if (!buried) {
       // Receive shadows on the actual map without replacing its roads, labels or ground colour.
       const bounds = new THREE.Box3().setFromObject(this.scene);
@@ -2265,6 +2487,10 @@ export class SceneLayer implements CustomLayerInterface {
     // the map has drawn is behind us by construction, which is what being the last layer means.
     gl.clear(gl.DEPTH_BUFFER_BIT);
     const now = performance.now();
+    if (this.hasWater) {
+      this.waterTime.value = now / 1000;
+      this.paintSoon();
+    }
     // Capped so a backgrounded tab does not resume by teleporting every car a hundred metres.
     const elapsed = Math.min(0.1, this.lastFrame ? (now - this.lastFrame) / 1000 : 0);
     this.lastFrame = now;
@@ -2421,6 +2647,7 @@ export class SceneLayer implements CustomLayerInterface {
     return raycaster.intersectObjects(this.pickables, false).map(hitEntity).find(Boolean) ?? null;
   }
   private disposeScene() {
+    this.hasWater = false;
     this.fixtureLights = undefined;
     this.cage.dispose();
     this.markerCache.clear();

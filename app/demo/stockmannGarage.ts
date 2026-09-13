@@ -184,16 +184,6 @@ export function stockmannGarage(p: ProjectDocument): void {
     // The deck plate — the outline the excavation is unioned from.
     const plate = area(p, 'zone', `Parking deck ${deck.code}`, deck.ring, deck.id, CONCRETE);
     plate.material = 'paving';
-    // A low curb around the plate: enough to read as structure without walling off the view down.
-    const curbFrom = p.barriers.length;
-    const closed = closeRing(deck.ring);
-    for (let k = 1; k < closed.length; k++) addBarrier(p, closed[k - 1], closed[k], deck.id, 'wall');
-    for (const b of p.barriers.slice(curbFrom)) {
-      b.name = 'Deck edge';
-      b.thickness = 0.4;
-      b.height = 1;
-      b.color = '#6a7079';
-    }
     // Bays fill the plan wherever they fit, so each deck's layout follows its own (smaller) outline.
     const fits = (bay: Point[]) => bay.every(pt => pointInRing(pt, plate.rings![0]));
     let bayNumber = 0;
@@ -352,6 +342,43 @@ export function stockmannGarage(p: ProjectDocument): void {
   // A flat service link east to the existing Keskuskatu loading dock.
   const link = area(p, 'zone', 'Service link · Keskuskatu', strip(at(tc, 24, 0), EAST, 40, 3.2), top.id, LANE);
   link.symbol = 'service';
+
+  // Underground retaining walls reach the ceiling. The old one-metre curbs exposed the sky in
+  // POV. Cut actual ramp/service mouths out of the perimeter before emitting the full-height walls.
+  for (const deck of decks) {
+    const cuts = p.objects
+      .filter(o => o.floorId === deck.id && (o.slope || o.id === link.id))
+      .flatMap(o => o.rings?.slice(0, 1) ?? []);
+    const closed = closeRing(deck.ring);
+    for (let i = 1; i < closed.length; i++) {
+      const a = closed[i - 1],
+        b = closed[i],
+        dx = b[0] - a[0],
+        dy = b[1] - a[1];
+      const at = (t: number): Point => [a[0] + dx * t, a[1] + dy * t];
+      const stops = [0, 1];
+      for (const ring of cuts)
+        for (let k = 1; k < ring.length; k++) {
+          const c = ring[k - 1],
+            d = ring[k],
+            ex = d[0] - c[0],
+            ey = d[1] - c[1];
+          const determinant = dx * ey - dy * ex;
+          if (Math.abs(determinant) < 1e-9) continue;
+          const t = ((c[0] - a[0]) * ey - (c[1] - a[1]) * ex) / determinant;
+          const u = ((c[0] - a[0]) * dy - (c[1] - a[1]) * dx) / determinant;
+          if (t > 0 && t < 1 && u >= 0 && u <= 1) stops.push(t);
+        }
+      stops.sort((a, b) => a - b);
+      for (let k = 1; k < stops.length; k++) {
+        const from = stops[k - 1],
+          to = stops[k];
+        if ((to - from) * Math.hypot(dx, dy) < 0.01 || cuts.some(r => pointInRing(at((from + to) / 2), r))) continue;
+        const wall = addBarrier(p, at(from), at(to), deck.id, 'wall')!;
+        Object.assign(wall, { name: 'Deck edge', thickness: 0.4, height: 3.22, color: '#6a7079' });
+      }
+    }
+  }
 
   garageNav(p, decks);
   // Down the ramp: a gate edge from the street into the top deck. A 'door' edge is what the model

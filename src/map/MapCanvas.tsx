@@ -62,6 +62,7 @@ import {
 import { aimCenter, floorAim, JourneyPlayer } from './journey';
 import type { Route } from '../model/navigation';
 import { LIFT, SLAB } from './levels';
+import { floorDropAt } from './walkSurfaces';
 import type { SceneLayer } from './SceneLayer';
 import {
   DEFAULT_WALK_FOV,
@@ -139,6 +140,16 @@ export interface MapCanvasProps {
   // Method syntax keeps a host handler with the pre-'node' union assignable while A-workstreams land.
   onSelect: (id: string) => void;
   onHoverObject?: (id: string | null) => void;
+  /** Resolve a geometry drag through the same snapping and constraints used on release. */
+  onVertexPreview?: (
+    kind: 'junction' | 'barrier' | 'ring',
+    id: string,
+    point: Point,
+    ring?: number,
+    vertex?: number,
+    free?: boolean,
+  ) => Point;
+  snapping?: boolean;
   onVertexMove(
     kind: 'junction' | 'ring' | 'object' | 'barrier' | 'node' | 'opening' | 'rotate' | 'coverage',
     id: string,
@@ -1646,7 +1657,15 @@ export function MapCanvas(props: MapCanvasProps) {
             // What stands on the floor is as solid as what encloses it: a parked car, a column,
             // a desk. Anything lower than a step is walked over; a rug is a fixture too.
             ...props.project.objects
-              .filter(o => o.floorId === props.floorId && o.kind === 'fixture' && o.height >= 0.3)
+              .filter(
+                o =>
+                  o.floorId === props.floorId &&
+                  o.kind === 'fixture' &&
+                  o.height >= 0.3 &&
+                  (o.baseHeight ?? 0) < EYE &&
+                  !o.slide &&
+                  o.model !== 'vent',
+              )
               .map(o => rectangle(o.position, o.width, o.depth, o.rotation)),
           ]
         : [],
@@ -1818,6 +1837,7 @@ export function MapCanvas(props: MapCanvasProps) {
         const floor = down ? target.down : target.up;
         if (floor) latest.current.onRequestFloor?.(floor.id);
       },
+      onDrop: floorId => latest.current.onRequestFloor?.(floorId),
       onExit: () => latest.current.onWalkExit?.(),
       onSound: () => {
         sound.setMuted(!sound.isMuted);
@@ -1868,7 +1888,12 @@ export function MapCanvas(props: MapCanvasProps) {
   useEffect(() => {
     // Walk mode draws the active floor on the map's own ground plane (SceneLayer rebases it), so the
     // eye is the same height above it on every storey — only the walls change.
-    walker.current?.setTerrain({ walls: walkWalls, eye: EYE + LIFT + SLAB });
+    walker.current?.setTerrain({
+      walls: walkWalls,
+      eye: EYE + LIFT + SLAB,
+      floorId: props.floorId,
+      dropAt: at => floorDropAt(props.project, props.floorId, at),
+    });
   }, [walkWalls]);
   // Journey floor barrier: resolves once the app shows the target floor AND the view has rebuilt —
   // in 3D when the SceneLayer revision advances past the value captured HERE, before React flushes
@@ -2138,17 +2163,30 @@ export function MapCanvas(props: MapCanvasProps) {
     const target = event.currentTarget;
     // A spread handle keeps its screen offset while dragging, so grabbing it does not make
     // the actual endpoint jump out to the handle's display position.
-    const screenDx = Number(target.dataset.screenDx ?? 0),
-      screenDy = Number(target.dataset.screenDy ?? 0);
+    const bounds = target.getBoundingClientRect();
+    const screenDx = Number(target.dataset.screenDx ?? 0) + event.clientX - bounds.left - bounds.width / 2,
+      screenDy = Number(target.dataset.screenDy ?? 0) + event.clientY - bounds.top - bounds.height / 2;
+    const oldWorld = [target.dataset.wx, target.dataset.wy];
     const origin = { x: event.clientX, y: event.clientY };
     let moved = false;
     // Live preview: temporary lines track the cursor through the lightweight draft source, so the
     // full plan only rebuilds once on release.
-    const preview = (clientX: number, clientY: number) => {
+    const preview = (clientX: number, clientY: number, free = false) => {
       const rect = m.getContainer().getBoundingClientRect();
       const ll = m.unproject([clientX - rect.left - screenDx, clientY - rect.top - screenDy]);
-      const local = toLocal([ll.lng, ll.lat], latest.current.project.origin);
       const p = latest.current;
+      const raw = toLocal([ll.lng, ll.lat], p.project.origin);
+      const local =
+        kind === 'junction' || kind === 'barrier' || kind === 'ring'
+          ? (p.onVertexPreview?.(kind, id, raw, ring, vertex, free) ?? raw)
+          : p.snapping && !free && (kind === 'object' || kind === 'node')
+            ? ([Math.round(raw[0] * 2) / 2, Math.round(raw[1] * 2) / 2] as Point)
+            : raw;
+      const at = m.project(toLngLat(local, p.project.origin));
+      target.dataset.wx = String(local[0]);
+      target.dataset.wy = String(local[1]);
+      target.style.left = `${at.x + Number(target.dataset.screenDx ?? 0)}px`;
+      target.style.top = `${at.y + Number(target.dataset.screenDy ?? 0)}px`;
       const lines: Point[][] = [];
       if (kind === 'object') {
         const o = p.project.objects.find(x => x.id === id);
@@ -2290,16 +2328,15 @@ export function MapCanvas(props: MapCanvasProps) {
     const move = (e: PointerEvent) => {
       moved = Math.hypot(e.clientX - origin.x, e.clientY - origin.y) > 3;
       if (moved) {
-        const rect = m.getContainer().getBoundingClientRect();
-        target.style.left = `${e.clientX - rect.left}px`;
-        target.style.top = `${e.clientY - rect.top}px`;
-        preview(e.clientX, e.clientY);
+        preview(e.clientX, e.clientY, e.shiftKey);
       }
     };
     const up = (e: PointerEvent) => {
       window.removeEventListener('pointermove', move);
       window.removeEventListener('pointerup', up);
       m.dragPan.enable();
+      target.dataset.wx = oldWorld[0] ?? '';
+      target.dataset.wy = oldWorld[1] ?? '';
       syncDraft();
       if (moved) {
         suppressClick.current = true;

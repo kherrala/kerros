@@ -42,6 +42,17 @@ describe('what a point on a floor sounds like', () => {
     expect(AMBIENCES.map(a => a.id).sort()).toEqual([...AMBIENCE_PRESETS].sort());
   });
 
+  it('preserves bath music and its level through a document round trip', () => {
+    const musical = {
+      ...project,
+      floors: project.floors.map(f =>
+        f.id === floor.id ? { ...f, ambience: { preset: 'baths' as const, level: 0.55 } } : f,
+      ),
+    };
+    const restored = validateProject(JSON.parse(JSON.stringify(musical)));
+    expect(ambienceAt(restored, floor.id, inside)).toEqual({ preset: 'baths', level: 0.55 });
+  });
+
   it('is validated with the rest of the document', () => {
     const bad = { ...project, floors: project.floors.map(f => ({ ...f, ambience: { preset: 'disco' as never } })) };
     expect(() => validateProject(bad)).toThrow(/ambience/);

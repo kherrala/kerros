@@ -45,16 +45,41 @@ the room from the nearest four, of which the nearest two cast shadows; distant f
 visible but do not add unbounded lighting cost. Flicker is intermittent and deterministic per object ID. These local lights
 supplement the floor's existing `light: InteriorLight` ambient setting.
 
+`light.mountHeight` overrides the fitting's mounting elevation and may be negative for submerged
+pool lights. `Floor.light.tint` optionally supplies a `#rrggbb` ambient cast while `level` continues
+to control brightness. Raised fixtures such as lintels use `baseHeight`, measured above the floor
+surface; their `height` remains the solid's own height.
+
+### Tall spaces and pools
+
+`room` and `zone` areas may set `ceilingHeight` above the floor datum. Taller rooms can span several
+storeys; holes in the overlying area rings expose the space beneath. In Walk, entering an uncovered
+authored floor hole drops the walker to the nearest supporting floor in the same building.
+
+An area's `water: { depth, ripple? }` creates a tiled basin below its floor surface. The same outline
+cuts the surrounding floor and defines the basin and transparent water surface. Depth is positive
+and at most 20 m; ripple amplitude is 0–0.1 m. The renderer animates small surface waves with refraction
+and underwater lighting. Lit pools project animated blue caustics onto the tiled surfaces of their
+containing room (`parentId`). This is a visual approximation of ripple-focused light, not a ray-traced
+optics simulation. Setting the floor's ambient light `level` to zero on a pool floor also disables
+daylight fill and ceiling emission: the submerged lamps and their reflected light carry the room.
+Swimming and buoyancy are not modelled.
+
+A fixture's `slide: { path, radius }` defines an open water slide. Each path point is `[x, y, z]` in
+metres relative to the fixture's position and rotation; `z` is above its floor. The radius is positive.
+
 ### Ambient sound
 
 A floor's `ambience` is what it sounds like from inside it, and any room or zone can carry its own
 `ambience` to override the floor's. Both are `{ preset, level? }`: `preset` is one of `silent`,
 `office` (ventilation and a faint ballast hum), `backrooms` (louder ballasts, a breathing HVAC and a
-compressor that cycles), or `plant` (machinery), and `level` is 0–1 (default 1). Absent is silence.
+compressor that cycles), `plant` (machinery), or `baths` (original ambient music: slow chords and
+soft glass bells with a long stereo reverb). `level` is 0–1 (default 1). Absent is silence.
 
 ```ts
 floor.ambience = { preset: 'backrooms' };
 serverRoom.ambience = { preset: 'plant', level: 0.8 };
+poolFloor.ambience = { preset: 'baths', level: 0.55 };
 ```
 
 Walk mode synthesises the sound locally — nothing is downloaded — and cross-fades as you cross from
@@ -107,6 +132,7 @@ Connected-space operations, called inside `transact`:
 - `disconnectSpace(project, objectId)` — retain the current polygon as an independent outline.
 - `boundaryEdges`, `boundaryRings`, `boundaryRegions`, `boundaryRegionAt` — query the shared graph and its centreline faces, including holes. Small unlabelled faces are included.
 - `derivedSpaceRings(project, space)` — derive a connected space’s usable footprint after subtracting walls.
+- `bindSpaceToRegion(project, space, region)` — attach an area to an already identified boundary face and generate its cache, useful for importers.
 
 The `addBoundary`, `connectSpace` and `disconnectSpace` mutation variants expose these edits as data. Transactions normalize crossings and update affected space loops automatically.
 

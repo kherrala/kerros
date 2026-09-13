@@ -17,8 +17,8 @@ import { chromium } from '@playwright/test';
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MEDIA = join(ROOT, 'docs/public/media');
 const APP = 'http://127.0.0.1:5183';
-const VIEWPORT = { width: 1600, height: 1000 }; // stills render at 2× (deviceScaleFactor) → 3200×2000
 const SHOW_VIEWPORT = { width: 1920, height: 1200 }; // video records at CSS pixels, so record big natively
+// The hero shoots the same layout at 2× (deviceScaleFactor) → a 3840×2400 PNG that doubles as the poster.
 const targets = process.argv.slice(2);
 const want = name => targets.length === 0 || targets.includes(name);
 
@@ -66,12 +66,42 @@ async function pickFloor(page, name) {
   await page.getByRole('button', { name: 'Active floor' }).click();
   await page.locator('.place-option').filter({ hasText: name }).first().click();
 }
+// The stack toggle is labelled with the state you are in, not the one the click takes you to, so a
+// blind click is a coin flip: it lands on the stacked whole-building view exactly when 3D opened in
+// cutaway. Read the label first, and only act when the stack is on. Located by class because the
+// button also carries the ⇧X key hint, which an exact accessible-name match would miss.
+async function ensureCutaway(page) {
+  const toggle = page.locator('.stack-button');
+  await toggle.waitFor({ state: 'visible' });
+  if (/All floors/.test(await toggle.innerText())) {
+    await toggle.click();
+    await page.waitForFunction(
+      () => !/All floors/.test(document.querySelector('.stack-button')?.textContent ?? 'All floors'),
+    );
+  }
+}
 async function openStockmannEditor(page, base) {
   page.setDefaultTimeout(60000); // vite cold-starts can be slow; don't flake on the first paint
   await page.goto(`${base}/app.html`, { waitUntil: 'networkidle' });
   await page.getByRole('button', { name: /Stockmann Helsinki.*Open/ }).click();
   await page.getByRole('button', { name: 'Plan editor', exact: true }).click();
   await pickFloor(page, /Offices · management/); // top office floor
+}
+// One staging for both shots, because the hero still is the clip's poster frame and the two have to
+// open on the same view. Left to itself the camera does not: opening the project starts a fly-in that
+// the floor fit interrupts wherever it happens to be, so bearing, pitch and zoom settle somewhere new
+// on every run. "Reset north" puts the camera on the site's own heading at the 3D pitch and "Fit floor"
+// frames the plate from there — the product's own two controls, and the same view every time.
+async function stageCutaway(page, base) {
+  await openStockmannEditor(page, base);
+  await page.getByRole('button', { name: '3D', exact: true }).click();
+  await ensureCutaway(page);
+  await page.getByRole('button', { name: 'Show properties panel' }).click(); // open the right panel too
+  await mapReady(page);
+  await page.getByRole('button', { name: 'Reset north' }).click();
+  await mapReady(page);
+  await page.getByRole('button', { name: 'Fit floor' }).click();
+  await mapReady(page);
 }
 
 async function main() {
@@ -88,11 +118,7 @@ async function main() {
 
     if (want('hero')) {
       const page = await browser.newPage({ viewport: SHOW_VIEWPORT, deviceScaleFactor: 2 });
-      await openStockmannEditor(page, APP);
-      await page.getByRole('button', { name: '3D', exact: true }).click();
-      await page.getByRole('button', { name: 'Cutaway', exact: true }).click(); // reveal the floor plate
-      await page.getByRole('button', { name: 'Show properties panel' }).click(); // open the right panel too
-      await mapReady(page);
+      await stageCutaway(page, APP);
       await page.screenshot({ path: join(MEDIA, 'editor-3d.png') });
       console.log('✓ hero → editor-3d.png');
       await page.close();
@@ -104,14 +130,13 @@ async function main() {
       const started = Date.now(); // video timeline starts here; trim the setup off the front later
       const page = await context.newPage();
       // Setup (trimmed from the GIF): a 3D cutaway of the top office floor, both panels open.
-      await openStockmannEditor(page, APP);
-      await page.getByRole('button', { name: '3D', exact: true }).click();
-      await page.getByRole('button', { name: 'Cutaway', exact: true }).click();
-      await page.getByRole('button', { name: 'Show properties panel' }).click();
-      await mapReady(page);
+      await stageCutaway(page, APP);
       const skip = (Date.now() - started) / 1000;
-      // Showcase: descend the building floor by floor with the camera fixed, so the basemap stays put
-      // and each level's plan is revealed inside the cutaway. Floor step = Shift+ArrowDown.
+      // Showcase: descend the building floor by floor, each level's plan revealed inside the cutaway.
+      // Floor step = Shift+ArrowDown; eight of them walk the office and retail floors (09 → 01) and stop
+      // above the street, short of the garage. The heading holds, but every step re-fits the camera to
+      // the new floor's depth, so the basemap drifts a little as the descent goes on — that is the
+      // product's own framing, not a stray drag.
       await page.waitForTimeout(700);
       for (let i = 0; i < 8; i++) {
         await page.keyboard.press('Shift+ArrowDown');
@@ -120,8 +145,9 @@ async function main() {
       await page.waitForTimeout(700);
       await context.close(); // flushes the .webm
       const webm = join(dir, (await readdir(dir)).find(f => f.endsWith('.webm')));
-      // H.264 MP4 for the docs <video> — a fixed camera compresses to inter-frame deltas, so a proper
-      // 1920×1200 clip stays ~2 MB. The hero still doubles as the poster frame (same first frame).
+      // H.264 MP4 for the docs <video> — a near-still camera compresses to inter-frame deltas, so a
+      // proper 1920×1200 clip stays ~2 MB. The hero still doubles as the poster: same staging, so the
+      // first frame is the still.
       await encodeMp4(webm, join(MEDIA, 'showcase.mp4'), skip);
       await rm(dir, { recursive: true, force: true });
       console.log('✓ showcase → showcase.mp4');

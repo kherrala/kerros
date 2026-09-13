@@ -4,6 +4,10 @@ Kerros uses a **shared network of wall and virtual boundary segments** to keep c
 
 Independent outlines remain available for imported plans, floor plates and areas that deliberately overlap. Existing documents keep their independent outlines until you explicitly connect them.
 
+New deterministic CAD imports create connected rooms directly from the wall network, using virtual
+boundaries across doorless passages. See the [import reference](/reference/import) for registration
+and transaction requirements.
+
 This guide explains the editing model. The optional [Mathematical foundations](/guide/geometry-mathematics) page contains the formulas, theorems and proof sketches for academic interest.
 
 ## What is stored, and what is generated?
@@ -110,6 +114,12 @@ The 3D viewer generates meshes from this 2D model plus elevations and heights: a
 ## Precision and snapping
 
 The editor offers a 0.5 m positioning grid and 15° directions relative to the floor's main axis, including 45° and 90° directions. Geometry snapping reuses junctions and projects onto receiving boundaries. Disable snapping or hold Shift during a drag for details that the grid would suppress.
+
+Dragging a junction preserves a nearby existing wall axis before falling back to the grid. Moving a
+whole wall slides it along its normal and snaps where adjoining segments become collinear or reach
+a nearby 15° floor direction. The preview uses the same snapping and validity constraints as release,
+so the handle shows the position that can actually be saved. Connected wall surfaces meet at shared
+mitred corners; very acute joins use a bounded bevel to avoid long spikes.
 
 Coordinates are **not globally rounded to centimetres**. Rotated intersections often need extra decimal places to stay on their edges. The calculated intersection is shared by ID rather than rounded separately on each adjoining wall.
 

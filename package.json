@@ -11,6 +11,7 @@
     "test:geometry": "vitest run src/model/authoring.fuzz.test.ts src/model/authoring.test.ts src/model/boundaries.test.ts",
     "budget": "node scripts/bundle-budget.mjs",
     "test:e2e": "playwright test",
+    "test:production": "npm run build && KERROS_E2E_PRODUCTION=1 playwright test tests/production.spec.ts",
     "format": "biome format --write .",
     "format:check": "biome format .",
     "capture:media": "node scripts/capture-media.mjs",

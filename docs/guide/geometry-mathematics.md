@@ -173,3 +173,36 @@ $$
 **Inductive argument.** If the initial document belongs to $\mathcal V$ and every published edit passes through this gate, then every subsequently published document belongs to $\mathcal V$: the next result is either checked and accepted, or is the preceding valid document. $\square$
 
 This establishes closure under the implemented validation contract. It does not establish that the validator is complete, that every requested gesture is feasible, or that every accepted document is a complete floor partition. Tests cover normalization, both sides of a moving wall, holes, opening attachments, minimum area, identity preservation, persistence, and recovery after refused operations. The mathematical arguments explain the intended invariants; the tests and validation check their implementation.
+
+## 9. Rendered joins and constrained alignment
+
+The rendering surface and the editing graph answer different questions. The graph records which
+walls meet; a mitre constructs where their offset faces meet. Let two rays leaving a junction have
+unit directions $u,v$, and let $a,b$ be points on the two faces bordering one wedge. Define the planar
+cross product by $x\times y=x_1y_2-x_2y_1$. When $u\times v\ne0$, their intersection is
+
+$$
+t=\frac{(b-a)\times v}{u\times v},\qquad q=a+tu.
+$$
+
+**Derivation.** Substitute $a+tu=b+sv$ and take the cross product with $v$. The term $sv\times v$
+vanishes, giving the formula. Both adjacent wall pieces use the same computed $q$, so their joined
+faces share a corner exactly. Nearly parallel rays make the denominator small; the renderer bounds
+the mitre and uses a common bevel point for acute joins and very short returns. This is a rendering
+construction, not a change to the stored centreline graph or the footprint-subtraction rule in §6.
+
+A wall sliding without rotating has one degree of freedom. An attached endpoint starts at $p$ and
+moves along the selected wall's unit normal $n$ by displacement $s$. For an adjoining segment to point
+along a target direction $d$ from its fixed end $c$, solve
+
+$$
+(p+sn-c)\times d=0,
+\qquad
+s=\frac{(c-p)\times d}{n\times d},\quad n\times d\ne0.
+$$
+
+The editor tests directions at 15° intervals relative to the floor's main axis and the selected
+wall's own direction. It accepts a nearby displacement within the screen-derived snapping tolerance,
+then applies the full geometry validation. Remote endpoints remain fixed. Incompatible constraints
+need not have a common solution; snapping does not prove that every adjoining wall can be aligned
+simultaneously.

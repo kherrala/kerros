@@ -8,6 +8,7 @@ import {
   type SiteObject,
 } from '@kerros/schema';
 import { generateOfficeLayout, seedNumber } from './officeLayout';
+import { addPoolrooms } from './poolrooms';
 
 import { BACKROOMS_ID } from './ids';
 export { BACKROOMS_ID };
@@ -28,12 +29,12 @@ const OFFICES = [
 export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument {
   const seed = (options.seed ?? BACKROOMS_SEED).trim() || BACKROOMS_SEED;
   const size = options.size ?? 28;
-  const p = emptyProject(geoOrigin([24.946, 60.185]), 'The Backrooms · Offices');
+  const p = emptyProject(geoOrigin([24.946, 60.185]), 'The Backrooms · Offices & pools');
   p.id =
     seed === BACKROOMS_SEED && size === 28 ? BACKROOMS_ID : `${BACKROOMS_ID}-${seedNumber(seed).toString(36)}-${size}`;
   p.description = `Procedural offices · seed “${seed}” · ${size * OFFICE_CELL} × ${size * OFFICE_CELL} m per level`;
   p.referenceNote =
-    'Fictional Backrooms-inspired sample. Seeded, dithered noise shapes the rooms; connected passages form loops and dead ends. Office levels only; spa and other level families can follow.';
+    'Fictional Backrooms-inspired sample. Seeded offices surround vast halls and open galleries. Rectangular floor voids connect double-height spaces; tiled pool levels lie beneath the offices.';
   p.buildings[0].name = 'The office complex';
   p.floors = OFFICES.map((theme, i) => ({
     id: `backrooms-office-${i}`,
@@ -70,7 +71,7 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
       p.junctions.push({ id, floorId: prefix, position: at });
       return id;
     };
-    const wall = (a: Point, b: Point) =>
+    const wall = (a: Point, b: Point, height = floor.height - 0.18) =>
       p.barriers.push({
         id: `${prefix}-wall-${p.barriers.length}`,
         floorId: prefix,
@@ -78,7 +79,7 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
         startId: join(a),
         endId: join(b),
         name: 'Office partition',
-        height: 3,
+        height,
         thickness: 0.16,
         material: 'wallpaper',
         color: theme.wall,
@@ -103,12 +104,15 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
       material,
     });
     const sectors = new Map<string, string[]>();
+    const galleryRoutes = new Map<number, { id: string; position: Point }[]>();
     layout.rooms.forEach((room, i) => {
       const { x, y, width, depth } = room;
       const at = metric([x + width / 2, y + depth / 2]);
       const sector = `${String.fromCharCode(65 + Math.min(2, Math.floor((x / size) * 3)))}${Math.min(2, Math.floor((y / size) * 3)) + 1}`;
-      const name =
-        i === 0
+      const hall = i === 1 || i === 2;
+      const name = hall
+        ? `${level === 0 ? 'Open gallery' : 'Vast hall'} ${i}`
+        : i === 0
           ? 'Stair landing'
           : `${width * depth >= 4 ? 'Open office' : width * depth >= 2 ? 'Connecting office' : 'Office'} ${sector} · ${String(i).padStart(3, '0')}`;
       const o = object(roomId(i), name, at, width * OFFICE_CELL, depth * OFFICE_CELL, 'carpet');
@@ -124,13 +128,55 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
         ),
       ];
       o.category = 'backrooms-office';
+      if (hall) {
+        o.category = 'backrooms-hall';
+        if (level === 0) {
+          // A broad rectangular drop leaves a walkable gallery all around it, including on the
+          // smallest supported plan. The lower hall has the matching clear double-height volume.
+          const inset = OFFICE_CELL * 0.65;
+          const [left, bottom] = metric([x, y]);
+          o.rings.push(
+            closeRing([
+              [left + inset, bottom + inset],
+              [left + inset, bottom + depth * OFFICE_CELL - inset],
+              [left + width * OFFICE_CELL - inset, bottom + depth * OFFICE_CELL - inset],
+              [left + width * OFFICE_CELL - inset, bottom + inset],
+            ]),
+          );
+        } else if (level === 1) o.ceilingHeight = 3.6 + floor.height;
+      }
       o.metadata = { noise: Math.round(room.noise * 1000) / 1000, sector };
       p.objects.push(o);
       const members = sectors.get(sector) ?? [];
       members.push(o.id);
       sectors.set(sector, members);
       // Keep the landing's route anchor clear of the staircase footprint.
-      p.navNodes!.push({ id: nodeId(i), floorId: prefix, position: i === 0 ? [2, 0] : at, objectId: o.id });
+      p.navNodes!.push({
+        id: nodeId(i),
+        floorId: prefix,
+        position: i === 0 ? [2, 0] : hall && level === 0 ? metric([x + 0.3, y + 0.3]) : at,
+        objectId: o.id,
+      });
+      if (hall && level === 0) {
+        const corners = [
+          [x + 0.3, y + 0.3],
+          [x + width - 0.3, y + 0.3],
+          [x + width - 0.3, y + depth - 0.3],
+          [x + 0.3, y + depth - 0.3],
+        ].map((pt, corner) => ({
+          id: corner ? `${o.id}-corner-${corner}` : nodeId(i),
+          position: metric(pt as Point),
+        }));
+        galleryRoutes.set(i, corners);
+        p.navNodes!.push(...corners.slice(1).map(corner => ({ ...corner, floorId: prefix })));
+        for (let k = 0; k < corners.length; k++)
+          p.navEdges!.push({
+            id: `${o.id}-gallery-edge-${k}`,
+            kind: 'walk',
+            aId: corners[k].id,
+            bId: corners[(k + 1) % corners.length].id,
+          });
+      }
     });
     for (const [sector, spaceIds] of sectors)
       p.zones.push({
@@ -142,8 +188,14 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
     layout.boundaries.forEach((edge, i) => {
       const a = metric(edge.start),
         b = metric(edge.end);
+      const wallHeight =
+        level === 1 && [edge.a, edge.b].some(i => i === 1 || i === 2) ? floor.height + 3.6 - 0.18 : undefined;
       if (!edge.passage) {
-        wall(a, b);
+        wall(
+          a,
+          b,
+          level === 1 && [edge.a, edge.b].some(i => i === 1 || i === 2) ? floor.height + 3.6 - 0.18 : undefined,
+        );
         return;
       }
       // Leave a real full-height gap in the partition: a portal with no door leaf to block the view.
@@ -151,16 +203,28 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
         gap = room.noise > 0.58 ? 3 : 1.8;
       const t = (OFFICE_CELL - gap) / (2 * OFFICE_CELL);
       const along = (t: number): Point => [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
-      wall(a, along(t));
-      wall(along(1 - t), b);
+      wall(a, along(t), wallHeight);
+      wall(along(1 - t), b, wallHeight);
       const id = `${prefix}-passage-${i}`;
       p.portals!.push({ id, a: roomId(edge.a), b: roomId(edge.b), name: 'Open passage' });
       p.navNodes!.push({ id: `${id}-node`, floorId: prefix, position: along(0.5) });
-      for (const side of [edge.a, edge.b])
-        p.navEdges!.push({ id: `${id}-to-${side}`, kind: 'walk', aId: nodeId(side), bId: `${id}-node` });
+      for (const side of [edge.a, edge.b]) {
+        const at = along(0.5);
+        const corner = galleryRoutes
+          .get(side)
+          ?.slice()
+          .sort(
+            (a, b) =>
+              Math.hypot(a.position[0] - at[0], a.position[1] - at[1]) -
+              Math.hypot(b.position[0] - at[0], b.position[1] - at[1]),
+          )[0];
+        p.navEdges!.push({ id: `${id}-to-${side}`, kind: 'walk', aId: corner?.id ?? nodeId(side), bId: `${id}-node` });
+      }
     });
     for (let y = 0; y < size; y++)
       for (let x = 0; x < size; x++) {
+        const hall = layout.cells[y * size + x];
+        if (level === 0 && (hall === 1 || hall === 2)) continue;
         p.objects.push({
           id: `${prefix}-light-${x}-${y}`,
           kind: 'light',
@@ -169,7 +233,7 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
           position: metric([x + 0.5, y + 0.5]),
           width: 1.2,
           depth: 0.3,
-          height: 2.7,
+          height: level === 1 && (hall === 1 || hall === 2) ? 6.3 : 2.7,
           rotation: (x + y) % 2 ? 90 : 0,
           light: {
             kelvin: theme.kelvin,
@@ -198,5 +262,6 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
         objectId: stairId,
       });
   }
+  addPoolrooms(p, seed, size * OFFICE_CELL);
   return p;
 }

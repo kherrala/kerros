@@ -62,6 +62,7 @@ export type ModelKind =
   | 'lamp'
   | 'car'
   | 'chimney'
+  | 'vent'
   | 'post';
 export interface RoofSection {
   footprint: Ring;
@@ -92,25 +93,29 @@ export interface Floor {
    *  say otherwise. Absent is silence. */
   ambience?: Ambience;
 }
-/** The sound of a space, heard at eye level: a named preset of the building's own noises — the
- *  ventilation, the ballasts, a compressor somewhere — and how loud, 0 to 1 (absent is 1). Kept in
+/** The sound of a space, heard at eye level: a named soundscape or musical preset,
+ *  and how loud, 0 to 1 (absent is 1). Kept in
  *  the document rather than the renderer for the same reason light is: what a room sounds like
  *  describes the room. */
 export interface Ambience {
   preset: AmbiencePreset;
   level?: number;
 }
-export type AmbiencePreset = 'silent' | 'office' | 'backrooms' | 'plant';
-export const AMBIENCE_PRESETS: AmbiencePreset[] = ['silent', 'office', 'backrooms', 'plant'];
+export type AmbiencePreset = 'silent' | 'office' | 'backrooms' | 'plant' | 'baths';
+export const AMBIENCE_PRESETS: AmbiencePreset[] = ['silent', 'office', 'backrooms', 'plant', 'baths'];
 /** Colour temperature in kelvin (2700 tungsten, 4000 fluorescent, 6500 daylight) and how brightly,
  *  0 to 1. Kept here rather than in the renderer: what a space is lit by describes the space. */
 export interface InteriorLight {
   kelvin: number;
   level: number;
+  /** Optional colour cast from the fittings or reflected surroundings. */
+  tint?: string;
 }
 /** A ceiling luminaire. Object height is the mounting height above the floor, intensity is candela,
  * range is metres, and flicker is the optional 0..1 depth of intermittent ballast dimming. */
 export interface LightFixture {
+  /** Optional mounting elevation above the floor; negative values place a lamp inside a pool. */
+  mountHeight?: number;
   kelvin: number;
   intensity: number;
   range: number;
@@ -181,6 +186,16 @@ export interface SiteObject {
   geometry?: SpaceGeometry;
   /** Makes this area a sloped plane rather than a flat plate; see Slope. */
   slope?: Slope;
+  /** Clear ceiling height above this floor's datum; omitted uses the storey height.
+   * A room spanning storeys uses this with holes in the plates above it. */
+  ceilingHeight?: number;
+  /** A basin below this area's walking surface, filled with clear water. */
+  water?: { depth: number; ripple?: number };
+  /** Open water-slide centreline, in metres relative to the object's position and rotation.
+   * The third coordinate is height above its floor. */
+  slide?: { path: [number, number, number][]; radius: number };
+  /** Bottom of a raised fixture, metres above the floor surface (e.g. a doorway lintel). */
+  baseHeight?: number;
   width: number;
   depth: number;
   height: number;

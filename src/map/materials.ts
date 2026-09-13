@@ -136,12 +136,14 @@ export class MaterialLibrary {
       map,
       bumpMap,
       roughnessMap,
-      bumpScale: kind === 'brick' ? 0.018 : kind === 'roof' ? 0.026 : kind === 'grass' ? 0.025 : 0.006,
+      bumpScale:
+        kind === 'brick' ? 0.018 : kind === 'roof' ? 0.026 : kind === 'grass' ? 0.025 : kind === 'tile' ? 0.001 : 0.006,
       roughness: 1,
       metalness: kind === 'roof' ? 0.48 : 0,
       side: THREE.DoubleSide,
     });
     material.userData.shared = true;
+    material.userData.finish = kind;
     this.materials.set(key, material);
     return material;
   }

@@ -100,6 +100,20 @@ describe('Stockmann underground garage', () => {
       expect(ringArea(plate.rings![0])).toBeGreaterThan(4000); // a genuinely vast deck, in m²
     }
   });
+  it('encloses the walked garage up to its ceiling while leaving ramp and service mouths open', () => {
+    for (const floorId of deckIds) {
+      const perimeter = p.barriers.filter(b => b.floorId === floorId && b.name === 'Deck edge');
+      expect(perimeter.length).toBeGreaterThanOrEqual(7);
+      for (const b of perimeter) expect(b.height + 0.18).toBeCloseTo(p.floors.find(f => f.id === floorId)!.height, 6);
+      const passages = p.objects.filter(o => o.floorId === floorId && (o.slope || o.name.startsWith('Service link')));
+      for (const b of perimeter) {
+        const a = p.junctions.find(j => j.id === b.startId)!.position;
+        const z = p.junctions.find(j => j.id === b.endId)!.position;
+        const mid: Point = [(a[0] + z[0]) / 2, (a[1] + z[1]) / 2];
+        expect(passages.some(o => pointInRing(mid, o.rings![0]))).toBe(false);
+      }
+    }
+  });
 });
 
 describe('the garage mouths reach the street', () => {

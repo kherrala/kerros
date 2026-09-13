@@ -1,5 +1,6 @@
+import { wallFootprints, wallSpan } from './wallJoins';
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
-import type { Barrier, MaterialKind, Point, ProjectDocument, Ring, SiteObject } from '../model/types';
+import type { MaterialKind, Point, ProjectDocument, Ring, SiteObject } from '../model/types';
 import type { StatusReading } from '../model/live';
 import { statusTone } from '../adapters/status';
 import { undergroundView } from './underground';
@@ -79,90 +80,24 @@ export function wallPieces(project: ProjectDocument, floorId: string | null, sta
       items.push(o);
       attached.set(o.barrierId, items);
     }
-  // Which barriers meet at each junction — a corner needs to know how thick its neighbour is.
-  const meeting = new Map<string, Barrier[]>();
-  for (const b of project.barriers) {
-    for (const id of [b.startId, b.endId]) {
-      const list = meeting.get(id) ?? [];
-      list.push(b);
-      meeting.set(id, list);
-    }
-  }
-  /** How far past the junction this wall must run, positive to close a corner and negative to stop
-   *  short of one.
-   *
-   *  Walls meet on their centrelines, so two perpendicular walls each stop half a thickness short of
-   *  the outside face and the corner shows a square notch — a butt join. Running on by the
-   *  NEIGHBOUR's half-thickness squares it off, which is exactly right at an L.
-   *
-   *  At a T it is exactly wrong. The stem then reaches the through-wall's FAR face, and where the
-   *  through wall is the building's envelope that face is the outside of the building: every
-   *  partition landed a cap coplanar with the facade, which is the stripe of z-fighting you could
-   *  see down the outside of an imported house. A stem has no corner to close — the through wall
-   *  already covers the junction — so it stops just inside the near face, where its cap is buried in
-   *  the wall it dies into and cannot be seen from either side.
-   *
-   *  Collinear neighbours are skipped: a wall continuing straight on already abuts. A wall that
-   *  itself continues through the junction is not a stem and keeps the corner behaviour, so a
-   *  crossing is still filled. */
-  const overrun = (barrier: Barrier, junctionId: string, self: number): number => {
-    const axis = (other: Barrier) => {
-      const oa = junctions.get(other.startId),
-        ob = junctions.get(other.endId);
-      if (!oa || !ob) return null;
-      const otherAngle = (Math.atan2(ob[1] - oa[1], ob[0] - oa[0]) * 180) / Math.PI;
-      // Difference in [0, 90]: 90 is a straight continuation, 0 a square corner.
-      return Math.abs(((((otherAngle - self) % 180) + 180) % 180) - 90);
-    };
-    const others = (meeting.get(junctionId) ?? []).filter(o => o !== barrier && o.floorId === barrier.floorId);
-    const crossing = others.filter(o => {
-      const d = axis(o);
-      return d !== null && d <= 86;
-    });
-    // Do we run on through this junction, or does it end here?
-    const weContinue = others.some(o => {
-      const d = axis(o);
-      return d !== null && d > 86;
-    });
-    // Does something else run on through it? Two perpendicular neighbours in line with each other is
-    // a wall passing by, which is what makes this a T rather than a corner.
-    const theyContinue = crossing.some(o =>
-      crossing.some(q => {
-        if (q === o) return false;
-        const a1 = axis(o),
-          a2 = axis(q);
-        return a1 !== null && a2 !== null && Math.abs(a1 - a2) < 4;
-      }),
-    );
-    if (!weContinue && theyContinue) {
-      // Back to just inside the through wall's near face. The 20 mm keeps the cap buried rather than
-      // flush, which is the difference between hidden and fighting for the same pixels.
-      const thickest = Math.max(...crossing.map(o => o.thickness));
-      return -Math.max(0, thickest / 2 - 0.02);
-    }
-    let most = 0;
-    for (const other of crossing) {
-      const delta = axis(other)!;
-      most = Math.max(most, other.thickness / 2 / Math.max(Math.cos((delta * Math.PI) / 180), 0.35));
-    }
-    return most;
-  };
+  const footprints = wallFootprints(project);
   for (const barrier of project.barriers.filter(b => stack || visibleOnFloor(b, floorId))) {
     const a = junctions.get(barrier.startId),
       b = junctions.get(barrier.endId);
     if (!a || !b) continue;
     const length = distance(a, b);
     if (length < 0.01) continue;
-    const angle = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
-    const head = overrun(barrier, barrier.startId, angle),
-      tail = overrun(barrier, barrier.endId, angle);
+    const footprint = footprints.get(barrier.id);
+    if (!footprint) continue;
+    const direction: Point = [(b[0] - a[0]) / length, (b[1] - a[1]) / length];
     const elevation = stack ? (elevations.get(barrier.floorId ?? '') ?? 0) : 0;
     const openings = (attached.get(barrier.id) ?? []).sort((a, b) => (a.offset ?? 0) - (b.offset ?? 0));
     const piece = (start: number, end: number, base: number, height: number) => {
       if (end - start < 0.005 || height <= base) return;
-      const center = add(a, rotate([(start + end) / 2, 0], angle));
+      const ring = wallSpan(footprint, a, direction, start <= 0 ? null : start, end >= length ? null : end);
+      if (ring.length < 3) return;
       pieces.push({
-        ring: rectangle(center, end - start, barrier.thickness, angle),
+        ring,
         base: elevation + base,
         height: elevation + height,
         id: barrier.id,
@@ -171,9 +106,8 @@ export function wallPieces(project: ProjectDocument, floorId: string | null, sta
         material: barrier.material,
       });
     };
-    // The solid runs from -head to length + tail; openings keep their measured position along the
-    // wall, so only the first and last solid pieces take the overrun.
-    let cursor = -head;
+    // Openings retain their centreline offsets; only terminal pieces keep a joined end.
+    let cursor = 0;
     for (const opening of openings) {
       const start = Math.max(0, (opening.offset ?? 0) - opening.width / 2),
         end = Math.min(length, (opening.offset ?? 0) + opening.width / 2);
@@ -184,7 +118,7 @@ export function wallPieces(project: ProjectDocument, floorId: string | null, sta
       } else piece(start, end, Math.min(opening.height, barrier.height), barrier.height);
       cursor = end;
     }
-    piece(cursor, length + tail, 0, barrier.height);
+    piece(cursor, length, 0, barrier.height);
   }
   return pieces;
 }

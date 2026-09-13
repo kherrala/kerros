@@ -66,6 +66,12 @@ export function generateOfficeLayout(seed: string, columns = 28, rows = columns)
     for (let dy = 0; dy < depth; dy++) for (let dx = 0; dx < width; dx++) cells[(y + dy) * columns + x + dx] = id;
   };
   place(Math.floor(columns / 2) - 1, Math.floor(rows / 2) - 1, 2, 2);
+  // Two broad halls shared by every level: their alignment lets upper galleries open onto the
+  // hall beneath. Reserve them before filling the smaller offices, so coverage stays exact.
+  const hallWidth = Math.max(3, Math.floor(columns / 4)),
+    hallDepth = Math.max(2, Math.floor(rows / 4));
+  place(1, 1, hallWidth, hallDepth);
+  place(columns - hallWidth - 1, rows - hallDepth - 1, hallWidth, hallDepth);
   for (let y = 0; y < rows; y++)
     for (let x = 0; x < columns; x++) {
       if (cells[y * columns + x] !== -1) continue;

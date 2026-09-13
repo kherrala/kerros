@@ -1106,3 +1106,104 @@ test('draws a 12 cm wall return with precise positioning and keeps it through un
   expect(redone.barriers).toEqual(saved.barriers);
   expect(redone.junctions).toEqual(saved.junctions);
 });
+
+test('junction drag preview and release agree on an imported oblique wall', async ({ page }, info) => {
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: /New blank site/ }).click();
+  await ready(page);
+  const p = await savedProject(page);
+  const { addBarrier, rotate } = await import('../src/model/geometry');
+  const at = (x: number, y: number) => rotate([x + 0.13, y + 0.27], 17);
+  const wall = addBarrier(p, at(0, 0), at(4, 0), p.floors[0].id, 'wall')!;
+  addBarrier(p, at(4, 0), at(8, 0), p.floors[0].id, 'wall');
+  await importFile(page, 'oblique.json', 'application/json', Buffer.from(JSON.stringify(p)), 'Project');
+  await page.evaluate(
+    center => (window as any).__kerrosMap.jumpTo({ center, zoom: 22, pitch: 0, bearing: 0 }),
+    toLngLat(at(4, 0), p.origin),
+  );
+  await flatCamera(page);
+  const screen = async (point: [number, number]) =>
+    page.evaluate(
+      ll => {
+        const map = (window as any).__kerrosMap,
+          at = map.project(ll),
+          rect = map.getContainer().getBoundingClientRect();
+        return { x: rect.left + at.x, y: rect.top + at.y };
+      },
+      toLngLat(point, p.origin),
+    );
+  await clickAt(page, await screen(at(2, 0)));
+  const handle = page.getByRole('button', { name: 'Move wall endpoint 2' });
+  await expect(handle).toBeVisible();
+  const from = await handle.boundingBox();
+  await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2);
+  await page.mouse.down();
+  const dest = await screen(at(5.1, 0.015));
+  await page.mouse.move(dest.x, dest.y, { steps: 4 });
+  const preview = [Number(await handle.getAttribute('data-wx')), Number(await handle.getAttribute('data-wy'))] as [
+    number,
+    number,
+  ];
+  expect(distance(preview, at(5.1, 0))).toBeLessThan(0.02);
+  await page.screenshot({ path: info.outputPath('aligned-junction-preview.png') });
+  await page.mouse.up();
+  const after = await savedProject(page);
+  await info.attach('saved-project', { body: JSON.stringify(after), contentType: 'application/json' });
+  expect(() => validateProject(after)).not.toThrow();
+  const released = after.barriers.find(b => b.id === wall.id)!;
+  expect(distance(barrierEnds(after, released)[1], preview)).toBeLessThan(1e-6);
+  expect(
+    after.barriers.some(b => b.id !== released.id && (b.startId === released.endId || b.endId === released.endId)),
+  ).toBe(true);
+  expect(() => validateProject(after)).not.toThrow();
+  await page.screenshot({ path: info.outputPath('aligned-junction-released.png') });
+});
+
+test('wall move preview snaps its adjacent segment into line before release', async ({ page }, info) => {
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: /New blank site/ }).click();
+  await ready(page);
+  const p = await savedProject(page);
+  const { addBarrier, rotate } = await import('../src/model/geometry');
+  const at = (x: number, y: number) => rotate([x + 0.13, y + 0.27], 17);
+  const wall = addBarrier(p, at(0, 0), at(4, 0), p.floors[0].id, 'wall')!;
+  addBarrier(p, at(4, 0), at(8, 1.23), p.floors[0].id, 'wall');
+  await importFile(page, 'adjacent.json', 'application/json', Buffer.from(JSON.stringify(p)), 'Project');
+  await page.evaluate(
+    center => (window as any).__kerrosMap.jumpTo({ center, zoom: 22, pitch: 0, bearing: 0 }),
+    toLngLat(at(4, 0), p.origin),
+  );
+  await flatCamera(page);
+  const screen = async (point: [number, number]) =>
+    page.evaluate(
+      ll => {
+        const map = (window as any).__kerrosMap,
+          at = map.project(ll),
+          rect = map.getContainer().getBoundingClientRect();
+        return { x: rect.left + at.x, y: rect.top + at.y };
+      },
+      toLngLat(point, p.origin),
+    );
+  await clickAt(page, await screen(at(2, 0)));
+  const handle = page.getByRole('button', { name: 'Move whole wall', exact: true });
+  await expect(handle).toBeVisible();
+  const from = await handle.boundingBox();
+  await page.mouse.move(from!.x + from!.width / 2, from!.y + from!.height / 2);
+  await page.mouse.down();
+  const dest = await screen(at(2, 1.2));
+  await page.mouse.move(dest.x, dest.y, { steps: 4 });
+  const preview = [Number(await handle.getAttribute('data-wx')), Number(await handle.getAttribute('data-wy'))] as [
+    number,
+    number,
+  ];
+  expect(distance(preview, at(2, 1.23))).toBeLessThan(1e-6);
+  await page.screenshot({ path: info.outputPath('aligned-wall-preview.png') });
+  await page.mouse.up();
+  const after = await savedProject(page);
+  await info.attach('saved-project', { body: JSON.stringify(after), contentType: 'application/json' });
+  expect(() => validateProject(after)).not.toThrow();
+  const [a, b] = barrierEnds(after, after.barriers.find(b => b.id === wall.id)!);
+  expect(distance([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], preview)).toBeLessThan(1e-6);
+  expect(distance(b, at(4, 1.23))).toBeLessThan(1e-6);
+  expect(() => validateProject(after)).not.toThrow();
+});

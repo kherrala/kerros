@@ -68,6 +68,7 @@ export {
   boundaryRegionAt,
   boundaryRings,
   derivedSpaceRings,
+  bindSpaceToRegion,
   followsBoundaries,
   connectSpace,
   disconnectSpace,

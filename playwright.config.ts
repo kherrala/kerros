@@ -1,4 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
+const port = process.env.KERROS_E2E_PRODUCTION ? 5182 : 5181;
 
 export default defineConfig({
   testDir: './tests',
@@ -13,16 +14,18 @@ export default defineConfig({
   reporter: 'list',
   use: {
     ...devices['Desktop Chrome'],
-    baseURL: 'http://127.0.0.1:5181',
+    baseURL: `http://127.0.0.1:${port}`,
     viewport: { width: 1600, height: 1000 },
     screenshot: 'only-on-failure',
     trace: 'retain-on-failure',
   },
   webServer: {
-    command: 'npm run dev -- --port 5181 --strictPort',
+    command: process.env.KERROS_E2E_PRODUCTION
+      ? `npm run preview -- --port ${port} --strictPort`
+      : `npm run dev -- --port ${port} --strictPort`,
     // Health-check app.html, not / — the reference editor moved off the root (which is now the docs home).
-    url: 'http://127.0.0.1:5181/app.html',
-    reuseExistingServer: !process.env.CI,
+    url: `http://127.0.0.1:${port}/app.html`,
+    reuseExistingServer: !process.env.CI && !process.env.KERROS_E2E_PRODUCTION,
     env: { VITE_MML_API_KEY: 'playwright-test-key' },
   },
 });

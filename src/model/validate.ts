@@ -254,7 +254,8 @@ export function validateProject(value: unknown): ProjectDocument {
           f.light.kelvin > 12000 ||
           !finite(f.light.level) ||
           f.light.level < 0 ||
-          f.light.level > 1),
+          f.light.level > 1 ||
+          (f.light.tint !== undefined && (typeof f.light.tint !== 'string' || !/^#[0-9a-f]{6}$/i.test(f.light.tint)))),
     )
   )
     fail('a floor names a light that is not a lamp.');
@@ -357,6 +358,8 @@ export function validateProject(value: unknown): ProjectDocument {
       if (
         o.kind !== 'light' ||
         !object(lamp) ||
+        (lamp.mountHeight !== undefined &&
+          (!finite(lamp.mountHeight) || lamp.mountHeight < -20 || lamp.mountHeight > 100)) ||
         !finite(lamp.kelvin) ||
         lamp.kelvin < 1000 ||
         lamp.kelvin > 12000 ||
@@ -373,6 +376,43 @@ export function validateProject(value: unknown): ProjectDocument {
     if (o.watchedIds && (!Array.isArray(o.watchedIds) || o.watchedIds.some(id => !p.objects.some(x => x.id === id))))
       fail('unknown watched object.');
     if (o.watchedIds && !distinct(o.watchedIds)) fail('watched objects must be listed once each.');
+    if (
+      o.ceilingHeight !== undefined &&
+      (!['room', 'zone'].includes(o.kind as string) || !finite(o.ceilingHeight) || o.ceilingHeight <= 0)
+    )
+      fail('a space ceiling height must be positive.');
+    if (
+      o.baseHeight !== undefined &&
+      (o.kind !== 'fixture' || !finite(o.baseHeight) || o.baseHeight < 0 || o.baseHeight > 100)
+    )
+      fail('a raised fixture needs a base height between 0 and 100 m.');
+    if (o.water !== undefined) {
+      const water = o.water;
+      if (
+        !['room', 'zone'].includes(o.kind as string) ||
+        !o.rings ||
+        !object(water) ||
+        !finite(water.depth) ||
+        water.depth <= 0 ||
+        water.depth > 20 ||
+        (water.ripple !== undefined && (!finite(water.ripple) || water.ripple < 0 || water.ripple > 0.1))
+      )
+        fail('water needs an area, a depth up to 20 m and ripples up to 10 cm.');
+    }
+    if (o.slide !== undefined) {
+      const slide = o.slide;
+      if (
+        o.kind !== 'fixture' ||
+        !object(slide) ||
+        !finite(slide.radius) ||
+        slide.radius <= 0 ||
+        !Array.isArray(slide.path) ||
+        slide.path.length < 2 ||
+        slide.path.length > 100 ||
+        !slide.path.every(p => Array.isArray(p) && p.length === 3 && p.every(finite) && (p[2] as number) >= 0)
+      )
+        fail('a water slide needs a positive radius and a finite path above its floor.');
+    }
     if (o.slope !== undefined) {
       const s = o.slope;
       if (

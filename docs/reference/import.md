@@ -20,11 +20,24 @@ rasterization (a browser), and for the AI path the provider and its credentials.
   the numbered taxonomy of Finnish prefab CAD; override per source.
 
 What it understands: axis-aligned drawings whose walls are parallel face-line pairs on semantic
-layers. Walls are paired from face runs with measured thickness; ONE interior plate is traced from
-the envelope's inner face and divided along each partition with the editor's own `divideSpaces`
-path; envelope openings come from door/window symbol clusters projected onto their wall, partition openings from the paired face gaps (and a symbol-less partition gap becomes a doorless passage — the barrier splits around it);
-labels name the room they stand in. Positions are exact; opening *kinds* are approximate where
-symbols crowd together — the report says which, and the editor is the place to correct them.
+layers. Walls are paired from face runs with measured thickness. Rooms follow the closed faces of
+the [shared boundary network](/guide/geometry), with `geometry.loops` referencing the actual walls.
+Doorless passages receive virtual boundaries between their jambs, so adjacent rooms remain distinct
+and connected without sealing the passage. Usable room polygons are generated after subtracting wall
+bodies and holes; wall edits update both adjoining rooms. Regions below 1 m², or with disconnected
+usable pieces, remain unlabelled and are reported in `skipped`.
+
+Envelope openings come from door/window symbol clusters projected onto their wall; partition
+openings come from paired face gaps. Labels name the room they stand in. Opening *kinds* are
+approximate where symbols crowd together; the report identifies unresolved openings for review.
+Short wall returns remain valid down to the schema's `MIN_SEGMENT` (1 cm).
+
+For several sheets, use `sheetOffset(reference, sheet)` to measure registration and
+`shiftEntities(entities, dx, dy)` to translate every coordinate, including arc centres. Import and
+manual corrections must run through `transact`; export only a successful result. To move an imported
+plan afterwards, translate its junctions and independent objects in a transaction. Connected rooms'
+polygons and dimensions are regenerated from the junctions. Call `refreshBoundarySpaces` before
+`refreshPortals` if portal inference runs inside that same transaction.
 
 ## AI-assisted import
 

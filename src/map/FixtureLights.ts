@@ -37,7 +37,7 @@ export class FixtureLights {
     base: number,
     materials: MaterialLibrary,
   ) {
-    this.points = fixtures.map(o => new THREE.Vector3(...xy(o.position), base + o.height));
+    this.points = fixtures.map(o => new THREE.Vector3(...xy(o.position), base + (o.light?.mountHeight ?? o.height)));
     this.colors = fixtures.map(o => new THREE.Color(kelvinColor(o.light!.kelvin)));
     this.flickering = fixtures.some(o => !!o.light?.flicker);
     const housings = new THREE.InstancedMesh(
@@ -63,11 +63,18 @@ export class FixtureLights {
           o.position[1] + Math.sin((o.rotation * Math.PI) / 180),
         ]);
       transform.position.copy(this.points[i]);
-      transform.rotation.z = Math.atan2(along[1] - origin[1], along[0] - origin[0]);
+      transform.rotation.set(
+        o.light!.mountHeight !== undefined && o.light!.mountHeight < 0 ? -Math.PI / 2 : 0,
+        0,
+        Math.atan2(along[1] - origin[1], along[0] - origin[0]),
+        'ZYX',
+      );
       transform.scale.set(o.width + 0.08, o.depth + 0.08, 0.09);
       transform.updateMatrix();
       housings.setMatrixAt(i, transform.matrix);
-      transform.position.z -= 0.052;
+      // Offset out of the housing along the fitting's own face: downward for ceiling panels,
+      // horizontally into the pool for wall-mounted submerged fittings.
+      transform.translateZ(-0.052);
       transform.scale.set(o.width, o.depth, 0.018);
       transform.updateMatrix();
       this.emitters.setMatrixAt(i, transform.matrix);

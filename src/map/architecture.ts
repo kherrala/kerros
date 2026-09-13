@@ -251,12 +251,14 @@ export function makeFixture(
     [x, y] = projectXY(o.position),
     direction = rotate([1, 0], o.rotation),
     along = projectXY([o.position[0] + direction[0], o.position[1] + direction[1]]);
-  group.position.set(x, y, z);
+  group.position.set(x, y, z + (o.baseHeight ?? 0));
   group.rotation.z = Math.atan2(along[1] - y, along[0] - x);
   const w = o.width,
     d = o.depth,
     h = o.height,
-    paint = materials.solid(o.color ?? '#ddd7c8', o.model === 'car' ? 0.3 : 0.72),
+    paint = o.material
+      ? materials.get(o.material, o.color ?? '#f2f3ef')
+      : materials.solid(o.color ?? '#ddd7c8', o.model === 'car' ? 0.3 : 0.72),
     wood = materials.get('oak', '#bca27e'),
     white = materials.solid('#f1eee6'),
     dark = materials.solid('#3b4240'),
@@ -502,6 +504,20 @@ export function makeFixture(
       box(car, 0.07, W * 0.2, H * 0.07, -nose + 0.01, y * W * 0.27, H * 0.58, tail);
     }
     box(car, 0.05, W * 0.26, 0.11, -nose + 0.01, 0, H * 0.25, white);
+  } else if (o.model === 'vent') {
+    const radius = Math.min(w, d) * 0.4;
+    const pipe = new THREE.CatmullRomCurve3([
+      new THREE.Vector3(0, d * 0.1, h),
+      new THREE.Vector3(0, -d * 0.45, h),
+      new THREE.Vector3(0, -d * 0.7, h - radius),
+      new THREE.Vector3(0, -d * 0.7, h - radius * 1.8),
+    ]);
+    const duct = new THREE.Mesh(new THREE.TubeGeometry(pipe, 16, radius, 14, false), materials.metal('#394f48'));
+    group.add(duct);
+    const mouth = new THREE.Mesh(new THREE.CircleGeometry(radius * 0.94, 14), materials.solid('#172722'));
+    mouth.position.set(0, -d * 0.7, h - radius * 1.8);
+    mouth.rotation.x = Math.PI;
+    group.add(mouth);
   } else if (o.model === 'chimney') {
     box(group, w, d, h, 0, 0, 0, materials.get('brick', o.color ?? '#c0b8a7'));
     box(group, w + 0.16, d + 0.16, 0.12, 0, 0, h, metal);

@@ -20,8 +20,95 @@ import {
   pointInRing,
   rectangle,
   segmentProjection,
+  snapPoint,
 } from './geometry';
 import type { Point, ProjectDocument, Ring } from './types';
+
+/** A drag snaps in the geometry's frame. Rounding x/y independently moves an imported wall's
+ * junction off its centreline, even when the pointer follows that centreline exactly. */
+export function snapDragPoint(
+  project: ProjectDocument,
+  floorId: string | null,
+  kind: 'junction' | 'barrier' | 'ring',
+  id: string,
+  raw: Point,
+  snapping: boolean,
+  tolerance: number,
+): Point {
+  if (kind === 'barrier') {
+    const wall = boundaryEdges(project).find(b => b.id === id);
+    if (!wall) return raw;
+    const [a, b] = barrierEnds(project, wall),
+      length = distance(a, b);
+    const nx = -(b[1] - a[1]) / length,
+      ny = (b[0] - a[0]) / length;
+    let slide = (raw[0] - (a[0] + b[0]) / 2) * nx + (raw[1] - (a[1] + b[1]) / 2) * ny;
+    if (snapping) {
+      const desired = slide;
+      let best = tolerance,
+        held: number | undefined;
+      const axis = mainAxis(project, floorId);
+      const angles = [axisOf(a, b), ...Array.from({ length: 12 }, (_, i) => axis + i * 15)];
+      // Solve the wall's normal displacement for each neighbouring segment's alignment.
+      // The neighbours' remote ends stay fixed; their shared ends move with this wall.
+      for (const other of boundaryEdges(project)) {
+        if (other.id === wall.id) continue;
+        const moving = [other.startId, other.endId].find(j => j === wall.startId || j === wall.endId);
+        const fixedId = [other.startId, other.endId].find(j => j !== wall.startId && j !== wall.endId);
+        if (!moving || !fixedId) continue;
+        const at = moving === wall.startId ? a : b;
+        const fixed = project.junctions.find(j => j.id === fixedId)!.position;
+        for (const angle of angles) {
+          const ux = Math.cos((angle * Math.PI) / 180),
+            uy = Math.sin((angle * Math.PI) / 180);
+          const denominator = nx * uy - ny * ux;
+          if (Math.abs(denominator) < 1e-6) continue;
+          const offset = ((fixed[0] - at[0]) * uy - (fixed[1] - at[1]) * ux) / denominator;
+          const error = Math.abs(offset - desired);
+          if (error < best) {
+            best = error;
+            held = offset;
+          }
+        }
+      }
+      slide = held ?? Math.round(slide * 2) / 2;
+    }
+    return [(a[0] + b[0]) / 2 + nx * slide, (a[1] + b[1]) / 2 + ny * slide];
+  }
+  if (!snapping) return raw;
+  if (kind !== 'junction') return [Math.round(raw[0] * 2) / 2, Math.round(raw[1] * 2) / 2];
+  const incident = boundaryEdges(project).filter(b => b.startId === id || b.endId === id);
+  const incoming = new Set(incident.map(b => b.id));
+  const others = {
+    ...project,
+    junctions: project.junctions.filter(j => j.id !== id),
+    barriers: project.barriers.filter(b => !incoming.has(b.id)),
+    virtualBoundaries: project.virtualBoundaries?.filter(b => !incoming.has(b.id)),
+  };
+  // Receiving junctions and walls take priority over the grid. Do not snap onto the point being
+  // dragged or weld it back onto one of its own changing segments.
+  const nearby = snapPoint(others, floorId, raw, tolerance, undefined, false);
+  if (nearby.label) return nearby.point;
+  let best = tolerance,
+    aligned: Point | undefined;
+  for (const wall of incident) {
+    const [a, b] = barrierEnds(project, wall),
+      dx = b[0] - a[0],
+      dy = b[1] - a[1];
+    const t = ((raw[0] - a[0]) * dx + (raw[1] - a[1]) * dy) / (dx * dx + dy * dy);
+    const at: Point = [a[0] + t * dx, a[1] + t * dy];
+    const d = distance(raw, at);
+    if (d < best) {
+      best = d;
+      aligned = at;
+    }
+  }
+  if (aligned) return aligned;
+  const neighbour = incident
+    .map(b => project.junctions.find(j => j.id === (b.startId === id ? b.endId : b.startId))!)
+    .sort((a, b) => distance(raw, a.position) - distance(raw, b.position))[0];
+  return snapPoint(others, floorId, raw, tolerance, neighbour?.position, true, mainAxis(project, floorId)).point;
+}
 
 /** A segment's direction as an *axis* in [0, 180). A wall and the same wall drawn backwards describe
  *  one line, so 10° and 190° have to compare equal or half of every alignment test misses. */

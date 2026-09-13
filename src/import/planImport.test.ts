@@ -2,11 +2,14 @@ import { describe, expect, it } from 'vitest';
 import { bridgeDoorways, importPlanEntities, type PlanEntity } from './planImport';
 import {
   addBarrier,
+  boundaryEdges,
+  followsBoundaries,
   MIN_SEGMENT,
   enclosedRegions,
   flights,
   primaryShafts,
   servedFloors,
+  transact,
   validateProject,
   type Point,
 } from '../schema';
@@ -72,6 +75,42 @@ describe('deterministic plan import', () => {
     const { p } = imported();
     expect(() => validateProject(structuredClone(p))).not.toThrow();
   });
+  it('shares the partition in opposite directions and updates both rooms when it thickens', () => {
+    const { p } = imported();
+    const rooms = p.objects.filter(o => o.kind === 'room');
+    expect(rooms.every(followsBoundaries)).toBe(true);
+    const partition = p.barriers.find(b => b.name === 'Partition')!;
+    const uses = rooms.map(
+      o => o.geometry?.mode === 'boundaries' && o.geometry.loops.flat().find(u => u.edgeId === partition.id),
+    );
+    expect(uses.every(Boolean)).toBe(true);
+    expect(!!(uses[0] && uses[0].reversed)).not.toBe(!!(uses[1] && uses[1].reversed));
+    const changed = transact(p, draft => {
+      draft.barriers.find(b => b.id === partition.id)!.thickness += 0.2;
+    });
+    expect(changed.ok).toBe(true);
+    if (!changed.ok) throw new Error(changed.error);
+    for (const room of rooms) {
+      const updated = changed.project.objects.find(o => o.id === room.id)!;
+      expect(updated.name).toBe(room.name);
+      expect(updated.width).toBeCloseTo(room.width - 0.1, 4);
+    }
+    expect(() => validateProject(JSON.parse(JSON.stringify(changed.project)))).not.toThrow();
+  });
+  it('regenerates imported space caches after registering the whole plan onto a new origin', () => {
+    const { p } = imported();
+    const changed = transact(p, draft => {
+      for (const j of draft.junctions) j.position = [j.position[0] - 4.12345, j.position[1] - 3.54321];
+    });
+    expect(changed.ok).toBe(true);
+    if (!changed.ok) throw new Error(changed.error);
+    for (const old of p.objects.filter(o => o.kind === 'room')) {
+      const room = changed.project.objects.find(o => o.id === old.id)!;
+      expect(room.position[0]).toBeCloseTo(old.position[0] - 4.12345, 3);
+      expect(room.position[1]).toBeCloseTo(old.position[1] - 3.54321, 3);
+    }
+    expect(() => validateProject(JSON.parse(JSON.stringify(changed.project)))).not.toThrow();
+  });
   it('names each room after the label standing in it, ignoring area figures', () => {
     const { p } = imported();
     const names = p.objects
@@ -114,6 +153,9 @@ describe('deterministic plan import', () => {
       expect(Math.hypot(z[0] - a[0], z[1] - a[1])).toBeGreaterThanOrEqual(MIN_SEGMENT - 1e-6);
     }
     expect(report.rooms).toBe(4);
+    expect(
+      p.barriers.some(b => Math.hypot(at(b.endId)[0] - at(b.startId)[0], at(b.endId)[1] - at(b.startId)[1]) < 0.5),
+    ).toBe(true);
     // The central doorway still found a piece to sit in.
     expect(report.doors).toBe(2);
   });
@@ -127,9 +169,29 @@ describe('deterministic plan import', () => {
     expect(report.passages).toBe(1);
     expect(report.doors).toBe(1); // the entrance keeps its leaf
     expect(p.barriers.filter(b => b.name === 'Partition')).toHaveLength(2);
+    expect(p.objects.filter(o => o.kind === 'room')).toHaveLength(2);
+    const [boundary] = p.virtualBoundaries!;
+    expect(p.virtualBoundaries).toHaveLength(1);
+    const uses = p.objects.flatMap(o =>
+      o.geometry?.mode === 'boundaries' ? o.geometry.loops.flat().filter(u => u.edgeId === boundary.id) : [],
+    );
+    expect(uses).toHaveLength(2);
+    expect(!!uses[0].reversed).not.toBe(!!uses[1].reversed);
+    expect(() => validateProject(p)).not.toThrow();
     // The rooms connect through the open boundary, read back as a portal.
     const rooms = new Set(p.objects.filter(o => o.kind === 'room').map(o => o.id));
     expect((p.portals ?? []).some(x => rooms.has(x.a) && rooms.has(x.b))).toBe(true);
+  });
+  it('keeps shared virtual junctions when another sheet is imported', () => {
+    const p = newProject();
+    const entities = HOUSE.filter(e => !(e.layer === '27_OVET' && e.type === 'ARC'));
+    importPlanEntities(p, structuredClone(entities), { floorId: 'floor-ground' });
+    const junctions = boundaryEdges(p).flatMap(e => [e.startId, e.endId]);
+    p.floors.push({ ...p.floors[0], id: 'upper', elevation: 4 });
+    importPlanEntities(p, structuredClone(HOUSE), { floorId: 'upper' });
+    expect(junctions.every(id => p.junctions.some(j => j.id === id))).toBe(true);
+    expect(p.objects.filter(o => o.kind === 'room').every(followsBoundaries)).toBe(true);
+    expect(() => validateProject(p)).not.toThrow();
   });
 });
 

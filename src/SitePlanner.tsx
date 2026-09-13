@@ -72,13 +72,14 @@ import {
   removeFloor,
   objectArea,
   objectPosition,
+  openRing,
   pointInRing,
   rectangle,
   snapPoint,
   splitRoom,
   toLngLat,
 } from './model/geometry';
-import { fitOpening, mainAxis, proposeWall, type OpeningFit, type WallProposal } from './model/walls';
+import { fitOpening, mainAxis, proposeWall, snapDragPoint, type OpeningFit, type WallProposal } from './model/walls';
 import { mergeSpaces, spacesRejoinedBy } from './model/inference';
 import { addBoundaryHole, addVirtualBoundary, boundaryEdges, boundaryRegionAt, connectSpace } from './model/boundaries';
 import { pruneOntology } from './model/ontology';
@@ -90,7 +91,7 @@ import { transformObject } from './model/project';
 import { commitHistory, makeHistory, redoHistory, undoHistory } from './model/history';
 import { exportProject } from './adapters/persistence';
 import { transact } from './model/validate';
-import { appendAreaPoint, dragGeometry, drawBarrier, encloseRoom } from './model/authoring';
+import { appendAreaPoint, dragGeometry, drawBarrier, encloseRoom, type GeometryDrag } from './model/authoring';
 import { useProjectPersistence } from './adapters/useProjectPersistence';
 import { neutralBasemap } from './adapters/basemap';
 import { openingFloorId } from './model/project';
@@ -909,6 +910,30 @@ export function SitePlanner({
       },
     ];
   }, [editing, threeD, tool, proposal, openingFit, draft, hover, held]);
+  const dragPreview = useRef<{ source: ProjectDocument; key: string; project: ProjectDocument; point: Point } | null>(
+    null,
+  );
+  function geometryPreview(kind: GeometryDrag['kind'], id: string, raw: Point, ringIndex = 0, index = 0, free = false) {
+    const key = JSON.stringify([kind, id, raw, ringIndex, index, free, snapping, toleranceRef.current]);
+    if (dragPreview.current?.source === project && dragPreview.current.key === key) return dragPreview.current;
+    const point = snapDragPoint(project, floorId, kind, id, raw, snapping && !free, toleranceRef.current);
+    const next = dragGeometry(
+      project,
+      floorId,
+      kind === 'ring' ? { kind, id, point, ringIndex, index } : { kind, id, point },
+    );
+    let actual = point;
+    if (kind === 'junction') actual = next.junctions.find(j => j.id === id)?.position ?? point;
+    else if (kind === 'ring') actual = openRing(next.objects.find(o => o.id === id)!.rings![ringIndex])[index];
+    else {
+      const wall = boundaryEdges(next).find(b => b.id === id);
+      if (wall) {
+        const [a, b] = barrierEnds(next, wall);
+        actual = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+      }
+    }
+    return (dragPreview.current = { source: project, key, project: next, point: actual });
+  }
   function vertexMove(
     kind: 'junction' | 'ring' | 'object' | 'barrier' | 'node' | 'opening' | 'rotate' | 'coverage',
     id: string,
@@ -977,22 +1002,7 @@ export function SitePlanner({
       return;
     }
     if (!editing) return;
-    let destination = point;
-    if (kind === 'barrier') {
-      const wall = boundaryEdges(project).find(b => b.id === id)!;
-      const [a, b] = barrierEnds(project, wall);
-      const length = distance(a, b);
-      const nx = -(b[1] - a[1]) / length,
-        ny = (b[0] - a[0]) / length;
-      let slide = (raw[0] - (a[0] + b[0]) / 2) * nx + (raw[1] - (a[1] + b[1]) / 2) * ny;
-      if (grid) slide = Math.round(slide * 2) / 2;
-      destination = [(a[0] + b[0]) / 2 + nx * slide, (a[1] + b[1]) / 2 + ny * slide];
-    }
-    const next = dragGeometry(
-      project,
-      floorId,
-      kind === 'ring' ? { kind, id, point: destination, ringIndex, index } : { kind, id, point: destination },
-    );
+    const next = geometryPreview(kind, id, raw, ringIndex, index, free).project;
     if (next !== project) setHistory(current => commitHistory(current, next));
   }
   /** Write the derived graph into the document, so it can be edited.
@@ -1845,6 +1855,10 @@ export function SitePlanner({
               onHover={onHover}
               onSelect={id => select(id)}
               onVertexMove={vertexMove}
+              onVertexPreview={(kind, id, point, ring, vertex, free) =>
+                geometryPreview(kind, id, point, ring, vertex, free).point
+              }
+              snapping={snapping}
               onError={notify}
               route={route}
               activeStep={playStep}

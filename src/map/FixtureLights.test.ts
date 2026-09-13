@@ -7,6 +7,27 @@ import { MaterialLibrary } from './materials';
 import { FixtureLights, fixtureOutput, MAX_FIXTURE_LIGHTS, SHADOWED_FIXTURE_LIGHTS } from './FixtureLights';
 
 describe('light fixtures', () => {
+  it.each([0, 180])('mounts underwater fixtures facing into the basin at %d degrees', rotation => {
+    const scene = new THREE.Scene(),
+      materials = new MaterialLibrary();
+    const lamp = createObject('light', [0, 0], 'floor-pool');
+    lamp.rotation = rotation;
+    lamp.light = { kelvin: 5600, intensity: 95, range: 12, mountHeight: -0.7 };
+    const fixtures = new FixtureLights(scene, [lamp], p => p, 0.33, materials);
+    fixtures.update(new THREE.Vector3(0, 1, 2.03), 0);
+    const light = scene.children.find(o => o instanceof THREE.PointLight) as THREE.PointLight;
+    expect(light.position.z).toBeCloseTo(0.33 - 0.7 - 0.12);
+    expect(light.intensity).toBe(95);
+    expect(light.distance).toBe(12);
+    const panels = scene.children.filter(o => o instanceof THREE.InstancedMesh);
+    const emitter = new THREE.Matrix4();
+    panels[1].getMatrixAt(0, emitter);
+    const at = new THREE.Vector3().setFromMatrixPosition(emitter);
+    expect(at.z).toBeCloseTo(0.33 - 0.7);
+    expect(at.y).toBeCloseTo(-0.052 * Math.cos((rotation * Math.PI) / 180));
+    expect(Math.abs(at.y)).toBeGreaterThan(0.045); // the luminous face clears its housing
+    materials.dispose();
+  });
   it('keeps hundreds of fittings within a fixed shadow and draw budget', () => {
     const scene = new THREE.Scene(),
       materials = new MaterialLibrary();
@@ -37,7 +58,14 @@ describe('light fixtures', () => {
     const lamp = createObject('light', [0, 0], p.floors[0].id);
     p.objects.push(lamp);
     expect(() => validateProject(JSON.parse(JSON.stringify(p)))).not.toThrow();
-    for (const patch of [{ range: 0 }, { intensity: -1 }, { kelvin: 900 }, { flicker: 2 }]) {
+    for (const patch of [
+      { range: 0 },
+      { intensity: -1 },
+      { kelvin: 900 },
+      { flicker: 2 },
+      { mountHeight: NaN },
+      { mountHeight: -30 },
+    ]) {
       const invalid = structuredClone(p);
       invalid.objects[0].light = { ...lamp.light!, ...patch };
       expect(() => validateProject(invalid)).toThrow(/light/);

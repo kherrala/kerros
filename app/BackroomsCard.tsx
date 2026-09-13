@@ -49,8 +49,8 @@ export function BackroomsCard({ onOpen }: { onOpen: (options: BackroomsOptions) 
         ))}
         <path d={walls} fill="none" stroke="#665b35" strokeWidth="0.085" />
       </svg>
-      <strong>The Backrooms · Offices</strong>
-      <p>Three vast office levels. Yellow wallpaper, worn carpet, fluorescent light, and a maze of connected rooms.</p>
+      <strong>The Backrooms · Offices & pools</strong>
+      <p>Endless offices, vast open galleries and tiled bath levels with clear pools and winding water slides.</p>
       <label className="backrooms-field">
         Layout seed
         <span className="backrooms-seed">
@@ -73,7 +73,7 @@ export function BackroomsCard({ onOpen }: { onOpen: (options: BackroomsOptions) 
           <option value={36}>216 × 216 m</option>
         </select>
       </label>
-      <span className="backrooms-count">{layout.rooms.length} rooms on Level 0 · 3 office levels</span>
+      <span className="backrooms-count">{layout.rooms.length} rooms on Level 0 · 3 office levels · 2 bath levels</span>
       <button className="button primary" type="submit" disabled={busy}>
         {busy ? 'Generating…' : 'Open offices'}
         <ArrowRight size={15} />

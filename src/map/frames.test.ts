@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { LIFT, rampJoins, rampVoids, sceneElevation, sceneGround, SLAB, shellPlate, walkSoffit } from './SceneLayer';
+import {
+  LIFT,
+  rampJoins,
+  rampVoids,
+  sceneElevation,
+  sceneGround,
+  SLAB,
+  shellPlate,
+  walkSoffit,
+  walkCeiling,
+} from './SceneLayer';
 import { EYE } from './walk';
 import { createDemo } from '../../app/demo/demo';
 import { ringArea } from '../model/geometry';
@@ -36,6 +46,25 @@ describe('one frame for everything', () => {
 });
 
 describe('the walked ceiling', () => {
+  it('uses the surrounding hall roof when walking either mezzanine', () => {
+    for (const [gallery, host] of [
+      ['floor-entresol', 'floor-ground'],
+      ['floor-b1a', 'floor-basement'],
+    ]) {
+      const ceiling = walkCeiling(demo, gallery)!;
+      expect(ceiling.floor.id).toBe(host);
+      expect(ceiling.soffit).toBeCloseTo(floor(host).elevation + floor(host).height - floor(gallery).elevation + LIFT);
+      expect(ceiling.soffit).toBeGreaterThan(LIFT + SLAB + EYE);
+    }
+  });
+
+  it('keeps an ordinary underground floor and an unhosted gallery on their own roof', () => {
+    expect(walkCeiling(demo, 'floor-p1')!.floor.id).toBe('floor-p1');
+    const p = newProject();
+    p.floors[0].mezzanine = true;
+    expect(walkCeiling(p, p.floors[0].id)!.floor.id).toBe(p.floors[0].id);
+  });
+
   it('sits at the storey underside, so fixtures authored to the storey clear it', () => {
     const garage = floor('floor-p1'); // 3.4 m, with 3.1 m luminaires and 4.2 m pillars under it
     expect(walkSoffit(0, garage.height)).toBeCloseTo(garage.height + LIFT);
