@@ -2,11 +2,33 @@ import { describe, expect, it } from 'vitest';
 import { addBarrier, barrierEnds, distance, rotate, type Point } from '../schema';
 import { newProject } from './testFixtures';
 import { snapDragPoint } from './walls';
-import { dragGeometry } from './authoring';
+import { applyGeometryDrag, dragGeometry } from './authoring';
+import { transact, validateProject } from './validate';
 
 const at = (x: number, y: number, angle = 17): Point => rotate([x + 0.13, y + 0.27], angle);
 
 describe('snapping connected geometry while dragging', () => {
+  it('rejects an invalid released drop atomically, then accepts the next drop', () => {
+    const p = newProject();
+    const wall = addBarrier(p, [0, 0], [3, 0], 'floor-ground', 'wall')!;
+    const original = structuredClone(p);
+    // Snapping deliberately permits the invalid preview. Only release enters the transaction.
+    const point = snapDragPoint(p, 'floor-ground', 'junction', wall.endId, [0.001, 0], true, 0.1);
+    expect(point).toEqual([0, 0]);
+    const rejected = transact(p, draft => applyGeometryDrag(draft, { kind: 'junction', id: wall.endId, point }));
+    expect(rejected.ok).toBe(false);
+    expect(p).toEqual(original);
+    const accepted = transact(p, draft =>
+      applyGeometryDrag(draft, { kind: 'junction', id: wall.endId, point: [4, 0] }),
+    );
+    expect(accepted.ok).toBe(true);
+    if (!accepted.ok) throw new Error(accepted.error);
+    expect(barrierEnds(accepted.project, accepted.project.barriers[0])).toEqual([
+      [0, 0],
+      [4, 0],
+    ]);
+    expect(() => validateProject(accepted.project)).not.toThrow();
+  });
   it('keeps a junction on its original oblique centreline instead of rounding its x/y', () => {
     const p = newProject();
     addBarrier(p, at(0, 0), at(4, 0), 'floor-ground', 'wall');

@@ -452,6 +452,53 @@ export function Inspector(props: Props) {
                     {number('Depth', object.depth, 'depth')}
                   </div>
                 )}
+                {object.kind === 'door' && (
+                  <>
+                    <label className="field">
+                      <span>Door type</span>
+                      <select
+                        value={object.doorType ?? 'hinged'}
+                        disabled={!editing}
+                        onChange={e => update({ doorType: e.target.value as NonNullable<SiteObject['doorType']> })}
+                      >
+                        <option value="hinged">Hinged door</option>
+                        <option value="sliding">Sliding door</option>
+                        <option value="double">Double-leaf door</option>
+                      </select>
+                    </label>
+                    <div className="field-grid">
+                      <label className="field">
+                        <span>{object.doorType === 'sliding' ? 'Slide direction' : 'Door hinge'}</span>
+                        <select
+                          value={object.doorHinge ?? 'left'}
+                          disabled={!editing || object.doorType === 'double'}
+                          onChange={e => update({ doorHinge: e.target.value as 'left' | 'right' })}
+                        >
+                          <option value="left">{object.doorType === 'sliding' ? 'Left' : 'Left-handed'}</option>
+                          <option value="right">{object.doorType === 'sliding' ? 'Right' : 'Right-handed'}</option>
+                        </select>
+                      </label>
+                      <label className="field">
+                        <span>Opening side</span>
+                        <select
+                          value={object.doorSwing ?? 1}
+                          disabled={!editing}
+                          onChange={e => update({ doorSwing: Number(e.target.value) as 1 | -1 })}
+                        >
+                          <option value={1}>Side A</option>
+                          <option value={-1}>Side B</option>
+                        </select>
+                      </label>
+                    </div>
+                    <small>
+                      {object.doorType === 'sliding'
+                        ? 'Slides along the wall on the selected side. Left is toward the wall’s start; right toward its end.'
+                        : object.doorType === 'double'
+                          ? 'Two leaves hinge at opposite jambs and open to the selected side.'
+                          : 'Left hinges at the wall’s start; right at its end. Drag across the wall to change the opening side.'}
+                    </small>
+                  </>
+                )}
                 {portal && (
                   <label className="field">
                     <span>Passage</span>

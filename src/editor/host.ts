@@ -12,6 +12,7 @@ export type { ProjectRepository, AssetRepository, Tool } from '../model/types';
 export type { StatusFeed, StatusReading, StatusMetrics, StatusTone } from '../model/live';
 export type {
   SitePlannerProps,
+  ElevatorControls,
   PlannerAdapters,
   BasemapConfig,
   BasemapVectorSchema,

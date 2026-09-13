@@ -475,3 +475,15 @@ describe('easing the head round', () => {
     expect(h).toBeCloseTo(95, 6);
   });
 });
+
+it('collides with the closing face of open wall polygons, including cabin walls', () => {
+  const polygon: Ring = [
+    [-2, -0.1],
+    [2, -0.1],
+    [2, 0.1],
+    [-2, 0.1],
+  ];
+  const at = walk([-3, 0], [0, 0], [polygon]);
+  expect(at[0]).toBeCloseTo(-2 - BODY, 3);
+  expect(Math.abs(at[1])).toBeLessThan(1e-6);
+});

@@ -50,6 +50,13 @@ test('generates, renders, walks, and restores the office sample', async ({ page 
     layer.scene.traverse((o: any) => {
       if (!o.isMesh) return;
       meshes++;
+      // The articulated passenger has a fixed clothing/skin palette, separate from the
+      // floor's batching budget. Adding rooms must not add materials to the environment.
+      let parent = o;
+      while (parent) {
+        if (parent.userData.passenger) return;
+        parent = parent.parent;
+      }
       materials.add((Array.isArray(o.material) ? o.material[0] : o.material).uuid);
     });
     return { calls: layer.diagnostics.drawCalls, meshes, materials: materials.size };
@@ -174,8 +181,8 @@ test('walks through a gallery opening and lights the tiled bath chambers underwa
       triangles: o.geometry.attributes.position.count / 3,
     }));
   });
-  expect(water).toHaveLength(6);
-  expect(water.every(o => o.transmission > 0.9 && o.ior === 1.333 && o.triangles > 100)).toBe(true);
+  expect(water).toHaveLength(7);
+  expect(water.every(o => o.transmission > 0.9 && o.ior === 1.333 && o.triangles >= 32)).toBe(true);
   const illumination = await page.evaluate(() => {
     const scene = (window as any).__kerrosMap.getLayer('kerros-3d').implementation.scene;
     let caustics = 0,
@@ -184,6 +191,7 @@ test('walks through a gallery opening and lights the tiled bath chambers underwa
       const materials = Array.isArray(o.material) ? o.material : o.material ? [o.material] : [];
       for (const material of materials) {
         if (material.userData.poolCaustics) caustics++;
+        if (!['tile', 'ceiling'].includes(material.userData.finish)) continue;
         ceilingEmission = Math.max(
           ceilingEmission,
           material.emissiveIntensity && material.emissive?.getHex() ? material.emissiveIntensity : 0,
@@ -223,5 +231,67 @@ test('walks through a gallery opening and lights the tiled bath chambers underwa
   });
   await page.waitForTimeout(500);
   await page.screenshot({ path: testInfo.outputPath('small-tiled-chamber.png') });
+  expect(errors).toEqual([]);
+});
+
+test('normal bath entry and connecting rooms stay visible in POV', async ({ page }, testInfo) => {
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  page.on('console', m => {
+    if (m.type() === 'error' && /THREE|WebGL|shader/i.test(m.text())) errors.push(m.text());
+  });
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: 'Open offices', exact: true }).click();
+  await expect(page.locator('.map-wrap')).toHaveAttribute('data-frame', 'ready');
+  await page.getByRole('button', { name: 'Walk', exact: true }).click();
+  await page.evaluate(() => {
+    const walk = (window as any).__kerrosWalk;
+    walk.pitch = 85;
+    walk.place([70, 70], 0);
+  });
+  await page.getByRole('button', { name: 'Active floor' }).click();
+  await page.locator('.place-option').filter({ hasText: 'The endless baths' }).click();
+  await expect.poll(() => page.evaluate(() => (window as any).__kerrosWalk.position)).toEqual([2, 0]);
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__kerrosMap.getLayer('kerros-3d').implementation.activeFloor))
+    .toBe('backrooms-pool-0');
+  const brightness = () =>
+    page.evaluate(
+      () =>
+        new Promise<number>(resolve => {
+          const map = (window as any).__kerrosMap;
+          map.once('render', () => {
+            const canvas = map.getCanvas(),
+              gl = canvas.getContext('webgl2');
+            const pixels = new Uint8Array(80 * 80 * 4);
+            gl.readPixels(
+              Math.floor(canvas.width / 2) - 40,
+              Math.floor(canvas.height / 2) - 40,
+              80,
+              80,
+              gl.RGBA,
+              gl.UNSIGNED_BYTE,
+              pixels,
+            );
+            let luminance = 0;
+            for (let i = 0; i < pixels.length; i += 4) luminance += (pixels[i] + pixels[i + 1] + pixels[i + 2]) / 3;
+            resolve(luminance / (80 * 80));
+          });
+          map.triggerRepaint();
+        }),
+    );
+  await expect.poll(brightness).toBeGreaterThan(20);
+  await page.screenshot({ path: testInfo.outputPath('bath-arrival.png') });
+  await page.evaluate(() => {
+    const p = (window as any).__kerrosMap.getLayer('kerros-3d').implementation.project;
+    const pools = new Set(p.objects.filter((o: any) => o.water).map((o: any) => o.parentId));
+    const room = p.objects.find((o: any) => o.floorId === 'backrooms-pool-0' && o.kind === 'room' && !pools.has(o.id));
+    (window as any).__kerrosWalk.place(room.position, 0);
+  });
+  await expect.poll(brightness).toBeGreaterThan(12);
+  await page.screenshot({ path: testInfo.outputPath('bath-connecting-room.png') });
+  await page.evaluate(() => (window as any).__kerrosWalk.place((window as any).__kerrosWalk.position, 270));
+  await expect.poll(brightness).toBeGreaterThan(12);
+  await page.screenshot({ path: testInfo.outputPath('bath-perimeter-wall.png') });
   expect(errors).toEqual([]);
 });

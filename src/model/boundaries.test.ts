@@ -376,3 +376,38 @@ describe('shared space boundaries', () => {
     expect(boundaryRegions(p, floor)).toHaveLength(edges.length - vertices.size + components);
   });
 });
+
+import { drawVirtualBoundary } from './boundaries';
+
+describe('drawing an open wall passage', () => {
+  it.each([0, 37, 90])('cuts just the covered span and keeps both rooms at %s degrees', angle => {
+    const at = (q: [number, number]) => rotate(q, angle);
+    const p = edit(shell(angle), d => drawBarrier(d, floor, at([0, -4]), at([0, 4])));
+    const ids = p.objects.map(o => o.id);
+    const next = edit(p, d => drawVirtualBoundary(d, floor, at([0, 1]), at([0, -1])));
+    expect(next.objects.map(o => o.id)).toEqual(ids);
+    expect(next.virtualBoundaries).toHaveLength(1);
+    expect(distance(...barrierEnds(next, next.virtualBoundaries![0]))).toBeCloseTo(2);
+    expect(next.barriers).toHaveLength(p.barriers.length + 1);
+    expect(next.objects.reduce((a, o) => a + objectArea(o), 0)).toBeGreaterThan(
+      p.objects.reduce((a, o) => a + objectArea(o), 0),
+    );
+    const history = commitHistory(makeHistory(p), next);
+    expect({ ...undoHistory(history).present, updatedAt: p.updatedAt }).toEqual(p);
+  });
+  it('removes a wholly covered door, but refuses a cut through part of a door atomically', () => {
+    const p = edit(shell(), d => {
+      const wall = drawBarrier(d, floor, [0, -4], [0, 4])!;
+      const door = createObject('door', [0, 0], floor);
+      Object.assign(door, { barrierId: wall.id, offset: 4, width: 1 });
+      d.objects.push(door);
+    });
+    const before = JSON.stringify(p);
+    const rejected = transact(p, d => drawVirtualBoundary(d, floor, [0, 0], [0, 2]));
+    expect(rejected.ok).toBe(false);
+    expect(JSON.stringify(p)).toBe(before);
+    const next = edit(p, d => drawVirtualBoundary(d, floor, [0, -1], [0, 1]));
+    expect(next.objects.some(o => o.kind === 'door')).toBe(false);
+    expect(next.objects.filter(o => o.kind === 'room')).toHaveLength(2);
+  });
+});

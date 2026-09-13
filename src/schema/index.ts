@@ -73,6 +73,7 @@ export {
   connectSpace,
   disconnectSpace,
   addVirtualBoundary,
+  drawVirtualBoundary,
   addBoundaryHole,
   normalizeBoundaries,
   refreshBoundarySpaces,
@@ -141,7 +142,7 @@ export {
   DOOR_COST,
   NAV_WELD,
 } from '../model/navigation';
-export type { Route, RouteStep, RouteLeg } from '../model/navigation';
+export type { Route, RouteStep, RouteLeg, RouteOptions } from '../model/navigation';
 
 export { EXTERIOR_PRESETS, type ExteriorPreset } from '../model/materials';
 
@@ -161,3 +162,6 @@ export {
   span,
   type Flight,
 } from '../model/vertical';
+
+export { buildRoomNavigation } from '../model/roomNavigation';
+export type { RoomAccess, RoomNavigationGraph } from '../model/roomNavigation';

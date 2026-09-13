@@ -4,15 +4,15 @@ const DEMO = 'https://kherrala.fi/kerros';
 
 export default defineConfig({
   title: 'Kerros',
-  description: 'Open-source React + MapLibre + Three.js toolkit for indoor mapping — model and visualize multi-floor premises in 2D and 3D.',
+  description: 'Open-source indoor mapping: draw connected floor plans, explore in 3D and POV, and navigate between floors.',
   base: '/kerros/',
   cleanUrls: false, // Support static hosts without extensionless-URL rewrites.
   lastUpdated: true,
   markdown: { math: true },
   head: [
-    ['meta', { name: 'theme-color', content: '#0e7c7b' }],
+    ['meta', { name: 'theme-color', content: '#f7f7f2' }],
     ['meta', { property: 'og:title', content: 'Kerros — indoor mapping toolkit' }],
-    ['meta', { property: 'og:description', content: 'Model and visualize multi-floor premises on real map geometry, in 2D and 3D.' }],
+    ['meta', { property: 'og:description', content: 'Draw connected spaces on real maps. Explore buildings and navigate between floors.' }],
   ],
   themeConfig: {
     nav: [

@@ -1,0 +1,218 @@
+<div class="landing">
+  <a class="lp-skip" href="#main">Skip to content</a>
+  <header class="lp-nav">
+    <a class="lp-brand" href="./" aria-label="Kerros home"
+      ><span class="lp-mark" aria-hidden="true">▱<span>▱</span><span>▱</span></span>kerros<span class="lp-wordmark-note"
+        >SPACES, CONNECTED.</span
+      ></a
+    >
+    <nav aria-label="Main navigation">
+      <a href="#showcases">Watch</a><a href="./guide/getting-started.html">Documentation</a
+      ><a href="https://github.com/kherrala/kerros">GitHub ↗</a>
+    </nav>
+    <div class="lp-nav-actions">
+      <button class="lp-theme" type="button" aria-label="Switch color theme">◐</button
+      ><a class="lp-button lp-small" href="./app.html">Open editor <span aria-hidden="true">↗</span></a>
+    </div>
+  </header>
+  <main id="main">
+    <section class="lp-hero" aria-labelledby="lp-title">
+      <p class="lp-eyebrow"><span></span> OPEN SOURCE · INDOOR MAPPING</p>
+      <h1 id="lp-title">A floor plan you<br>can <em>walk through.</em></h1>
+      <div class="lp-hero-bottom">
+        <p>
+          Draw connected spaces on a real map. Explore the building in 3D. Find your way from one floor to the next.
+        </p>
+        <div class="lp-actions">
+          <a class="lp-button" href="./app.html">Start building <span aria-hidden="true">↗</span></a
+          ><a class="lp-text-link" href="#showcases">See it in motion <span aria-hidden="true">↓</span></a>
+        </div>
+      </div>
+      <div class="lp-platform">
+        <span>Built with React, MapLibre & Three.js</span><span>Metric geometry</span><span>Portable JSON</span
+        ><span>MIT licensed</span>
+      </div>
+    </section>
+    <section id="showcases" class="lp-showcases" aria-labelledby="lp-showcase-title">
+      <div class="lp-section-head">
+        <p class="lp-eyebrow">THE WORKFLOW</p>
+        <h2 id="lp-showcase-title">Draw it. Explore it. Find your way.</h2>
+        <p>Three recordings from the working editor. Play at your own pace.</p>
+      </div>
+      <article class="lp-demo" id="build">
+        <div class="lp-demo-copy">
+          <span class="lp-number">01 / BUILD</span>
+          <h3>From parcel<br>to floor plan.</h3>
+          <p>
+            Start over the MML basemap and cadastral boundaries. Draw walls, enclose a space and divide it into rooms.
+            Move a shared wall and its rooms follow.
+          </p>
+          <ul>
+            <li>Grid and 15° angle snapping</li>
+            <li>Connected walls and room boundaries</li>
+            <li>Hinged, sliding and double doors</li>
+          </ul>
+          <a class="lp-text-link" href="./guide/geometry.html"
+            >Understand the geometry <span aria-hidden="true">↗</span></a
+          >
+        </div>
+        <figure class="lp-film">
+          <video
+            id="manual-video"
+            controls
+            playsinline
+            preload="none"
+            muted
+            poster="/media/manual-editor.jpg"
+            aria-label="Manual floor-plan building and editing over MML cadastral mapping"
+          >
+            <source src="/media/manual-editor.mp4" type="video/mp4">
+            <track kind="captions" src="./media/manual-editor.vtt" srclang="en" label="Demo annotations" default>
+          </video>
+          <figcaption><span>MANUAL EDITING</span><span>Real MML mapping · walls · room division</span></figcaption>
+        </figure>
+      </article>
+      <article class="lp-demo" id="explore">
+        <div class="lp-demo-copy">
+          <span class="lp-number">02 / EXPLORE</span>
+          <h3>Every floor.<br>One building.</h3>
+          <p>
+            Rotate a cutaway, switch levels and step inside. Ride an elevator with working doors and a cabin mirror, or
+            take the stairs and moving escalators.
+          </p>
+          <ul>
+            <li>Floor cutaways and full building stacks</li>
+            <li>Underground floors and mezzanines</li>
+            <li>Elevators, stairs and escalators in POV</li>
+          </ul>
+          <a class="lp-text-link" href="./app.html">Explore the sample buildings <span aria-hidden="true">↗</span></a>
+        </div>
+        <figure class="lp-film">
+          <video
+            id="building-video"
+            controls
+            playsinline
+            preload="none"
+            muted
+            poster="/media/building-3d.jpg"
+            aria-label="3D building rotation, floor switching and elevator operation"
+          >
+            <source src="/media/building-3d.mp4" type="video/mp4">
+            <track kind="captions" src="./media/building-3d.vtt" srclang="en" label="Demo annotations" default>
+          </video>
+          <figcaption>
+            <span>BUILDING EXPLORATION</span><span>Rotate · change floors · ride the elevator</span>
+          </figcaption>
+        </figure>
+      </article>
+      <article class="lp-demo" id="navigate">
+        <div class="lp-demo-copy">
+          <span class="lp-number">03 / NAVIGATE</span>
+          <h3>Find a way through<br>the impossible.</h3>
+          <p>
+            The Backrooms puts the same model to work across three office levels and two tiled bath levels. Walk the
+            corridors, descend to the pools and play a route to your destination.
+          </p>
+          <ul>
+            <li>First-person movement with adjustable FOV</li>
+            <li>Cross-floor wayfinding and route playback</li>
+            <li>Clear pool water, underwater lighting and ambience</li>
+          </ul>
+          <a class="lp-text-link" href="./app.html#p=sample-backrooms-v9&v=walk"
+            >Enter the Backrooms <span aria-hidden="true">↗</span></a
+          >
+        </div>
+        <figure class="lp-film">
+          <video
+            id="backrooms-video"
+            controls
+            playsinline
+            preload="none"
+            muted
+            poster="/media/backrooms-route.jpg"
+            aria-label="Walking the Backrooms across levels and playing a wayfinding route"
+          >
+            <source src="/media/backrooms-route.mp4" type="video/mp4">
+            <track kind="captions" src="./media/backrooms-route.vtt" srclang="en" label="Demo annotations" default>
+          </video>
+          <figcaption><span>POV & WAYFINDING</span><span>Offices · baths · a route between floors</span></figcaption>
+        </figure>
+      </article>
+      <p class="lp-recording-note">
+        Silent recordings with on-screen annotations. Open a demo to hear its ambient sound and music.
+      </p>
+    </section>
+    <section class="lp-model" aria-labelledby="lp-model-title">
+      <div>
+        <p class="lp-eyebrow">A MODEL YOU CAN BUILD ON</p>
+        <h2 id="lp-model-title">Keep spaces connected.<br>Keep your application yours.</h2>
+        <p>
+          Walls share junctions. Spaces reference their boundaries. Doors belong to walls, and portals describe the
+          connections between spaces. The viewer builds its 3D surfaces from that model.
+        </p>
+        <a class="lp-text-link" href="./guide/geometry.html"
+          >Read the geometry guide <span aria-hidden="true">↗</span></a
+        >
+      </div>
+      <div class="lp-model-details">
+        <div>
+          <span>01</span>
+          <h3>Edit with confidence</h3>
+          <p>
+            Lightweight drag previews stay responsive. Each drop is validated as a transaction; an invalid edit restores
+            the previous plan. Undo, redo and JSON export keep work recoverable.
+          </p>
+        </div>
+        <div>
+          <span>02</span>
+          <h3>Bring your live data</h3>
+          <p>
+            Bind objects to host-owned feed IDs. Show device states and operate elevators through adapters while keeping
+            your business rules in your own application.
+          </p>
+        </div>
+        <div>
+          <span>03</span>
+          <h3>Import and extend</h3>
+          <p>
+            Bring in CAD geometry, geospatial footprints and reference drawings. Customize the theme, icons and panels,
+            or use the schema without a browser.
+          </p>
+        </div>
+      </div>
+    </section>
+    <section class="lp-developers" aria-labelledby="lp-developer-title">
+      <div>
+        <p class="lp-eyebrow">FOR DEVELOPERS</p>
+        <h2 id="lp-developer-title">Use the parts you need.</h2>
+        <p>Four packages, from a framework-free model to a complete React editor.</p>
+      </div>
+      <div class="lp-packages">
+        <a href="./reference/schema.html"
+          ><code>@kerros/schema</code><span>Geometry, spaces, portals and routing</span><b aria-hidden="true">↗</b></a
+        ><a href="./reference/viewer.html"
+          ><code>@kerros/viewer</code><span>Embeddable 2D, 3D and POV viewing</span><b aria-hidden="true">↗</b></a
+        ><a href="./reference/import.html"
+          ><code>@kerros/import</code><span>CAD and geospatial import tools</span><b aria-hidden="true">↗</b></a
+        ><a href="./reference/editor.html"
+          ><code>@kerros/editor</code><span>The full authoring interface</span><b aria-hidden="true">↗</b></a
+        >
+      </div>
+    </section>
+    <section class="lp-start">
+      <p class="lp-eyebrow">YOUR NEXT FLOOR STARTS HERE</p>
+      <h2>Make room for your ideas.</h2>
+      <div class="lp-actions">
+        <a class="lp-button" href="./app.html">Open the editor <span aria-hidden="true">↗</span></a
+        ><a class="lp-text-link" href="./guide/getting-started.html"
+          >Integration guide <span aria-hidden="true">↗</span></a
+        >
+      </div>
+    </section>
+  </main>
+  <footer class="lp-footer">
+    <a class="lp-brand" href="./">kerros</a>
+    <p>Open-source indoor mapping. Released under the MIT License.</p>
+    <a href="https://github.com/kherrala/kerros">Source on GitHub ↗</a>
+  </footer>
+</div>

@@ -168,3 +168,28 @@ export function metricUVs(geometry: THREE.BufferGeometry) {
   }
   geometry.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
 }
+
+/** Transfer an extrusion's vertical face to a separate material, without overlapping triangles.
+ * The supplied edge is in scene coordinates. Caps and the other sides remain in `geometry`.
+ * ExtrudeGeometry is non-indexed; retaining indices here preserves its UVs and contact shading. */
+export function splitWallFace(geometry: THREE.BufferGeometry, edge: [[number, number], [number, number]]) {
+  const [a, b] = edge,
+    dx = b[0] - a[0],
+    dy = b[1] - a[1],
+    length = Math.hypot(dx, dy);
+  if (!length) return null;
+  const p = geometry.getAttribute('position'),
+    n = geometry.getAttribute('normal');
+  const inside: number[] = [],
+    outside: number[] = [];
+  for (let i = 0; i < p.count; i += 3) {
+    const onFace =
+      Math.abs(n.getZ(i)) < 0.01 &&
+      [i, i + 1, i + 2].every(j => Math.abs((p.getX(j) - a[0]) * dy - (p.getY(j) - a[1]) * dx) / length < 0.0001);
+    (onFace ? inside : outside).push(i, i + 1, i + 2);
+  }
+  if (!inside.length) return null;
+  const face = geometry.clone().setIndex(inside);
+  geometry.setIndex(outside);
+  return face;
+}

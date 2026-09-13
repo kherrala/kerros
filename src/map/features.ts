@@ -1,3 +1,4 @@
+import { doorSymbol } from '../model/doors';
 import { wallFootprints, wallSpan } from './wallJoins';
 import type { Feature, FeatureCollection, Geometry } from 'geojson';
 import type { MaterialKind, Point, ProjectDocument, Ring, SiteObject } from '../model/types';
@@ -80,8 +81,9 @@ export function wallPieces(project: ProjectDocument, floorId: string | null, sta
       items.push(o);
       attached.set(o.barrierId, items);
     }
-  const footprints = wallFootprints(project);
-  for (const barrier of project.barriers.filter(b => stack || visibleOnFloor(b, floorId))) {
+  const visible = project.barriers.filter(b => stack || visibleOnFloor(b, floorId));
+  const footprints = wallFootprints({ ...project, barriers: visible });
+  for (const barrier of visible) {
     const a = junctions.get(barrier.startId),
       b = junctions.get(barrier.endId);
     if (!a || !b) continue;
@@ -194,20 +196,8 @@ export function makeFeatures(
         poly([closeRing(halo)], { id: o.id, kind: 'status-halo', color: '#e0524e' });
       }
       if (o.kind === 'door') {
-        const hinge = add(position, rotate([-o.width / 2, 0], rotation));
-        const arc: Point[] = [];
-        for (let a = 0; a <= 90; a += 6) arc.push(add(hinge, rotate([o.width, 0], rotation + a)));
-        line(arc, { ...props, decoration: true });
-        // A door that reports its state draws that state: a leaf standing open swings clear of the
-        // frame, a closed one sits in it. Without a reading the plan falls back to the architectural
-        // swing symbol, which says "a door is here and this is the way it opens" rather than
-        // claiming to know whether it is open — the two were previously the same drawing.
-        const leafAngle = status?.open === undefined ? 90 : status.open ? 72 : 5;
-        line([hinge, add(hinge, rotate([o.width, 0], rotation + leafAngle))], {
-          ...props,
-          color: tone ?? props.color,
-          decoration: true,
-        });
+        for (const points of doorSymbol(project, o, status?.open))
+          line(points, { ...props, color: tone ?? props.color, decoration: true });
       }
     }
     if (o.kind === 'stairs') {

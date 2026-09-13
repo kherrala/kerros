@@ -76,7 +76,7 @@ Legacy independent spaces retain polygon-based split and merge operations. Their
 
 A newly created or resized area needs **at least 1 m² of usable area**. For connected spaces this is measured after subtracting wall bodies and holes; independent outlines subtract their holes. Each newly created split space must meet the same minimum.
 
-The boundary network can contain smaller regions and holes. Automatic subdivision leaves regions below 1 m² unlabelled instead of creating sliver rooms. If an explicit split cannot create another usable space, it is refused. An existing connected space cannot silently disappear or shrink below the minimum; a constrained drag stops at a valid position.
+The boundary network can contain smaller regions and holes. Automatic subdivision leaves regions below 1 m² unlabelled instead of creating sliver rooms. If an explicit split cannot create another usable space, it is refused. An existing connected space cannot silently disappear or shrink below the minimum; an invalid drop restores its previous position.
 
 Small independent areas in older imported documents remain readable and can be renamed or have metadata edited. Creating or changing their area applies the current minimum.
 
@@ -93,7 +93,7 @@ Every editor commit goes through `transact`:
 
 The checks include closed ordered loops on the correct floor, loop orientation, valid polygons and holes, and at most one connected space on each directed side of an edge. Edges and attached openings are updated together when a crossing splits a wall. A junction cannot cut through an opening.
 
-Unfinished strokes remain drafts. Invalid polygon clicks keep the last usable draft. Wall and junction drags try the requested position and otherwise stop at a valid intermediate position. Undo and redo restore boundary references together with the generated footprints.
+Unfinished strokes remain drafts. Invalid polygon clicks keep the last usable draft. Wall, junction and outline drags show a lightweight snapped preview without running model validation while the pointer moves. Releasing the pointer validates the requested drop once. If it is invalid, the original geometry returns and the editor explains why; no partial move enters history or persistence. Undo and redo restore boundary references together with the generated footprints.
 
 ### Current limits
 
@@ -117,8 +117,8 @@ The editor offers a 0.5 m positioning grid and 15° directions relative to the f
 
 Dragging a junction preserves a nearby existing wall axis before falling back to the grid. Moving a
 whole wall slides it along its normal and snaps where adjoining segments become collinear or reach
-a nearby 15° floor direction. The preview uses the same snapping and validity constraints as release,
-so the handle shows the position that can actually be saved. Connected wall surfaces meet at shared
+a nearby 15° floor direction. Preview and release use the same snapping; the preview becomes a saved
+position only after release passes validation. Connected wall surfaces meet at shared
 mitred corners; very acute joins use a bounded bevel to avoid long spikes.
 
 Coordinates are **not globally rounded to centimetres**. Rotated intersections often need extra decimal places to stay on their edges. The calculated intersection is shared by ID rather than rounded separately on each adjoining wall.
@@ -126,3 +126,40 @@ Coordinates are **not globally rounded to centimetres**. Rotated intersections o
 Numerical tolerances are centralized in `model/precision.ts`. Junction normalization uses a 1 micrometre tolerance; authoring joins absorb sub-millimetre noise. Derived polygon clipping rounds its inputs to 0.1 mm and scales them before clipping. This cleanup does not change the stored junction coordinates and is distinct from the input grid.
 
 See [Core concepts](/guide/concepts), [Spaces, zones & portals](/guide/ontology), the [schema reference](/reference/schema#geometry), and the optional [mathematical background](/guide/geometry-mathematics).
+
+## Open passages and door swings
+
+Draw a **Virtual boundary** along a wall to open that span. The editor splits the wall at the stroke's
+ends and replaces the covered pieces with virtual edges. Both spaces retain their identity and
+boundary references, while their usable outlines expand into the open passage. The opening is full
+wall height; use a door or window for a framed opening with a lintel.
+
+A fully covered door or window is removed with the replaced wall section. A stroke ending inside an
+existing opening is rejected as one transaction; extend it to cover the opening or move the endpoint
+clear. Undo restores the wall and attached openings.
+
+Door placement is an offset along a physical wall. Hinge and swing are separate properties:
+`doorHinge` picks the start or end of the segment, and `doorSwing` picks a side of its directed axis.
+Changing either does not alter the shared room boundaries or the doorway width. Door dragging keeps
+a small dead zone around the centreline so sliding along the wall does not accidentally flip the leaf.
+
+## Walking paths inside rooms
+
+Connectivity and the walking path answer different questions. Portals identify which spaces connect;
+the core library's `buildRoomNavigation` finds clear segments between their access points. An empty
+room permits a direct doorway-to-doorway path. Concave corners, pools and floor holes introduce
+waypoints only where a direct segment would leave the walkable area. Wall thickness and a 40 cm
+centreline clearance keep paths away from jambs and drop edges. A route from the visitor's position
+uses the same checks when joining the graph.
+
+This graph is derived from room geometry and supplied access points. It adds no rendering triangles
+or independent room outlines. Rebuild it after edits using the public schema API; the Backrooms sample
+uses that API rather than a separate room-routing algorithm. Door and vertical edges retain their
+direction and physical-object binding. The shortest-path search uses a priority queue and stops once
+it has proved the best destination cost; it need not search every remaining room.
+
+POV playback walks the physical stair/landing centreline and follows escalator direction. For a lift,
+it calls the car, waits for an open doorway, enters, requests the destination, waits for arrival and
+exits. The reference application's simulated call-to-board delay is at most two seconds; external
+hosts provide their own lift readings and commands. Missing controls or a blocked traversal stop
+playback instead of skipping the vertical connection.

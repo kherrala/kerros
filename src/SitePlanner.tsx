@@ -1,3 +1,4 @@
+import { draggedDoorSwing } from './model/doors';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownToLine,
@@ -63,7 +64,6 @@ import {
   add,
   addBarrier,
   alignDrawing,
-  barrierEnds,
   centroid,
   closeRing,
   distance,
@@ -72,7 +72,6 @@ import {
   removeFloor,
   objectArea,
   objectPosition,
-  openRing,
   pointInRing,
   rectangle,
   snapPoint,
@@ -81,7 +80,13 @@ import {
 } from './model/geometry';
 import { fitOpening, mainAxis, proposeWall, snapDragPoint, type OpeningFit, type WallProposal } from './model/walls';
 import { mergeSpaces, spacesRejoinedBy } from './model/inference';
-import { addBoundaryHole, addVirtualBoundary, boundaryEdges, boundaryRegionAt, connectSpace } from './model/boundaries';
+import {
+  addBoundaryHole,
+  drawVirtualBoundary,
+  boundaryEdges,
+  boundaryRegionAt,
+  connectSpace,
+} from './model/boundaries';
 import { pruneOntology } from './model/ontology';
 import { derivedGraph } from './model/topology';
 import { importPlanEntities, type PlanImportReport } from './import/planImport';
@@ -91,7 +96,7 @@ import { transformObject } from './model/project';
 import { commitHistory, makeHistory, redoHistory, undoHistory } from './model/history';
 import { exportProject } from './adapters/persistence';
 import { transact } from './model/validate';
-import { appendAreaPoint, dragGeometry, drawBarrier, encloseRoom, type GeometryDrag } from './model/authoring';
+import { appendAreaPoint, applyGeometryDrag, drawBarrier, encloseRoom, type GeometryDrag } from './model/authoring';
 import { useProjectPersistence } from './adapters/useProjectPersistence';
 import { neutralBasemap } from './adapters/basemap';
 import { openingFloorId } from './model/project';
@@ -157,6 +162,7 @@ export function SitePlanner({
   onViewChange,
   onModeChange,
   renderStatusPanel,
+  elevators,
   readOnly = false,
 }: SitePlannerProps & { readOnly?: boolean }) {
   const [dark, toggleDark] = useDarkMode();
@@ -291,8 +297,12 @@ export function SitePlanner({
       id === HERE ? (at ? { floorId: at.floorId, position: at.position } : null) : id;
     const a = end(navFrom),
       b = end(navTo);
-    return a && b ? findRoute(history.present, a, b) : null;
-  }, [history.present, navFrom, navTo, avatar, playing]);
+    return a && b
+      ? findRoute(history.present, a, b, {
+          statuses: new Map([...statuses, ...(elevators?.statuses ?? []).map(s => [s.feedId, s] as const)]),
+        })
+      : null;
+  }, [history.present, navFrom, navTo, avatar, playing, statuses, elevators?.statuses]);
   useEffect(() => {
     stopPlaying();
     setPlayStep(null);
@@ -423,8 +433,9 @@ export function SitePlanner({
   // Plan viewer browses pure architecture; the editor keeps statuses visible (authors simulate
   // bindings while wiring them) and 'live' is the dedicated monitoring surface.
   const shownStatuses = useMemo(
-    () => (mode === 'view' ? new Map<string, StatusReading>() : statuses),
-    [mode, statuses],
+    () =>
+      new Map([...(mode === 'view' ? [] : statuses), ...(elevators?.statuses ?? []).map(s => [s.feedId, s] as const)]),
+    [mode, statuses, elevators?.statuses],
   );
   const basemap = basemapMode === 'host' && adapters.basemap ? adapters.basemap : neutralBasemap;
   // A host basemap that declares a vectorSchema unlocks the schema-driven features; each is gated on
@@ -663,7 +674,7 @@ export function SitePlanner({
       if (!draft.length) setDraft([point]);
       else if (
         commit(p => {
-          if (tool === 'boundary') addVirtualBoundary(p, floorId, draft.at(-1)!, point);
+          if (tool === 'boundary') drawVirtualBoundary(p, floorId, draft.at(-1)!, point);
           else drawBarrier(p, floorId, draft.at(-1)!, point, tool);
         })
       )
@@ -910,30 +921,8 @@ export function SitePlanner({
       },
     ];
   }, [editing, threeD, tool, proposal, openingFit, draft, hover, held]);
-  const dragPreview = useRef<{ source: ProjectDocument; key: string; project: ProjectDocument; point: Point } | null>(
-    null,
-  );
-  function geometryPreview(kind: GeometryDrag['kind'], id: string, raw: Point, ringIndex = 0, index = 0, free = false) {
-    const key = JSON.stringify([kind, id, raw, ringIndex, index, free, snapping, toleranceRef.current]);
-    if (dragPreview.current?.source === project && dragPreview.current.key === key) return dragPreview.current;
-    const point = snapDragPoint(project, floorId, kind, id, raw, snapping && !free, toleranceRef.current);
-    const next = dragGeometry(
-      project,
-      floorId,
-      kind === 'ring' ? { kind, id, point, ringIndex, index } : { kind, id, point },
-    );
-    let actual = point;
-    if (kind === 'junction') actual = next.junctions.find(j => j.id === id)?.position ?? point;
-    else if (kind === 'ring') actual = openRing(next.objects.find(o => o.id === id)!.rings![ringIndex])[index];
-    else {
-      const wall = boundaryEdges(next).find(b => b.id === id);
-      if (wall) {
-        const [a, b] = barrierEnds(next, wall);
-        actual = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-      }
-    }
-    return (dragPreview.current = { source: project, key, project: next, point: actual });
-  }
+  const geometryPreview = (kind: GeometryDrag['kind'], id: string, raw: Point, free = false) =>
+    snapDragPoint(project, floorId, kind, id, raw, snapping && !free, toleranceRef.current);
   function vertexMove(
     kind: 'junction' | 'ring' | 'object' | 'barrier' | 'node' | 'opening' | 'rotate' | 'coverage',
     id: string,
@@ -966,7 +955,12 @@ export function SitePlanner({
         Infinity,
         id,
       );
-      if (fit) updateObject(id, { offset: fit.offset, position: fit.position });
+      if (fit)
+        updateObject(id, {
+          offset: fit.offset,
+          position: fit.position,
+          ...(opening.kind === 'door' ? { doorSwing: draggedDoorSwing(project, opening, raw) } : {}),
+        });
       return;
     }
     if (kind === 'rotate') {
@@ -1002,8 +996,10 @@ export function SitePlanner({
       return;
     }
     if (!editing) return;
-    const next = geometryPreview(kind, id, raw, ringIndex, index, free).project;
-    if (next !== project) setHistory(current => commitHistory(current, next));
+    const drop = geometryPreview(kind, id, raw, free);
+    commit(p =>
+      applyGeometryDrag(p, kind === 'ring' ? { kind, id, point: drop, ringIndex, index } : { kind, id, point: drop }),
+    );
   }
   /** Write the derived graph into the document, so it can be edited.
    *
@@ -1848,6 +1844,7 @@ export function SitePlanner({
               basemap={basemap}
               assets={adapters.assets}
               statuses={shownStatuses}
+              elevators={elevators}
               focusId={focusId}
               alignment={alignment ? { image: alignment.imagePoints, map: alignment.mapPoints } : undefined}
               onClick={mapClick}
@@ -1855,9 +1852,7 @@ export function SitePlanner({
               onHover={onHover}
               onSelect={id => select(id)}
               onVertexMove={vertexMove}
-              onVertexPreview={(kind, id, point, ring, vertex, free) =>
-                geometryPreview(kind, id, point, ring, vertex, free).point
-              }
+              onVertexPreview={(kind, id, point, _ring, _vertex, free) => geometryPreview(kind, id, point, free)}
               snapping={snapping}
               onError={notify}
               route={route}
@@ -2720,7 +2715,7 @@ export function SitePlanner({
                 ['⇧ ↑ / ⇧ ↓', 'Floor up / down'],
                 ['⇧ ← / ⇧ →', 'Rotate map'],
                 ['↑ ↓ ← →', 'Pan map · walk and turn'],
-                ['W A S D', 'Walk and turn · mouse to look'],
+                ['W A S D', 'Pan in 2D · walk and turn in POV'],
                 ['⇧ W / ⇧ S', 'Tilt 3D camera'],
                 ['N', 'Dark / light mode'],
                 ['B', 'Side panel'],
@@ -2730,11 +2725,9 @@ export function SitePlanner({
                 ['⇧ (hold)', 'Show shortcuts'],
                 ['V', 'Select'],
                 ['H', 'Pan'],
-                ['W', 'Wall'],
-                ['D', 'Door'],
+                ['W / D / S', 'Drawing: wall / door / split (while a drawing tool is active)'],
                 ['C', 'Camera'],
                 ['Z', 'Zone'],
-                ['S', 'Split room'],
                 ['M', 'Measure'],
                 ['Enter', 'Finish drawing'],
                 ['Esc', 'Close panel / cancel'],

@@ -10,7 +10,7 @@
 //
 // This is where that question gets answered once, so the plan, the route and the model agree about
 // where a stair goes.
-import { closeRing, footprint, objectPosition, objectRotation, rectangle } from './geometry';
+import { closeRing, footprint, objectPosition, objectRotation, rectangle, rotate } from './geometry';
 import type { Floor, Point, ProjectDocument, Ring, SiteObject } from './types';
 
 /** True for the kinds that connect levels. */
@@ -287,6 +287,7 @@ export function shaftVoids(
   const ceiling = options.through === 'ceiling';
   const lowest = options.lowest ?? -Infinity;
   const out: Ring[] = [];
+  const groups = new Map<string, SiteObject[]>();
   for (const o of project.objects) {
     if (!isVertical(o.kind) || (primary && !primary.has(o.id))) continue;
     const all = flights(project, o);
@@ -299,6 +300,12 @@ export function shaftVoids(
     if (index < 0) continue;
     const flight = all[index];
     if (flight.from.elevation < lowest) continue;
+    if (o.kind === 'stairs' && o.wellGroup) {
+      const members = groups.get(o.wellGroup) ?? [];
+      members.push(o);
+      groups.set(o.wellGroup, members);
+      continue;
+    }
     const model = stairModel(project, o);
     if (o.kind === 'stairs' && (model === 'straight' || model === 'escalator')) {
       const run = flightRun(project, o, flight.rise, model, index);
@@ -309,6 +316,17 @@ export function shaftVoids(
     const ring = footprint(o)[0];
     // A touch proud of the shaft itself, so the slab does not leave a hairline of itself behind.
     if (ring?.length) out.push(closeRing(ring.map(p => [p[0], p[1]] as Point)));
+  }
+  for (const members of groups.values()) {
+    const rotation = objectRotation(project, members[0]);
+    const points = members.flatMap(o => footprint(o)[0]).map(p => rotate(p, -rotation));
+    const xs = points.map(p => p[0]),
+      ys = points.map(p => p[1]);
+    const loX = Math.min(...xs),
+      hiX = Math.max(...xs),
+      loY = Math.min(...ys),
+      hiY = Math.max(...ys);
+    out.push(rectangle(rotate([(loX + hiX) / 2, (loY + hiY) / 2], rotation), hiX - loX, hiY - loY, rotation));
   }
   return out;
 }

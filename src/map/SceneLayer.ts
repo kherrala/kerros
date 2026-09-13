@@ -1,3 +1,4 @@
+import { makeDoor } from './Doors';
 import * as THREE from 'three';
 import polygonClipping from 'polygon-clipping';
 import {
@@ -10,6 +11,7 @@ import type { Floor, MaterialKind, Point, ProjectDocument, Ring, SiteObject, Slo
 import type { Route } from '../model/navigation';
 import { legStepIndices, ROUTE_COLOR, routeTrackImage, TRACK_PIXELS, TRACK_TILE } from './route';
 import {
+  add as addPoint,
   barrierEnds,
   closeRing,
   objectArea,
@@ -37,7 +39,6 @@ import {
   type VoidOptions,
   type StairModel,
   stairModel,
-  treads,
 } from '../model/vertical';
 import type { StatusReading } from '../model/live';
 import { makeFixture, makeRoof } from './architecture';
@@ -46,17 +47,24 @@ import { EXTERIOR_PRESETS } from '../model/materials';
 import type { MapStyleOptions } from '../theme';
 import { exteriorWalls } from './exteriors';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
-import { hitEntity, metricUVs, OUTSIDE, SurfaceBatch } from './surfaces';
+import { hitEntity, metricUVs, OUTSIDE, splitWallFace, SurfaceBatch } from './surfaces';
 import { excavationRings, floorIndex, MAX_CAGE_LEVELS, type UndergroundView, undergroundView } from './underground';
 import { UndergroundCage, undergroundPit } from './UndergroundContext';
-import { includeSceneDepth } from './projection';
+import { includeSceneDepth, walkNearPlane } from './projection';
 import { syncLightingCamera } from './projection';
 import type { SurfaceFinish } from './textures';
 import { ambient, FIXED, type Sun, sunlight } from './lighting';
 import { FixtureLights } from './FixtureLights';
 import { EYE } from './walk';
 import { tallSpaceContext } from './walkSurfaces';
+import { walkVoidContext } from './walkContext';
 import { applyPoolCaustics, makePool, makeWaterSlide } from './water';
+import { cabinDimensions, cabinFloorVoids, elevatorDoorWidth, elevatorWalls } from './elevators';
+import { CabinMaterials } from './CabinMaterials';
+import { CabinMirror, REFLECTION_BODY } from './CabinMirror';
+import { makeCabinDoor, makeElevatorCabin } from './ElevatorCabin';
+import { Passenger } from './Passenger';
+import { stairGeometry, spiralGeometry } from '../model/stairGeometry';
 
 // Building geometry floats slightly above the basemap so slabs never z-fight with map tiles.
 // Each floor gets an opaque slab; rooms sit on top of it with enough clearance to stay artifact-free.
@@ -317,7 +325,8 @@ export class SceneLayer implements CustomLayerInterface {
   private scene = new THREE.Scene();
   private camera = (() => {
     const camera = new THREE.Camera();
-    camera.layers.enableAll(); // the scene is split across layers for lighting, not for visibility
+    camera.layers.enableAll(); // lighting layers plus the reflected passenger
+    camera.layers.disable(REFLECTION_BODY);
     return camera;
   })();
   private worldToClip = new THREE.Matrix4();
@@ -333,6 +342,7 @@ export class SceneLayer implements CustomLayerInterface {
    *  a dark floor with a bright lid. */
   private lampLit = false;
   private poolLitOnly = false;
+  private poolOverview = false;
   /** Per-storey ghost strength for the things a stack is FOR — the floor plates that carry each
    *  storey's plan — on the storeys ABOVE the one in focus. Shared out across however many of them
    *  the stack layers up between the eye and the focus. */
@@ -349,6 +359,15 @@ export class SceneLayer implements CustomLayerInterface {
   private growth = 1;
   private growthStart = 0;
   private materials = new MaterialLibrary();
+  private cabinMaterials?: CabinMaterials;
+  private passenger?: Passenger;
+  private cabinFinishes() {
+    return (this.cabinMaterials ??= new CabinMaterials(this.renderer!));
+  }
+  wave() {
+    this.passenger?.wave(performance.now() / 1000);
+    this.map?.triggerRepaint();
+  }
   private fixtureLights?: FixtureLights;
   private waterTime = { value: 0 };
   private hasWater = false;
@@ -481,7 +500,10 @@ export class SceneLayer implements CustomLayerInterface {
   /** Move the existing lights to where a new sun puts them, without touching the geometry. Valid
    *  only while the dusk treatment is unchanged — see the caller. */
   private relight(project: ProjectDocument, floorId: string | null, sun: Sun) {
-    const air = ambient(sun, project.floors.find(f => f.id === floorId)?.light);
+    const air = ambient(
+      sun,
+      this.poolOverview ? { kelvin: 6500, level: 1 } : project.floors.find(f => f.id === floorId)?.light,
+    );
     this.scene.environmentIntensity = this.poolLitOnly ? 0 : air.environment;
     this.skyLight?.color.set(air.sky);
     this.skyLight?.groundColor.set(air.ground);
@@ -563,12 +585,6 @@ export class SceneLayer implements CustomLayerInterface {
     this.xyCache.set(key, result);
     return result;
   }
-  /** Build a standalone piece of geometry — same extrusion as `surface`, but returned as its own
-   *  group instead of welded into the batch, so something can move it. Its z is already presented,
-   *  so a rig that moves it must present its own target too. */
-  private part(rings: Point[][], base: number, height: number, color: string): THREE.Group {
-    return this.parts([{ rings, base, height }], color);
-  }
   /** Several extrusions welded into one moving part. An escalator's step band is twenty boxes that
    *  travel together, and twenty meshes per flight — times a bank of four, times the flights in
    *  view — is a draw call apiece for something that moves as one thing. Merged, it is one. */
@@ -576,6 +592,7 @@ export class SceneLayer implements CustomLayerInterface {
     pieces: { rings: Point[][]; base: number; height: number }[],
     color: string,
     shadows = true,
+    tread?: { across: Point; width: number; going: number },
   ): THREE.Group {
     const geometries = pieces.map(({ rings, base, height }) => {
       const shape = new THREE.Shape(rings[0].map(p => new THREE.Vector2(...this.xy(p))));
@@ -584,12 +601,28 @@ export class SceneLayer implements CustomLayerInterface {
       geometry.translate(0, 0, base);
       metricUVs(geometry);
       const positions = geometry.getAttribute('position');
+      if (tread) {
+        geometry.computeBoundingBox();
+        const center = geometry.boundingBox!.getCenter(new THREE.Vector3());
+        const uv = geometry.getAttribute('uv'),
+          normal = geometry.getAttribute('normal'),
+          [ax, ay] = tread.across;
+        for (let i = 0; i < positions.count; i++) {
+          const x = positions.getX(i) - center.x,
+            y = positions.getY(i) - center.y;
+          const v =
+            Math.abs(normal.getZ(i)) > 0.5
+              ? (-x * ay + y * ax) / tread.going + 0.5
+              : 0.2 + (0.6 * (positions.getZ(i) - geometry.boundingBox!.min.z)) / Math.max(0.001, height);
+          uv.setXY(i, (x * ax + y * ay) / tread.width + 0.5, v);
+        }
+      }
       for (let i = 0; i < positions.count; i++) positions.setZ(i, this.present(positions.getZ(i)));
       geometry.computeVertexNormals();
       return geometry.index ? geometry.toNonIndexed() : geometry;
     });
     const merged = geometries.length === 1 ? geometries[0] : mergeGeometries(geometries)!;
-    const mesh = new THREE.Mesh(merged, this.materials.solid(color));
+    const mesh = new THREE.Mesh(merged, tread ? this.materials.escalator() : this.materials.solid(color));
     mesh.castShadow = shadows;
     mesh.receiveShadow = true;
     const group = new THREE.Group();
@@ -673,6 +706,7 @@ export class SceneLayer implements CustomLayerInterface {
     // Out of doors, and so out of reach of the building's own ceiling lighting. The parcel, the
     // landscaping, a fence: lit by the sky and nothing else, whatever the lamps inside are doing.
     outdoor = false,
+    interiorFace?: [Point, Point] | null,
   ) {
     // An area a void has swallowed whole — a parking bay lying under the ramp that runs over it — has
     // no plate left to draw, and asking for the first of no rings took the rest of the storey down
@@ -713,6 +747,11 @@ export class SceneLayer implements CustomLayerInterface {
         : material
           ? this.materials.get(material, color)
           : this.materials.solid(color));
+    const face = interiorFace && splitWallFace(geometry, interiorFace.map(p => this.xy(p)) as [Point, Point]);
+    if (face) {
+      const plaster = this.materials.get('plaster', '#eceae5');
+      this.batch.add(face, ao && !ghost ? this.materials.shaded(plaster) : plaster, id, outdoor);
+    }
     this.batch.add(geometry, ao && !ghost ? this.materials.shaded(surfaceMaterial) : surfaceMaterial, id, outdoor);
   }
   /** A sloped area (garage ramp, loading incline): the plate's own footprint, but each vertex lifted
@@ -787,8 +826,8 @@ export class SceneLayer implements CustomLayerInterface {
         rim = Math.min(0.08, height / 3, o.width / 3);
       const depth = Math.max(0.16, (barrier?.thickness ?? 0.2) + 0.035);
       const frame = this.materials.metal('#b4b9ba');
-      const lit = [...o.id].reduce((sum, ch) => sum + ch.charCodeAt(0), 0) % 5 < 2;
-      const glass = this.materials.glass(this.sunState.evening, lit);
+      // An occupied room's windows are transparent panes, not randomly illuminated facade panels.
+      const glass = this.materials.glass(this.sunState.evening);
       const side = (
         offset: number,
         width: number,
@@ -814,7 +853,7 @@ export class SceneLayer implements CustomLayerInterface {
       side(0, o.width, base, rim, frame);
       side(0, o.width, base + height - rim, rim, frame);
       for (const sign of [-1, 1]) side((sign * (o.width - rim)) / 2, rim, base + rim, height - rim * 2, frame);
-      side(0, o.width - rim * 2, base + rim, height - rim * 2, glass, Math.max(0.035, depth - 0.1));
+      side(0, o.width - rim * 2, base + rim, height - rim * 2, glass, 0.018);
       const panes = Math.max(1, Math.ceil(o.width / 1.45));
       for (let i = 1; i < panes; i++)
         side(-o.width / 2 + (i * o.width) / panes, 0.045, base + rim, height - rim * 2, frame);
@@ -849,49 +888,36 @@ export class SceneLayer implements CustomLayerInterface {
     const thickness = barrier?.thickness ?? 0.2;
     const base = z + wallBase(o.floorId);
     const height = Math.min(o.height, (barrier?.height ?? o.height) - 0.02);
-    // NOT the plan's door colour. That indigo is a symbol — it marks a door on a drawing, where it
-    // has to stand out from the walls around it. Extruded into a solid leaf it is a purple slab in
-    // a room, which is the one thing a door never looks like. A door is a door-coloured object.
-    const color = o.color ?? '#cbb79f';
-    // The head above the opening, so the wall reads as continuous rather than as a slot to the
-    // ceiling — and so an open door leaves a doorway rather than a gap in the storey.
-    const over = (barrier?.height ?? height) - height;
-    if (over > 0.05)
-      this.surface(
-        [rectangle(position, o.width, thickness, rotation)],
-        base + height,
-        over,
-        barrier?.color ?? '#b9b6ac',
-        o.id,
-      );
-    // Hinged at the same edge the plan hinges it — features.ts swings from -width/2 about `rotation`.
-    const hinge = rotate([-o.width / 2, 0], rotation);
-    const pivot: Point = [position[0] + hinge[0], position[1] + hinge[1]];
-    // Built lying in the frame with its hinge at the group's origin, so rotating the group about z
-    // swings it exactly as the 2D symbol does.
-    const centre = rotate([o.width / 2, 0], rotation);
-    const panel = this.part(
-      [rectangle([pivot[0] + centre[0], pivot[1] + centre[1]], o.width - 0.04, Math.min(0.06, thickness), rotation)],
-      base + 0.01,
-      height,
-      color,
-    );
-    const at = this.xy(pivot);
-    for (const child of panel.children) child.position.set(-at[0], -at[1], 0);
-    panel.position.set(at[0], at[1], 0);
+    const model = makeDoor(o, thickness, height, this.materials);
+    const at = this.xy(position),
+      along = this.xy(addPoint(position, rotate([1, 0], rotation)));
+    const angle = Math.atan2(along[1] - at[1], along[0] - at[0]);
+    const place = (group: THREE.Group) => {
+      group.position.set(at[0], at[1], this.present(base));
+      group.scale.z = this.buried && !this.walking ? this.depthScale : 1;
+      group.rotation.z = angle;
+    };
+    // The wall pieces already contain the header; another solid here duplicates its faces.
+    place(model.frame);
+    for (const leftover of this.batch.addObject(model.frame, o.id)) this.scene.add(leftover);
+    model.frame.traverse(child => {
+      if (child instanceof THREE.Mesh) child.geometry.dispose();
+    });
     const status = this.statuses?.get(o.feedId ?? '');
-    // 72°, matching the plan: a leaf drawn flat against the wall reads as part of the wall.
-    this.rig(`${o.id}:leaf`, panel, status?.open ? 1 : 0, 1.4, (g, v) => {
-      g.rotation.z = -(72 * Math.PI * v) / 180;
+    model.panels.forEach(({ group, setOpen }, index) => {
+      place(group);
+      this.rig(`${o.id}:leaf:${o.doorType ?? 'hinged'}:${index}`, group, status?.open ? 1 : 0, 1.4, (_g, value) =>
+        setOpen(value),
+      );
     });
   }
-  /** A thin skin lying on the inside face of an exterior wall.
+  /** The inward-facing edge of an exterior wall.
    *
    *  Which face is the inside is not a property of the wall — it is a question about the building
    *  around it — so it is answered the only way it can be: step off the wall each way and see which
    *  side lands within the floor's footprint. A wall with no footprint to be inside of (an outbuilding
-   *  wall, a fence read as exterior) gets no lining, which is right. */
-  private lining(project: ProjectDocument, piece: WallPiece, floorId: string | null): Ring | null {
+   *  wall, a fence read as exterior) has no interior face. */
+  private interiorFace(project: ProjectDocument, piece: WallPiece, floorId: string | null): [Point, Point] | null {
     const outline = floorOutline(project, piece.floorId ?? floorId);
     if (!outline.length) return null;
     const ring = openRing(piece.ring);
@@ -914,10 +940,7 @@ export class SceneLayer implements CustomLayerInterface {
       const mid: Point = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
       const probe: Point = [mid[0] + nx * 0.3, mid[1] + ny * 0.3];
       if (!outline.some(r => pointInRing(probe, r))) continue;
-      const skin = Math.min(0.05, wall.thickness / 3),
-        out = 0.003 - skin / 2;
-      const angle = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
-      return closeRing(rectangle([mid[0] + nx * out, mid[1] + ny * out], len, skin, angle));
+      return [a, b];
     }
     return null;
   }
@@ -948,7 +971,9 @@ export class SceneLayer implements CustomLayerInterface {
     if (!voids) {
       // Above ground nothing under the street is drawn, flights included, so a hole cut for one
       // would open onto the basemap with nothing coming up through it.
-      voids = wells ? shaftVoids(project, floorId, primary, { through, lowest: this.buried ? -Infinity : -0.01 }) : [];
+      voids = wells
+        ? shaftVoids(project, floorId, primary, { through, lowest: this.buried || this.walking ? -Infinity : -0.01 })
+        : [];
       // A driveway is a hole in a deck as surely as a stairwell is. The ramp off P1 dives under the
       // plate it is filed on the moment it starts falling, so drawn whole that plate is a lid over
       // it and the ramp was invisible from the deck it leaves. Where ramp and deck meet they are
@@ -959,6 +984,10 @@ export class SceneLayer implements CustomLayerInterface {
           ...voids,
           ...rampVoids(project, floorId),
           ...project.objects.filter(o => o.floorId === floorId && o.water && o.rings?.length).map(o => o.rings![0]),
+          // In POV the car supplies its own floor, including at the lowest landing. Stairwell
+          // cuts are disabled when no lower storey is drawn; leaving the room finish here put
+          // carpet or bath tiles above the car's floor and made the cabin look like a pool.
+          ...(this.walking ? cabinFloorVoids(project, floorId, primary) : []),
         ];
       this.voidCache.set(key, voids);
     }
@@ -1004,7 +1033,7 @@ export class SceneLayer implements CustomLayerInterface {
     // would otherwise vanish from every storey above — but that exemption let it draw its whole body.
     // On an above-ground view nothing under the street is drawn, so a garage flight climbed out of
     // bare basemap with no deck at either end of it. Clamp the shaft to the levels the view builds.
-    const drawn = this.buried ? near : near.filter(f => f.from.elevation > -0.01);
+    const drawn = this.buried || this.walking ? near : near.filter(f => f.from.elevation > -0.01);
     if (!drawn.length) return;
     for (const flight of drawn) {
       const base = z + (flight.from.elevation - own) + wallBase(o.floorId);
@@ -1086,11 +1115,17 @@ export class SceneLayer implements CustomLayerInterface {
       // asking for a repaint every frame to animate something a few pixels wide — so there the band
       // is welded into the batch with everything else and simply stands still. A stopped escalator
       // takes the same path: nothing to animate, so nothing asks for a frame.
+      const a = this.xy(at(0)),
+        across = this.xy(addPoint(at(0), rotate([1, 0], rotation)));
+      const finish = {
+        across: [across[0] - a[0], across[1] - a[1]] as Point,
+        width: o.width - 0.12,
+        going: going * 1.02,
+      };
       if (this.stack || !running) {
-        for (const step of band) {
-          const piece = tread(step);
-          this.surface(piece.rings, piece.base, piece.height, color, o.id);
-        }
+        const steps = this.parts(band.map(tread), color, false, finish);
+        steps.userData.entityId = o.id;
+        this.scene.add(steps);
       } else {
         // The band travels exactly one step per cycle. Every step is identical and one pitch from
         // the next, so a wrap back to the start puts each one exactly where its neighbour was and
@@ -1107,7 +1142,7 @@ export class SceneLayer implements CustomLayerInterface {
         //
         const spare =
           way > 0 ? { at: -going / 2, base: -riser - face } : { at: incline + going / 2, base: rise - face };
-        const group = this.parts([spare, ...band].map(tread), color, false);
+        const group = this.parts([spare, ...band].map(tread), color, false, finish);
         // One step's travel, in scene space, taken by projecting two plan points rather than by
         // rebuilding the rotation here: `xy` is the only thing that knows which way plan north
         // points on screen, and asking it twice is cheaper than being wrong about the frame.
@@ -1150,56 +1185,20 @@ export class SceneLayer implements CustomLayerInterface {
       }
       return;
     }
-    // A stair is steps, and a stair that cannot climb its storey in one run turns back on itself —
-    // which is what a real core stair does and why a core box is short and wide rather than long.
-    // Straight, a 4.4 m storey over a 4.5 m run is a 44° chute; two flights with a half-landing
-    // between them is 26° and fits the same box. The footprint still decides: the number of sweeps
-    // is whatever keeps the pitch civil inside the plan's own outline.
-    // A straight stair is one run; the turning ones are two half-runs about a landing. Half the rise
-    // each, so a 4.4 m storey over a 4.5 m box climbs at 26° twice instead of 44° once — which is the
-    // difference between a stair and a chute, and why a real core stair is short and wide.
-    const sweeps = model === 'straight' ? 1 : 2;
-    // A half-turn puts the second flight beside the first, facing back. A quarter-turn puts it across
-    // the landing at right angles. Both climb the same; they differ in where the second run lies.
-    const turn = model === 'dogleg' ? 90 : 180;
-    const laneWidth = sweeps > 1 ? o.width / 2 : o.width;
-    const centre = at(0);
-    for (let lane = 0; lane < sweeps; lane++) {
-      const from = base + (rise * lane) / sweeps,
-        climb = rise / sweeps;
-      // A 175 mm riser is the comfortable domestic figure, and a third of a metre is as deep as a
-      // tread gets: past that a long box was spreading a short climb into a ramp with slabs on it,
-      // so the surplus run goes to the landing instead — see treads().
-      const { steps, going } = treads(climb, run.length);
-      const spin = rotation + (lane ? turn : 0);
-      const rad = (spin * Math.PI) / 180;
-      const vx = Math.sin(rad),
-        vy = -Math.cos(rad);
-      // BOTH lanes stand off the object's axis, half a lane each way. Leaving the first centred and
-      // shifting only the second by half a lane had the two overlapping by a quarter of the box —
-      // on a 2.5 m core stair, half a metre of tread that belonged to both flights at once.
-      const offset = sweeps > 1 ? rotate([((lane ? 1 : -1) * laneWidth) / 2, 0], rotation) : ([0, 0] as Point);
-      const shifted: Point = [centre[0] + offset[0], centre[1] + offset[1]];
-      const on = (t: number): Point => [shifted[0] + vx * t, shifted[1] + vy * t];
-      if (lane && sweeps > 1) {
-        // The landing the turn happens on, at the height the first flight reached — the object's own
-        // box wide, not a lane and a half of it hanging out over the floor beside the core, and as
-        // deep as the run the treads did not need, so you turn on floor rather than on air.
-        const depth = Math.max(going * 1.7, run.length - steps * going);
+    const geometry = stairGeometry(o, run, rise, model);
+    for (const landing of geometry.landings)
+      this.surface([landing.ring], base + landing.height - 0.06, 0.1, color, o.id, o.material);
+    for (const lane of geometry.lanes) {
+      const dx = lane.head[0] - lane.foot[0],
+        dy = lane.head[1] - lane.foot[1];
+      const going = Math.hypot(dx, dy) / lane.steps;
+      const rotation = (Math.atan2(dy, dx) * 180) / Math.PI - 90;
+      for (let i = 0; i < lane.steps; i++) {
+        const t = (i + 0.5) / lane.steps;
         this.surface(
-          [rectangle(at(-half + depth / 2), o.width, depth, rotation)],
-          from - 0.05,
-          0.11,
-          color,
-          o.id,
-          o.material,
-        );
-      }
-      for (let i = 0; i < steps; i++) {
-        this.surface(
-          [rectangle(on(half - going * (i + 0.5)), laneWidth * 0.94, going * 1.02, spin)],
-          from + (climb * i) / steps,
-          climb / steps + 0.04,
+          [rectangle([lane.foot[0] + dx * t, lane.foot[1] + dy * t], lane.width, going * 1.02, rotation)],
+          base + lane.base + (lane.rise * i) / lane.steps,
+          lane.rise / lane.steps + 0.04,
           color,
           o.id,
           o.material,
@@ -1207,6 +1206,7 @@ export class SceneLayer implements CustomLayerInterface {
       }
     }
   }
+
   /** A lift: the shaft as tall as the levels it serves, its doors on the level you are standing on,
    *  and the car where the feed says it is.
    *
@@ -1237,23 +1237,43 @@ export class SceneLayer implements CustomLayerInterface {
     const cut = active ? Math.min(top, z + (active.elevation - own) + wallBase(o.floorId) + (active.height ?? 3)) : top;
     const shell = (from: number, to: number, ghost: boolean | number) => {
       if (to - from < 0.05) return;
-      const t = 0.09;
-      for (const [w, d, dx, dy] of [
-        [o.width, t, 0, (o.depth - t) / 2],
-        [o.width, t, 0, -(o.depth - t) / 2],
-        [t, o.depth, (o.width - t) / 2, 0],
-        [t, o.depth, -(o.width - t) / 2, 0],
-      ] as [number, number, number, number][]) {
-        const at = rotate([dx, dy], rotation);
-        this.surface(
-          [rectangle([position[0] + at[0], position[1] + at[1]], w, d, rotation)],
-          from,
-          to - from,
-          ghost ? color : '#b4bab7',
-          o.id,
-          undefined,
-          ghost,
-        );
+      for (const [face, turn] of [
+        ['front', 0],
+        ['right', 90],
+        ['back', 180],
+        ['left', 270],
+      ] as const) {
+        const across = turn % 180 ? o.depth : o.width,
+          depth = turn % 180 ? o.width : o.depth;
+        const gap = elevatorDoorWidth(o, turn),
+          spin = rotation + turn;
+        const strip = (x: number, width: number, low: number, high: number) => {
+          if (high <= low) return;
+          const at = rotate([x, depth / 2 - 0.045], spin);
+          this.surface(
+            [rectangle([position[0] + at[0], position[1] + at[1]], width, 0.09, spin)],
+            low,
+            high - low,
+            ghost ? color : '#b4bab7',
+            o.id,
+            undefined,
+            ghost,
+          );
+        };
+        if (!(o.doorSides ?? ['front']).includes(face)) {
+          strip(0, across, from, to);
+          continue;
+        }
+        for (const sign of [-1, 1]) strip((sign * (across + gap)) / 4, (across - gap) / 2, from, to);
+        let low = from;
+        for (const floor of levels) {
+          const landing = rel(floor),
+            head = Math.min(2.3, floor.height - 0.35);
+          if (landing + head <= from || landing >= to) continue;
+          strip(0, gap, low, Math.min(to, landing));
+          low = Math.max(low, landing + head);
+        }
+        strip(0, gap, low, to);
       }
     };
     shell(bottom, cut, false);
@@ -1261,27 +1281,57 @@ export class SceneLayer implements CustomLayerInterface {
     // none of the veil the stacked storeys are sharing out — and on a tall building that share falls
     // low enough to erase it, which takes with it the one thing in the stack that says how the
     // storeys are joined.
-    shell(cut, top, Math.max(this.ghostAlpha, SHAFT_GHOST));
+    if (!this.walking) shell(cut, top, Math.max(this.ghostAlpha, SHAFT_GHOST));
     // The landing doors, on the storey in focus, facing the way the lift is turned. Two leaves that
     // part: closed unless the feed says this car is standing here with its doors open.
     const reading = this.statuses?.get(o.feedId ?? '');
-    const carFloor = reading?.carFloorId ?? null;
+    const carFloor = reading?.targetFloorId ?? reading?.carFloorId ?? null;
     // The car rides to the level the feed names, or waits at the bottom of its shaft — which is what
     // an idle lift actually does. Its target is an ELEVATION, not a floor: the ride takes as long as
     // the distance, so eight storeys is a longer journey than one.
     const carAt = levels.find(f => f.id === carFloor && (this.buried || f.elevation > -0.01)) ?? lowest;
-    const inset = 0.14,
-      carHeight = Math.min(2.3, (carAt.height ?? 3) - 0.4);
-    const car = this.part(
-      [rectangle(position, Math.max(0.4, o.width - inset * 2), Math.max(0.4, o.depth - inset * 2), rotation)],
-      0,
-      carHeight,
-      reading?.carFloorId ? '#dfe6e3' : '#cdd4d1',
-    );
-    // 1.5 m/s is an ordinary passenger lift. Interpolating in metres and mapping through present()
-    // keeps the ride honest under the stacked view's depth compression.
-    this.rig(`${o.id}:car`, car, rel(carAt) + 0.04, 1.5, (g, v) => {
+    const carHeight = Math.min(2.5, carAt.height - 0.35);
+    const cabin = {
+      ...o,
+      position,
+      rotation,
+      ...cabinDimensions(o),
+    };
+    const floorRing = rectangle(position, cabin.width, cabin.depth, rotation);
+    const detailed = this.walking && active?.id === carAt.id;
+    const car = detailed
+      ? makeElevatorCabin(cabin, carHeight, this.cabinFinishes(), active?.code ?? active?.name ?? '', !!reading?.moving)
+      : this.parts(
+          [
+            { rings: [floorRing], base: 0, height: 0.1 },
+            { rings: [floorRing], base: carHeight, height: 0.08 },
+            ...elevatorWalls(cabin, true).map(ring => ({ rings: [ring], base: 0.1, height: carHeight - 0.1 })),
+          ],
+          '#dfe6e3',
+        );
+    if (detailed) {
+      const at = this.xy(position),
+        along = this.xy([
+          position[0] + Math.cos((rotation * Math.PI) / 180),
+          position[1] + Math.sin((rotation * Math.PI) / 180),
+        ]);
+      car.position.set(at[0], at[1], 0);
+      car.rotation.z = Math.atan2(along[1] - at[1], along[0] - at[0]);
+    }
+    // Match the host's trip duration. An arrived reading must not leave the visible car travelling
+    // for another twenty seconds while its controls already offer an open door.
+    if (reading?.carFloorId && !reading.targetFloorId) this.rigState.set(`${o.id}:car`, rel(carAt));
+    const carSpeed =
+      reading?.carTravelSeconds && reading.carTravelSeconds > 0
+        ? Math.max(
+            1.5,
+            Math.abs(rel(carAt) - (this.rigState.get(`${o.id}:car`) ?? rel(carAt))) / reading.carTravelSeconds,
+          )
+        : 1.5;
+    this.rig(`${o.id}:car`, car, rel(carAt), carSpeed, (g, v) => {
       g.position.z = this.present(v) - this.present(0);
+      // Remote parked cars must not float above a single-storey POV shell.
+      g.visible = !this.walking || !!reading?.moving || !!reading?.targetFloorId || active?.id === carAt.id;
     });
     if (active && levels.some(f => f.id === active.id)) {
       const head = Math.min(2.3, (active.height ?? 3) - 0.35);
@@ -1297,24 +1347,19 @@ export class SceneLayer implements CustomLayerInterface {
         // Each face turns the leaves a further quarter-turn and measures across the matching side.
         const turn = { front: 0, right: 90, back: 180, left: 270 }[face];
         const spin = rotation + turn;
-        const across = turn % 180 === 0 ? o.width : o.depth;
-        const out = (turn % 180 === 0 ? o.depth : o.width) / 2 - 0.03;
-        const leaf = across / 2 - 0.03;
+        // The leaves live behind the jamb, with their visible geometry clipped to the opening.
+        // Translating a full leaf in front of the facade made it slide outside the shaft.
+        const out = (turn % 180 === 0 ? o.depth : o.width) / 2 - 0.13;
+        const local = rotate([0, out], spin),
+          origin: Point = [position[0] + local[0], position[1] + local[1]];
+        const at = this.xy(origin),
+          along = this.xy([origin[0] + Math.cos((spin * Math.PI) / 180), origin[1] + Math.sin((spin * Math.PI) / 180)]);
         for (const sign of [-1, 1]) {
-          const shut = rotate([sign * (leaf / 2), out], spin);
-          const panel = this.part(
-            [rectangle([position[0] + shut[0], position[1] + shut[1]], leaf, 0.07, spin)],
-            rel(active) + 0.02,
-            head,
-            '#98a3a6',
-          );
-          // Leaves part sideways, so the animated value is how far open (0..1) and the group slides
-          // along the face. A little over a second end to end, which is what a lift door takes.
-          const travel = rotate([sign * (across / 2 - 0.06), 0], spin);
-          this.rig(`${o.id}:door:${face}:${sign}`, panel, doorsOpen ? 1 : 0, 0.9, (g, v) => {
-            g.position.x = travel[0] * v;
-            g.position.y = -travel[1] * v;
-          });
+          const door = makeCabinDoor(elevatorDoorWidth(o, turn), head, sign, this.cabinFinishes());
+          door.group.position.set(at[0], at[1], this.present(rel(active) + 0.015));
+          door.group.rotation.z = Math.atan2(along[1] - at[1], along[0] - at[0]);
+          door.group.scale.z = (this.present(rel(active) + head) - this.present(rel(active))) / head;
+          this.rig(`${o.id}:door:${face}:${sign}`, door.group, doorsOpen ? 1 : 0, 2.5, (_g, v) => door.update(v));
         }
       }
     }
@@ -1324,33 +1369,12 @@ export class SceneLayer implements CustomLayerInterface {
    *  Its exits are wherever it is served — a spiral passing three levels with a landing on each is
    *  one object serving three floors, which the document could already say and nothing drew. */
   private spiral(o: SiteObject, position: Point, base: number, rise: number, color: string) {
-    const outer = Math.max(0.8, Math.min(o.width, o.depth) / 2);
-    const inner = Math.min(0.16, outer / 5);
-    const steps = Math.max(6, Math.min(30, Math.round(rise / 0.18)));
-    // One full turn per storey reads as a spiral at any storey height; more would be a screw, less a
-    // ramp with a kink.
-    const sweep = (2 * Math.PI) / steps;
-    for (let i = 0; i < steps; i++) {
-      const a0 = i * sweep,
-        a1 = a0 + sweep * 1.04;
-      const ring: Point[] = [];
-      for (const [r, from, to] of [
-        [outer, a0, a1],
-        [inner, a1, a0],
-      ] as [number, number, number][]) {
-        const span = 4;
-        for (let k = 0; k <= span; k++) {
-          const a = from + ((to - from) * k) / span;
-          ring.push([position[0] + Math.cos(a) * r, position[1] + Math.sin(a) * r]);
-        }
-      }
-      // Treads count up from the first one you step ON, so the last lands level with the floor above
-      // rather than a riser short of it — which is what left a spiral ending in a step up to nothing.
-      this.surface([closeRing(ring)], base + (rise * (i + 1)) / steps - 0.07, 0.07, color, o.id);
-    }
-    // The pole the whole thing hangs off.
-    this.surface([rectangle(position, inner * 2, inner * 2, 0)], base, rise, '#9aa3a0', o.id);
+    const geometry = spiralGeometry(o, position, rise);
+    for (const step of geometry.wedges)
+      this.surface([closeRing(step.ring)], base + step.height - 0.07, 0.07, color, o.id);
+    this.surface([rectangle(position, geometry.inner * 2, geometry.inner * 2, 0)], base, rise, '#9aa3a0', o.id);
   }
+
   update(
     project: ProjectDocument,
     floorId: string | null,
@@ -1368,11 +1392,24 @@ export class SceneLayer implements CustomLayerInterface {
     const evening = sun.evening;
     const liftSignature = statuses
       ? [...statuses.values()]
-          .filter(r => r.carFloorId !== undefined || r.open !== undefined || r.running !== undefined || r.travel)
-          .map(r => `${r.feedId}:${r.carFloorId ?? ''}:${r.open ?? ''}:${r.running ?? ''}:${r.travel ?? ''}`)
+          .filter(
+            r =>
+              r.carFloorId !== undefined ||
+              r.targetFloorId !== undefined ||
+              r.open !== undefined ||
+              r.running !== undefined ||
+              r.travel,
+          )
+          .map(
+            r =>
+              `${r.feedId}:${r.carFloorId ?? ''}:${r.targetFloorId ?? ''}:${r.carTravelSeconds ?? ''}:${r.open ?? ''}:${r.moving ?? ''}:${r.running ?? ''}:${r.travel ?? ''}`,
+          )
           .sort()
           .join('|')
       : '';
+    if (walk && this.activeFloor !== floorId) {
+      for (const id of this.rigState.keys()) if (id.endsWith(':car') || id.includes(':door:')) this.rigState.delete(id);
+    }
     this.statuses = statuses;
     const settled =
       this.project === project &&
@@ -1415,9 +1452,11 @@ export class SceneLayer implements CustomLayerInterface {
     this.walking = walk;
     this.lampLit =
       !!walk && !!floorId && project.objects.some(o => o.floorId === floorId && o.kind === 'light' && !!o.light);
-    this.poolLitOnly =
+    const poolLighting =
       project.floors.find(f => f.id === floorId)?.light?.level === 0 &&
       project.objects.some(o => o.floorId === floorId && !!o.water);
+    this.poolLitOnly = walk && poolLighting;
+    this.poolOverview = !walk && poolLighting;
     this.activeFloor = floorId;
     this.selected = selected;
     this.sunState = sun;
@@ -1506,7 +1545,12 @@ export class SceneLayer implements CustomLayerInterface {
     // looking into. A stack is lit by the one in focus too: they are usually the same building with
     // the same fit-out, and lighting seventeen storeys three different colours at once would say
     // something about the building that is not true.
-    const air = ambient(sun, project.floors.find(f => f.id === floorId)?.light);
+    // Inspection lighting keeps the overview readable when the authored room has only submerged
+    // fixtures. Those lights and their shadow passes are reserved for walking mode.
+    const air = ambient(
+      sun,
+      this.poolOverview ? { kelvin: 6500, level: 1 } : project.floors.find(f => f.id === floorId)?.light,
+    );
     // Walking, the eye is inside and adapted to the inside. The exposure that keeps a plan legible
     // from above is set against the basemap — a small pale plate over a pale map — and at eye level
     // that same plate fills the lower half of the frame and clips to white. A clipped floor has no
@@ -1647,6 +1691,8 @@ export class SceneLayer implements CustomLayerInterface {
     // Every storey this view actually builds below the one in focus.
     const spanningObjects = walk ? tallSpaceContext(project, floorId) : [];
     const contextFloors = new Set(spanningObjects.map(o => o.floorId).filter(Boolean) as string[]);
+    const atrium =
+      walk && activeF && floorId ? walkVoidContext(project, activeF, walkCeiling(project, floorId)!.floor) : undefined;
     const drawnLevels = new Set<string>(
       [...shellBelow, ...lower.keys(), ...contextFloors, under?.id, belowShell?.id, floorId].filter(
         Boolean,
@@ -1656,6 +1702,7 @@ export class SceneLayer implements CustomLayerInterface {
      *  through a floor with nothing under it is not a stairwell: on the ground floor all twelve of
      *  them opened straight onto the basemap. The stack draws every storey, so there it always is. */
     const punchWells = (fid: string) =>
+      this.walking ||
       stack ||
       view.levels.some(f => f.elevation < (floors.get(fid)?.elevation ?? 0) && f.id !== fid && drawnLevels.has(f.id));
     /** Where a floor's geometry is built, before present() maps it for the screen: the elevation the
@@ -1779,8 +1826,10 @@ export class SceneLayer implements CustomLayerInterface {
             : (o.color ?? COLORS[o.kind] ?? '#e6e8e1'));
       if (o.water && o.rings?.length) {
         if (!ghosted) {
-          this.scene.add(makePool(o, pt => this.xy(pt), this.present(z + LIFT + SLAB), this.materials, this.waterTime));
-          this.hasWater = true;
+          this.scene.add(
+            makePool(o, pt => this.xy(pt), this.present(z + LIFT + SLAB), this.materials, this.waterTime, walk),
+          );
+          this.hasWater = walk;
         }
         continue;
       }
@@ -1920,6 +1969,19 @@ export class SceneLayer implements CustomLayerInterface {
       const tallRoofs = spanningObjects.filter(
         o => o.ceilingHeight && o.rings?.length && (floors.get(o.floorId!)?.elevation ?? 0) < activeF.elevation,
       );
+      const openCeiling = (rings: Ring[]) => {
+        if (!atrium?.ceilingOpenings.length) return rings;
+        try {
+          return (
+            polygonClipping.difference(
+              [rings] as never,
+              ...atrium.ceilingOpenings.map(r => [r] as never),
+            ) as unknown as Ring[][]
+          ).flat();
+        } catch {
+          return rings;
+        }
+      };
       for (const o of [...(index.objects.get(ceilingFloor.id) ?? []), ...tallRoofs]) {
         if (!o.rings?.length || (o.kind !== 'room' && o.kind !== 'zone')) continue;
         if (o.water || o.slope) continue;
@@ -1934,7 +1996,7 @@ export class SceneLayer implements CustomLayerInterface {
         this.surface(
           // The lid is open where a flight sets OFF through it, which is not where the floor is open:
           // the bottom of a run departs without arriving, and a run's top arrives without departing.
-          this.withVoids(project, o.rings, ceilingFloor.id, index.primary, 'ceiling'),
+          openCeiling(this.withVoids(project, o.rings, ceilingFloor.id, index.primary, 'ceiling')),
           roof - nestingLift(objectArea(o)),
           SLAB,
           '#f0f1ee',
@@ -1967,7 +2029,44 @@ export class SceneLayer implements CustomLayerInterface {
         through: 'ceiling',
         lowest: buried ? -Infinity : -0.01,
       });
-      for (const [i, well] of wells.entries()) this.surface([well], wellHead, SLAB, '#d9dad6', `well:${floorId}:${i}`);
+      if (!atrium?.levels.length)
+        for (const [i, well] of wells.entries())
+          this.surface([well], wellHead, SLAB, '#d9dad6', `well:${floorId}:${i}`);
+      // Complete structural plates support the surfaces visible through the atrium. Isolated well
+      // caps looked like floating furniture, while ghost shafts continued into an otherwise empty sky.
+      for (const level of atrium?.levels ?? []) {
+        if (level.id === under?.id || over.some(f => f.id === level.id) || contextFloors.has(level.id)) continue;
+        const z = relative(level.id);
+        for (const plate of shellPlate(project, level.id, index.primary, { lowest: -Infinity }))
+          this.surface(plate, z + LIFT + SLAB, SLAB, '#deddd6', `atrium-plate:${level.id}`, 'plaster');
+        for (const ring of floorOutline(project, level.id)) {
+          const edge = openRing(ring);
+          for (let i = 0; i < edge.length; i++) {
+            const a = edge[i],
+              b = edge[(i + 1) % edge.length];
+            const length = distance(a, b),
+              angle = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
+            this.surface(
+              [rectangle([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], length, 0.16, angle)],
+              z + LIFT + SLAB,
+              level.height - SLAB,
+              '#e3e0d7',
+              `atrium-shell:${level.id}`,
+              'plaster',
+            );
+          }
+        }
+      }
+      if (atrium?.roof)
+        for (const ring of floorOutline(project, atrium.roof.id))
+          this.surface(
+            [ring],
+            relative(atrium.roof.id) + atrium.roof.height + LIFT,
+            SLAB,
+            '#e4e2db',
+            `atrium-roof:${atrium.roof.id}`,
+            'ceiling',
+          );
     }
     // A carried level brings its walls too, or its rooms read as floating colour — the level below a
     // mezzanine, and the mezzanine hanging inside the storey you are looking at.
@@ -2019,25 +2118,12 @@ export class SceneLayer implements CustomLayerInterface {
         undefined,
         // A fence or a garden wall stands out of doors and is lit like the ground it stands on.
         p.floorId === null,
+        // Assign plaster to the actual inner face. A separate skin competed with brick in the
+        // depth buffer, especially at oblique angles and through the long hall.
+        exterior.has(p.id) && !wallGhost && finish.material && !['plaster', 'tile'].includes(finish.material)
+          ? this.interiorFace(project, p, floorId)
+          : null,
       );
-      // The inside of an outside wall is a room's wall, and rooms are plastered. A facade's stone or
-      // brick is its OUTER face; wrapping it round the solid put masonry inside every room, so a
-      // house read as a ruin with no interior finish anywhere. A thin skin on the inner face fixes
-      // it for what it costs: one surface per exterior piece, only where the wall faces a floor.
-      if (exterior.has(p.id) && !wallGhost && finish.material && finish.material !== 'plaster') {
-        const lining = this.lining(project, p, floorId);
-        if (lining)
-          this.surface(
-            [lining],
-            p.base + wallBase(p.floorId) + (stack ? 0 : relative(p.floorId)),
-            p.height - p.base,
-            '#eceae5',
-            p.id,
-            'plaster',
-            false,
-            p.base < 0.01,
-          );
-      }
     }
     // Roofs cover their building in the site view and stacked view; cutaways expose the interior.
     if (!buried && (stack || floorId === null))
@@ -2144,12 +2230,16 @@ export class SceneLayer implements CustomLayerInterface {
       this.scene.add(this.cage);
     }
     const fixtureBase = this.present((stack ? (activeF?.elevation ?? 0) : relative(floorId)) + LIFT + SLAB);
-    if ((walk || this.hasWater) && floorId) {
+    if (walk && floorId) {
       const fixtures = [...(index.objects.get(floorId) ?? []), ...spanningObjects]
-        .filter(o => o.kind === 'light' && o.light && (walk || (o.light.mountHeight ?? 0) < 0))
+        .filter(o => o.kind === 'light' && o.light)
         .map(o => (o.floorId === floorId ? o : { ...o, height: o.height + relative(o.floorId) }));
       if (fixtures.length)
         this.fixtureLights = new FixtureLights(this.scene, fixtures, pt => this.xy(pt), fixtureBase, this.materials);
+    }
+    if (walk) {
+      this.passenger = new Passenger(this.cabinFinishes().environment);
+      this.scene.add(this.passenger);
     }
     this.batch.finish(this.scene);
     if (this.hasWater && floorId)
@@ -2470,6 +2560,7 @@ export class SceneLayer implements CustomLayerInterface {
       drawCalls: this.renderer?.info.render.calls ?? 0,
       geometries: this.renderer?.info.memory.geometries ?? 0,
       textures: this.renderer?.info.memory.textures ?? 0,
+      animatedWater: this.hasWater,
     };
   }
   render(gl: WebGLRenderingContext | WebGL2RenderingContext, args: CustomRenderMethodInput) {
@@ -2519,6 +2610,7 @@ export class SceneLayer implements CustomLayerInterface {
     this.worldToClip
       .fromArray((precise?.length === 16 ? precise : args.defaultProjectionData.mainMatrix) as number[])
       .multiply(this.transform);
+    const nearPlane = this.walking ? walkNearPlane(this.worldToClip, args.nearZ, args.farZ) : args.nearZ;
     if (this.buried) {
       if (this.clipBoundsDirty) {
         this.scene.updateMatrixWorld(true);
@@ -2531,10 +2623,15 @@ export class SceneLayer implements CustomLayerInterface {
       }
       // MapLibre fits its far plane to the ground; a basement can cross that plane and lose
       // a straight slice of its floor as the camera pans. Fit the custom scene independently.
-      includeSceneDepth(this.worldToClip, this.clipBounds, this.scene.scale.z, args.nearZ, args.farZ);
+      includeSceneDepth(this.worldToClip, this.clipBounds, this.scene.scale.z, nearPlane, args.farZ);
     }
     this.clipToWorld.copy(this.worldToClip).invert();
     syncLightingCamera(this.camera, this.worldToClip, this.clipToWorld);
+    if (this.passenger) {
+      const forward = new THREE.Vector3(0, 0, 0).applyMatrix4(this.clipToWorld).sub(this.camera.position).normalize();
+      if (this.passenger.update(this.camera.position, forward, now / 1000, elapsed)) this.paintSoon();
+      this.passenger.updateMatrixWorld(true);
+    }
     if (this.fixtureLights) {
       const { shadowsChanged, animate } = this.fixtureLights.update(this.camera.position, now / 1000);
       if (shadowsChanged) this.renderer.shadowMap.needsUpdate = true;
@@ -2648,6 +2745,7 @@ export class SceneLayer implements CustomLayerInterface {
   }
   private disposeScene() {
     this.hasWater = false;
+    this.passenger = undefined;
     this.fixtureLights = undefined;
     this.cage.dispose();
     this.markerCache.clear();
@@ -2657,10 +2755,12 @@ export class SceneLayer implements CustomLayerInterface {
     const geometries = new Set<THREE.BufferGeometry>(),
       materials = new Set<THREE.Material>();
     this.scene.traverse(o => {
+      if (o instanceof CabinMirror) o.getRenderTarget().dispose();
       if (o instanceof THREE.Mesh || o instanceof THREE.LineSegments) {
         geometries.add(o.geometry);
         (Array.isArray(o.material) ? o.material : [o.material]).forEach(m => {
           if (!m.userData.shared) materials.add(m);
+          if (m.userData.ownedMap) (m as THREE.MeshBasicMaterial).map?.dispose();
         });
         // InstancedMesh (roof tiles) also holds instanceMatrix/instanceColor GPU buffers that only
         // its own dispose() frees — geometry/material disposal leaves them orphaned on each rebuild.
@@ -2684,6 +2784,8 @@ export class SceneLayer implements CustomLayerInterface {
     this.loopTimer = undefined;
     this.disposeScene();
     this.materials.dispose();
+    this.cabinMaterials?.dispose();
+    this.cabinMaterials = undefined;
     this.envCache.forEach(target => target.dispose());
     this.envCache.clear();
     // dispose() frees Three's programs/listeners; it does not lose the shared context. Never call

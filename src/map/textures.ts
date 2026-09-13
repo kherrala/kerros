@@ -4,7 +4,7 @@ import type { MaterialKind } from '../model/types';
 /** `roof` and `ceiling` are finishes with no authorable material behind them: nobody writes "this
  *  wall is made of roof". They exist because the renderer draws two surfaces the document never
  *  names — the cap over a building, and the soffit walk mode puts over the storey you are in. */
-export type SurfaceFinish = MaterialKind | 'roof' | 'ceiling';
+export type SurfaceFinish = MaterialKind | 'roof' | 'ceiling' | 'veneer';
 
 // One repeat in real metres. Shared across colours, so an entire site needs only one set per finish.
 const SCALE: Record<SurfaceFinish, [number, number]> = {
@@ -12,9 +12,11 @@ const SCALE: Record<SurfaceFinish, [number, number]> = {
   stone: [2.4, 1.2],
   plaster: [3, 3],
   timber: [2.4, 1.44],
+  veneer: [1, 2.2],
   oak: [2.4, 1.44],
   // Four columns and six rows of 150 mm square swimming-hall / bathroom tiles.
   tile: [0.6, 0.9],
+  terrazzo: [2.4, 2.4],
   grass: [3.2, 3.2],
   paving: [1.6, 1.6],
   roof: [2.4, 3.6],
@@ -90,6 +92,23 @@ export function surfaceTextures(kind: SurfaceFinish) {
         tone = tone * face + (kind === 'tile' ? 0.42 : kind === 'brick' ? 0.86 : 0.88) * (1 - face);
         relief = 0.18 + face * (0.56 + (grain - 0.5) * (kind === 'tile' ? 0.015 : 0.12));
         roughness = kind === 'tile' ? 0.35 + weather * 0.16 + (1 - face) * 0.4 : 0.84 + grain * 0.12;
+      } else if (kind === 'terrazzo') {
+        // Four 600 mm polished stone tiles each way, with 3 mm grout and aggregate flecks.
+        const fu = fract(u * 4),
+          fv = fract(v * 4);
+        const edge = Math.min(fu, 1 - fu, fv, 1 - fv);
+        const face = smooth(Math.min(1, edge / 0.006));
+        const stone = hash(Math.floor(u * 4), Math.floor(v * 4));
+        const chip = grain > 0.95 ? -0.16 : grain < 0.04 ? 0.035 : 0;
+        tone = (0.92 + stone * 0.055 + (weather - 0.5) * 0.025 + chip) * face + 0.5 * (1 - face);
+        relief = 0.3 + face * 0.35;
+        roughness = 0.38 + weather * 0.12 + (1 - face) * 0.42;
+      } else if (kind === 'veneer') {
+        // Continuous vertical door grain, without the board joints used by timber cladding.
+        const fibre = Math.sin(u * Math.PI * 2 * 110 + Math.sin(v * Math.PI * 2) * 1.5 + noise(u, v, 8) * 2);
+        tone = 0.97 + fibre * 0.022 + (weather - 0.5) * 0.025;
+        relief = 0.55 + fibre * 0.018;
+        roughness = 0.43 + weather * 0.08;
       } else if (kind === 'oak' || kind === 'timber') {
         const row = Math.floor(v * 8),
           across = fract(v * 8);

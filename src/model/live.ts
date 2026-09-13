@@ -39,6 +39,13 @@ export interface StatusReading {
    *  where an idle lift really does wait. Sits beside `open`, which says whether its doors are
    *  standing open, for the same reason: both are what the thing is doing, not whether to worry. */
   carFloorId?: string;
+  /** Destination while travelling; carFloorId remains the last arrived landing. */
+  targetFloorId?: string;
+  /** Expected travel duration for the current car movement, in seconds. Hosts can compress demo
+   * trips; absent means the renderer's ordinary 1.5 m/s. Arrival readings remain authoritative. */
+  carTravelSeconds?: number;
+  /** Travel or door movement is in progress; passengers cannot board or leave yet. */
+  moving?: boolean;
   /** For an escalator: whether it is running right now. A stopped escalator is a stair, and the
    *  plan draws it as one — the steps stand still. Omitted means unknown and draws it running,
    *  because an escalator that is working is the ordinary case and a stopped one is the exception
@@ -47,8 +54,8 @@ export interface StatusReading {
   running?: boolean;
   /** For an escalator that can be reversed: which way it is carrying people at this moment, which a
    *  station or a shopping centre flips between the morning and the evening peak. Overrides the
-   *  object's authored `travel` for as long as the reading stands. Routing keeps to the authored
-   *  direction — a graph is a description of the building, not of this minute. */
+   *  object's authored `travel` for as long as the reading stands. Pass readings to findRoute's
+   *  options to route with the current direction; the stored graph remains unchanged. */
   travel?: 'up' | 'down';
   /** Opaque host state, passed through untouched — the library never reads it. */
   details?: Record<string, unknown>;

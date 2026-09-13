@@ -1,7 +1,6 @@
 /** An original, quiet score for the tiled baths: suspended chords and a sparse glass-bell melody.
  * Synthesised locally, with a repeating forty-second phrase and a long stereo room tail. */
-const BEAT = 60 / 48;
-const CHORD_SECONDS = BEAT * 8;
+
 const SCORE = [
   { chord: [50, 57, 60, 65], melody: [76, 74, 69] }, // Dm7, with a ninth in the melody
   { chord: [53, 60, 64, 69], melody: [72, 76, 69] }, // Fmaj7
@@ -30,10 +29,26 @@ function roomImpulse(ctx: BaseAudioContext) {
   return buffer;
 }
 
-export function bathMusic(ctx: BaseAudioContext, out: AudioNode) {
+export const bathMusic = (ctx: BaseAudioContext, out: AudioNode) => roomMusic(ctx, out, false);
+export const elevatorMusic = (ctx: BaseAudioContext, out: AudioNode) => roomMusic(ctx, out, true);
+
+function roomMusic(ctx: BaseAudioContext, out: AudioNode, elevator: boolean) {
+  const BEAT = 60 / (elevator ? 88 : 48),
+    CHORD_SECONDS = BEAT * 8;
+  const score = elevator
+    ? [
+        { chord: [48, 55, 59, 64], melody: [76, 79, 74] },
+        { chord: [45, 52, 55, 60], melody: [72, 76, 71] },
+        { chord: [50, 57, 60, 65], melody: [74, 77, 76] },
+        { chord: [43, 53, 57, 62], melody: [74, 71, 72] },
+      ]
+    : SCORE;
   const nodes: AudioNode[] = [];
   const oscillators: OscillatorNode[] = [];
   const bus = ctx.createGain();
+  // Give the first chord a gentle entrance even outside the walk engine's cross-fade.
+  bus.gain.setValueAtTime(0, ctx.currentTime);
+  bus.gain.linearRampToValueAtTime(1, ctx.currentTime + 0.6);
   const low = ctx.createBiquadFilter();
   low.type = 'lowpass';
   low.frequency.value = 3200;
@@ -43,7 +58,7 @@ export function bathMusic(ctx: BaseAudioContext, out: AudioNode) {
   const reverb = ctx.createConvolver();
   reverb.buffer = roomImpulse(ctx);
   const wet = ctx.createGain();
-  wet.gain.value = 0.48;
+  wet.gain.value = elevator ? 0.09 : 0.48;
   bus.connect(low);
   low.connect(dry).connect(out);
   low.connect(reverb).connect(wet).connect(out);
@@ -94,10 +109,12 @@ export function bathMusic(ctx: BaseAudioContext, out: AudioNode) {
       bar++;
     }
     while (next < ctx.currentTime + CHORD_SECONDS * 2) {
-      const phrase = SCORE[bar % SCORE.length];
-      phrase.chord.forEach((midi, i) => pads[i].note(midi, next, i ? 0.045 : 0.055, 2, 3, CHORD_SECONDS));
+      const phrase = score[bar % score.length];
+      phrase.chord.forEach((midi, i) =>
+        pads[i].note(midi, next, i ? 0.045 : 0.055, elevator ? 0.08 : 2, elevator ? 1.5 : 3, CHORD_SECONDS),
+      );
       phrase.melody.forEach((midi, i) => {
-        bells[bell++ % bells.length].note(midi, next + [1, 3.5, 6][i] * BEAT, 0.065, 0.025, 0, 3.8);
+        bells[bell++ % bells.length].note(midi, next + [1, 3.5, 6][i] * BEAT, 0.065, 0.025, 0, elevator ? 1.5 : 3.8);
       });
       next += CHORD_SECONDS;
       bar++;

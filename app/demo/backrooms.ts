@@ -1,4 +1,5 @@
 import {
+  buildRoomNavigation,
   closeRing,
   emptyProject,
   geoOrigin,
@@ -10,9 +11,8 @@ import {
 import { generateOfficeLayout, seedNumber } from './officeLayout';
 import { addPoolrooms } from './poolrooms';
 
-import { BACKROOMS_ID } from './ids';
-export { BACKROOMS_ID };
-export const BACKROOMS_SEED = 'the-yellow-office';
+import { BACKROOMS_ID, BACKROOMS_SEED } from './ids';
+export { BACKROOMS_ID, BACKROOMS_SEED };
 export const OFFICE_CELL = 6;
 export interface BackroomsOptions {
   seed?: string;
@@ -104,7 +104,6 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
       material,
     });
     const sectors = new Map<string, string[]>();
-    const galleryRoutes = new Map<number, { id: string; position: Point }[]>();
     layout.rooms.forEach((room, i) => {
       const { x, y, width, depth } = room;
       const at = metric([x + width / 2, y + depth / 2]);
@@ -154,29 +153,9 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
       p.navNodes!.push({
         id: nodeId(i),
         floorId: prefix,
-        position: i === 0 ? [2, 0] : hall && level === 0 ? metric([x + 0.3, y + 0.3]) : at,
+        position: i === 0 ? [2, 0] : at,
         objectId: o.id,
       });
-      if (hall && level === 0) {
-        const corners = [
-          [x + 0.3, y + 0.3],
-          [x + width - 0.3, y + 0.3],
-          [x + width - 0.3, y + depth - 0.3],
-          [x + 0.3, y + depth - 0.3],
-        ].map((pt, corner) => ({
-          id: corner ? `${o.id}-corner-${corner}` : nodeId(i),
-          position: metric(pt as Point),
-        }));
-        galleryRoutes.set(i, corners);
-        p.navNodes!.push(...corners.slice(1).map(corner => ({ ...corner, floorId: prefix })));
-        for (let k = 0; k < corners.length; k++)
-          p.navEdges!.push({
-            id: `${o.id}-gallery-edge-${k}`,
-            kind: 'walk',
-            aId: corners[k].id,
-            bId: corners[(k + 1) % corners.length].id,
-          });
-      }
     });
     for (const [sector, spaceIds] of sectors)
       p.zones.push({
@@ -208,18 +187,6 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
       const id = `${prefix}-passage-${i}`;
       p.portals!.push({ id, a: roomId(edge.a), b: roomId(edge.b), name: 'Open passage' });
       p.navNodes!.push({ id: `${id}-node`, floorId: prefix, position: along(0.5) });
-      for (const side of [edge.a, edge.b]) {
-        const at = along(0.5);
-        const corner = galleryRoutes
-          .get(side)
-          ?.slice()
-          .sort(
-            (a, b) =>
-              Math.hypot(a.position[0] - at[0], a.position[1] - at[1]) -
-              Math.hypot(b.position[0] - at[0], b.position[1] - at[1]),
-          )[0];
-        p.navEdges!.push({ id: `${id}-to-${side}`, kind: 'walk', aId: corner?.id ?? nodeId(side), bId: `${id}-node` });
-      }
     });
     for (let y = 0; y < size; y++)
       for (let x = 0; x < size; x++) {
@@ -263,5 +230,15 @@ export function createBackrooms(options: BackroomsOptions = {}): ProjectDocument
       });
   }
   addPoolrooms(p, seed, size * OFFICE_CELL);
+  const access = p.portals!.flatMap(portal =>
+    [portal.a, portal.b].map(spaceId => ({ spaceId, nodeId: `${portal.id}-node` })),
+  );
+  for (const floor of p.floors) access.push({ spaceId: `${floor.id}-room-0`, nodeId: `${floor.id}-stair-node` });
+  const graph = buildRoomNavigation(p, access, {
+    nodes: p.navNodes!,
+    edges: p.navEdges!.filter(e => e.kind !== 'walk'),
+  });
+  p.navNodes = graph.nodes;
+  p.navEdges = graph.edges;
   return p;
 }

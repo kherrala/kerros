@@ -55,7 +55,7 @@ object.metadata = { asset: 'MR-14', seats: 8 };
 
 ## Injecting your own controls
 
-The editor ships no command UI. Render your own for a selected bound object via `renderStatusPanel`:
+The optional `elevators` prop enables passenger controls in Walk (see [the editor guide](./editor#elevators-and-music)). Render other domain-specific commands for a selected bound object via `renderStatusPanel`:
 
 ```tsx
 <FloorEditor …

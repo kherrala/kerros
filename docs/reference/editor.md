@@ -55,9 +55,10 @@ guaranteed — a shared module a hundred screens import, say — and use the mai
 
 | Export | Description |
 | --- | --- |
-| `SitePlannerProps` | The editor's props: `project`, `adapters`, `initialView`, `onViewChange`, `onModeChange`, `renderStatusPanel`, `onChange`, `onSelectionChange`, `onBack`. |
+| `SitePlannerProps` | The editor's props: `project`, `adapters`, `initialView`, `onViewChange`, `onModeChange`, `renderStatusPanel`, `elevators`, `onChange`, `onSelectionChange`, `onBack`. |
 | `PlannerAdapters` | `{ projects, assets, status, basemap? }`. |
 | `PlannerMode` | `'view' \| 'edit' \| 'live'`. |
+| `ElevatorControls` | Optional `{ statuses, call(feedId, floorId), hold(feedId, open) }` for passenger controls in Walk. The host owns arrival and door sequencing. |
 | `StatusPanelContext` | `{ object, status?, editing, live }` — passed to `renderStatusPanel`. |
 | `Tool` | The editor's tool union. |
 

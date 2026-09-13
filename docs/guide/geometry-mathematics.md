@@ -203,6 +203,41 @@ $$
 
 The editor tests directions at 15° intervals relative to the floor's main axis and the selected
 wall's own direction. It accepts a nearby displacement within the screen-derived snapping tolerance,
-then applies the full geometry validation. Remote endpoints remain fixed. Incompatible constraints
+then applies the full geometry validation on release. A rejected drop preserves the preceding valid
+document; the transient pointer preview is not a model state. Remote endpoints remain fixed. Incompatible constraints
 need not have a common solution; snapping does not prove that every adjoining wall can be aligned
 simultaneously.
+
+## 10. Geometric navigation and shortest paths
+
+Let $R$ be a room's polygonal region, $O$ the union of wall bodies, pools and floor openings, and
+$r>0$ the desired clearance. A candidate segment between access points $a,b$ is accepted only when
+
+$$
+[a,b]\subseteq R,
+\qquad [a,b]\cap O=\varnothing,
+\qquad \operatorname{dist}([a,b],\partial O)\ge r.
+$$
+
+The implementation checks polygon intersection intervals and segment-to-edge distances. In
+particular, a midpoint test alone is insufficient: a segment can leave and re-enter a concave room
+while its midpoint remains inside. Candidate waypoints at offset polygon corners make many useful
+detours representable without requiring a tessellated navigation mesh.
+
+For the resulting finite graph $G=(V,E)$ with nonnegative edge costs $c(e)$, routing minimizes
+
+$$
+d(s,t)=\min_{P:s\leadsto t}\sum_{e\in P}c(e).
+$$
+
+**Dijkstra invariant.** When the smallest tentative label is removed from the priority queue, no
+unsettled path can improve that vertex's label: any such path must first cross an unsettled vertex
+whose tentative cost is at least as large, then add only nonnegative costs. Induction proves that
+settled labels are shortest-path costs. A destination's approach cost is included in the stopping
+bound. Directed edges preserve one-way crossings; vertical edges add the chosen transport cost.
+
+This proves optimality **within the constructed graph**. It does not prove a globally shortest
+continuous path for an arbitrary clearance-offset floor, nor that the waypoint set is complete for
+every possible narrow passage. A rejected geometric connection stays absent; drawing a smoother
+curve across an obstacle would not repair its absence. Tests exercise concavity, rotation, pools,
+floor holes, narrow doorways, one-way crossings and the generated multi-floor layouts.

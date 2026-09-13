@@ -338,6 +338,14 @@ export function validateProject(value: unknown): ProjectDocument {
       if (on.some(Boolean) && !on.every(Boolean))
         fail('a stair or lift serves a level it does not stand on — its landing there opens onto nothing.');
     }
+    if (o.doorHinge !== undefined || o.doorSwing !== undefined || o.doorType !== undefined) {
+      if (o.kind !== 'door') fail('only doors carry mechanism, hinge and swing settings.');
+      if (o.doorType !== undefined && !['hinged', 'sliding', 'double'].includes(o.doorType))
+        fail('door type must be hinged, sliding or double.');
+      if (o.doorHinge !== undefined && !['left', 'right'].includes(o.doorHinge))
+        fail('door hinge must be left or right.');
+      if (o.doorSwing !== undefined && o.doorSwing !== 1 && o.doorSwing !== -1) fail('door swing must be 1 or -1.');
+    }
     if (o.doorSides !== undefined) {
       if (o.kind !== 'elevator') fail('only an elevator lists door sides.');
       if (
@@ -348,6 +356,8 @@ export function validateProject(value: unknown): ProjectDocument {
       )
         fail('door sides are front, back, left or right, listed once each.');
     }
+    if (o.wellGroup !== undefined && (o.kind !== 'stairs' || !string(o.wellGroup) || !o.wellGroup.trim()))
+      fail('only stairs carry a non-empty shared well group.');
     if (o.stairModel !== undefined) {
       if (o.kind !== 'stairs') fail('only stairs carry a stair model.');
       if (!['straight', 'switchback', 'dogleg', 'spiral', 'escalator'].includes(o.stairModel as string))

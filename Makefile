@@ -76,7 +76,7 @@ site: ## Build the full published site (apps + manual) into dist/ — serve it w
 lib: ## Build the publishable packages
 	$(NPM) run build:lib
 
-media: ## Re-capture the docs hero and showcase (needs .env.local and ffmpeg)
+media: ## Record the three homepage demos (needs .env.local and ffmpeg)
 	$(NPM) run capture:media
 
 # ——— CAD plan import. DWG=<file> is required; see scripts/plan-import/README.md.

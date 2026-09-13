@@ -35,3 +35,17 @@ export function includeSceneDepth(matrix: Matrix4, bounds: Box3, scaleZ: number,
   const t = k * oldA - newA;
   for (let i = 0; i < 16; i += 4) e[i + 2] = k * e[i + 2] + t * e[i + 3];
 }
+
+/** MapLibre's near distance follows viewport pixels and can cut away a wall before the walker
+ * touches it. Give POV a 4 cm near plane in scene metres, preserving the eye, X/Y and far plane. */
+export function walkNearPlane(matrix: Matrix4, near: number, far: number): number {
+  const e = matrix.elements;
+  const next = Math.min(near, 0.04 * Math.hypot(e[3], e[7], e[11]));
+  if (!(next > 0 && near > 0 && far > near)) return near;
+  const oldA = -(far + near) / (far - near),
+    newA = -(far + next) / (far - next);
+  const k = next / (far - next) / (near / (far - near));
+  const t = k * oldA - newA;
+  for (let i = 0; i < 16; i += 4) e[i + 2] = k * e[i + 2] + t * e[i + 3];
+  return next;
+}

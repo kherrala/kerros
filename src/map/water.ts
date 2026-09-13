@@ -3,6 +3,7 @@ import type { Point, SiteObject } from '../model/types';
 import { rotate } from '../model/geometry';
 import type { MaterialLibrary } from './materials';
 import { metricUVs } from './surfaces';
+import { poolBounces } from './poolLighting';
 
 /** Original small-wave implementation informed by https://reakt.io/ocean.html:
  * sum directional Gerstner terms and differentiate them for normals. Pool wavelengths and
@@ -64,6 +65,7 @@ export function makePool(
   base: number,
   materials: MaterialLibrary,
   time: { value: number },
+  detailed = true,
 ): THREE.Group {
   const group = new THREE.Group();
   const rings = o.rings!;
@@ -94,6 +96,25 @@ export function makePool(
       metricUVs(wall);
       add(wall, tile);
     }
+  // Overview maps need the pool outline and depth, without an extra full-scene transmission pass,
+  // subdivided waves or ladder draw calls. Walking rebuilds this group with the detailed surface.
+  if (!detailed) {
+    const flat = new THREE.ShapeGeometry(shape);
+    flat.translate(0, 0, base - 0.08);
+    const surface = add(
+      flat,
+      new THREE.MeshBasicMaterial({
+        color: '#72bcc9',
+        transparent: true,
+        opacity: 0.65,
+        depthWrite: false,
+        side: THREE.DoubleSide,
+      }),
+    );
+    surface.userData.water = true;
+    surface.renderOrder = 2;
+    return group;
+  }
   const water = new THREE.MeshPhysicalMaterial({
     color: '#d4f3ef',
     roughness: 0.12,
@@ -237,36 +258,22 @@ export function applyPoolCaustics(
   base: number,
   time: { value: number },
 ) {
-  const pools = project.objects.filter(o => o.floorId === floorId && o.water && o.rings);
-  const sources = pools.flatMap(pool => {
-    const room = project.objects.find(o => o.id === pool.parentId);
-    if (!room) return [];
-    const lamps = project.objects.filter(
-      o =>
-        o.floorId === floorId &&
-        o.kind === 'light' &&
-        (o.light?.mountHeight ?? 0) < 0 &&
-        Math.abs(o.position[0] - pool.position[0]) <= pool.width / 2 &&
-        Math.abs(o.position[1] - pool.position[1]) <= pool.depth / 2,
-    );
-    const intensity = lamps.reduce((sum, lamp) => sum + lamp.light!.intensity, 0);
-    if (!intensity) return [];
-    const center = xy(pool.position),
-      end = xy([pool.position[0] + 1, pool.position[1]]);
+  const sources = poolBounces(project, floorId).map(({ room, pool, strength, height }) => {
+    const center = xy(room.position),
+      end = xy([room.position[0] + 1, room.position[1]]);
     const length = Math.hypot(end[0] - center[0], end[1] - center[1]);
-    const height = lamps.reduce((sum, lamp) => sum + lamp.light!.mountHeight!, 0) / lamps.length;
-    return [
-      {
-        frame: new THREE.Vector4(center[0], center[1], (end[0] - center[0]) / length, (end[1] - center[1]) / length),
-        room: new THREE.Vector4(
-          room.width / 2 + 0.25,
-          room.depth / 2 + 0.25,
-          base + height,
-          Math.min(1.6, intensity / 650),
-        ),
-        pool: new THREE.Vector2(pool.width / 2, pool.depth / 2),
-      },
-    ];
+    return {
+      frame: new THREE.Vector4(center[0], center[1], (end[0] - center[0]) / length, (end[1] - center[1]) / length),
+      room: new THREE.Vector4(room.width / 2 + 0.25, room.depth / 2 + 0.25, base + height, strength),
+      pool: pool
+        ? new THREE.Vector4(
+            pool.position[0] - room.position[0],
+            pool.position[1] - room.position[1],
+            pool.width / 2,
+            pool.depth / 2,
+          )
+        : new THREE.Vector4(0, 0, -1, -1),
+    };
   });
   if (!sources.length) return;
   const replacements = new Map<THREE.Material, THREE.MeshStandardMaterial>();
@@ -292,7 +299,7 @@ export function applyPoolCaustics(
         shader.fragmentShader =
           `varying vec3 bathWorld; uniform float bathTime;
           uniform vec4 bathFrames[${sources.length}]; uniform vec4 bathRooms[${sources.length}];
-          uniform vec2 bathPools[${sources.length}];\n` +
+          uniform vec4 bathPools[${sources.length}];\n` +
           shader.fragmentShader.replace(
             '#include <emissivemap_fragment>',
             `
@@ -314,7 +321,8 @@ export function applyPoolCaustics(
             vec2 delta = bathWorld.xy - bathFrames[i].xy;
             vec2 local = vec2(dot(delta, bathFrames[i].zw), dot(delta, vec2(-bathFrames[i].w, bathFrames[i].z)));
             if (abs(local.x) > bathRooms[i].x || abs(local.y) > bathRooms[i].y) continue;
-            vec2 outside = max(abs(local) - bathPools[i], vec2(0.0));
+            bool reflected = bathPools[i].z < 0.0;
+            vec2 outside = reflected ? vec2(0.0) : max(abs(local - bathPools[i].xy) - bathPools[i].zw, vec2(0.0));
             float dz = bathWorld.z - bathRooms[i].z;
             float falloff = 1.0 / (1.0 + 0.012 * (dot(outside, outside) + dz * dz));
             // Two independent phases on vertical faces as well as horizontal ones: a flat XY
@@ -322,7 +330,7 @@ export function applyPoolCaustics(
             vec3 phase = vec3(local, bathWorld.z) * 7.0;
             float a = sin(phase.x + phase.z * 0.91 + sin(phase.y * 0.81 + phase.z * 0.73 + bathTime * 0.6));
             float b = sin(phase.y - phase.z * 1.13 - sin(phase.x * 0.93 + phase.z * 1.31 - bathTime * 0.47));
-            float focus = pow(max(0.0, 1.0 - abs(a + b) * 0.75), 10.0);
+            float focus = reflected ? 0.0 : pow(max(0.0, 1.0 - abs(a + b) * 0.75), 10.0);
             // Diffuse reflected pool light carries the tiles; focused ripples modulate it.
             float spread = 0.65 + 0.35 * sin(local.x * 0.27 + sin(local.y * 0.23) + bathTime * 0.18);
             bathGlow += (0.65 + focus * 0.14 * spread / (1.0 + abs(dz) * 0.05)) * falloff * bathRooms[i].w;

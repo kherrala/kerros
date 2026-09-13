@@ -137,7 +137,17 @@ export class MaterialLibrary {
       bumpMap,
       roughnessMap,
       bumpScale:
-        kind === 'brick' ? 0.018 : kind === 'roof' ? 0.026 : kind === 'grass' ? 0.025 : kind === 'tile' ? 0.001 : 0.006,
+        kind === 'veneer'
+          ? 0.0004
+          : kind === 'brick'
+            ? 0.018
+            : kind === 'roof'
+              ? 0.026
+              : kind === 'grass'
+                ? 0.025
+                : kind === 'tile'
+                  ? 0.001
+                  : 0.006,
       roughness: 1,
       metalness: kind === 'roof' ? 0.48 : 0,
       side: THREE.DoubleSide,
@@ -185,6 +195,45 @@ export class MaterialLibrary {
       const material = new THREE.MeshStandardMaterial({ color, metalness: 0.72, roughness: 0.32 });
       material.userData.shared = true;
       this.materials.set(key, material);
+    }
+    return this.materials.get(key)!;
+  }
+  /** One image per step; the UVs follow the machine's run, including rotated/reversed flights. */
+  escalator() {
+    const key = 'escalator-tread';
+    if (!this.materials.has(key)) {
+      const canvas = document.createElement('canvas');
+      canvas.width = canvas.height = 512;
+      const ctx = canvas.getContext('2d')!;
+      ctx.fillStyle = '#a4aaac';
+      ctx.fillRect(0, 0, 512, 512);
+      for (let x = 0; x < 512; x += 4) {
+        ctx.fillStyle = '#30383c';
+        ctx.fillRect(x, 0, 1, 512);
+        ctx.fillStyle = '#d5dadb';
+        ctx.fillRect(x + 1, 0, 1, 512);
+      }
+      ctx.fillStyle = '#dcb735';
+      ctx.fillRect(0, 0, 512, 12);
+      ctx.fillRect(0, 500, 512, 12);
+      ctx.fillRect(0, 0, 8, 512);
+      ctx.fillRect(504, 0, 8, 512);
+      const map = new THREE.CanvasTexture(canvas);
+      map.colorSpace = THREE.SRGBColorSpace;
+      map.anisotropy = 8;
+      const material = new THREE.MeshStandardMaterial({
+        color: '#ffffff',
+        map,
+        bumpMap: map,
+        bumpScale: 0.002,
+        metalness: 0.65,
+        roughness: 0.38,
+        side: THREE.DoubleSide,
+      });
+      material.userData.shared = true;
+      material.userData.finish = 'escalator-tread';
+      this.materials.set(key, material);
+      this.textures.push(map);
     }
     return this.materials.get(key)!;
   }

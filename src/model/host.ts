@@ -98,6 +98,12 @@ export interface StatusPanelContext {
   editing: boolean;
   live: boolean;
 }
+/** Optional host commands for passenger lifts. Readings stay transient; the host owns sequencing. */
+export interface ElevatorControls {
+  statuses: StatusReading[];
+  call(feedId: string, floorId: string): void;
+  hold(feedId: string, open: boolean): void;
+}
 export interface SitePlannerProps {
   /** The document to edit. The editor owns edits through its own history, so this is the *initial*
    *  document; pass a new one with a different `id` to load a different project (same-id updates are
@@ -113,4 +119,5 @@ export interface SitePlannerProps {
   onModeChange?: (mode: PlannerMode) => void;
   /** Render host-specific controls for a selected bound object (return null to show none). Keeps command/simulation vocabulary out of the library. */
   renderStatusPanel?: (ctx: StatusPanelContext) => ReactNode;
+  elevators?: ElevatorControls;
 }

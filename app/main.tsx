@@ -23,10 +23,12 @@ import {
   LocalProjectRepository,
   IndexedProjectRepository,
   type PlannerAdapters,
+  type SitePlannerProps,
 } from '@kerros/editor/host';
 import type { BackroomsOptions } from './demo/backrooms';
-import { DEMO_IDS } from './demo/ids';
+import { BACKROOMS_ID, currentDemoId, DEMO_IDS, SILO_ID, STOCKMANN_ID } from './demo/ids';
 import { BackroomsCard } from './BackroomsCard';
+import { useLiftController } from './LiftPanel';
 // The generators are dynamic: between them they build several thousand objects' worth of code, and
 // the page they would sit in mostly shows a picker. `newProject` is the one thing the picker itself
 // needs, so it keeps its own tiny module.
@@ -54,15 +56,41 @@ const DEMOS = [
   },
 ] as const;
 
-/** The built-in samples, generated on demand. Only a deep link at a demo id needs all three at once,
- *  and that is a page load that is already fetching a project. */
-async function builtIn() {
-  const [stockmann, silo, backrooms] = await Promise.all([
-    import('./demo/demo'),
-    import('./demo/silo'),
-    import('./demo/backrooms'),
-  ]);
-  return [stockmann.createDemo(), silo.createSilo(), backrooms.createBackrooms()];
+/** Load only the requested sample, and only when storage did not supply it. Deep links used to
+ * regenerate the department store, hundred-floor silo and Backrooms even for a saved user plan. */
+async function builtIn(id: string | null) {
+  if (id === STOCKMANN_ID) return (await import('./demo/demo')).createDemo();
+  if (id === SILO_ID) return (await import('./demo/silo')).createSilo();
+  if (id === BACKROOMS_ID) return (await import('./demo/backrooms')).createBackrooms();
+  return null;
+}
+
+function PlanningSession({ readOnly, ...props }: SitePlannerProps & { readOnly: boolean }) {
+  const [project, setProject] = useState(props.project);
+  const activeProjectId = useRef(project.id);
+  const controller = useLiftController(project);
+  const elevators = useMemo(
+    () => ({ statuses: controller.statuses, call: controller.call, hold: controller.hold }),
+    [controller.statuses, controller.call, controller.hold],
+  );
+  const Surface = readOnly ? SiteViewer : SitePlanner;
+  return (
+    <Surface
+      {...props}
+      elevators={elevators}
+      onViewChange={view => writeViewLink({ ...view, project: activeProjectId.current })}
+      onChange={p => {
+        // JSON import changes the editor's document identity within this session. Every later
+        // view link and reload must follow that imported document, not the original blank site.
+        if (activeProjectId.current !== p.id) {
+          activeProjectId.current = p.id;
+          writeViewLink({ ...parseViewLink(), project: p.id });
+        }
+        setProject(p);
+        props.onChange?.(p);
+      }}
+    />
+  );
 }
 
 function Home() {
@@ -138,17 +166,12 @@ function Home() {
     if (!link.project) return;
     (async () => {
       const saved = await adapters.projects.load(link.project!).catch(() => null);
-      const generators = await builtIn();
-      // Old demo ids in bookmarks redirect to the current generation instead of dead-ending.
-      const family = (id: string) => id.replace(/-\d+$/, '');
       const wanted = link.project!;
       // A saved demo copy counts only when its id matches the CURRENT generation — an old id in
       // the hash must never resurrect a stale save (the startup purge may not have run yet).
-      const staleDemo = wanted.startsWith('demo-') && !generators.some(g => g.id === wanted);
-      const demo =
-        (staleDemo ? undefined : saved) ??
-        generators.find(p => p.id === wanted) ??
-        (wanted.startsWith('demo-') ? generators.find(p => family(p.id) === family(wanted)) : undefined);
+      const current = currentDemoId(wanted);
+      const staleDemo = current !== null && current !== wanted;
+      const demo = (staleDemo ? undefined : saved) ?? (await builtIn(current));
       if (demo) setOpen({ project: demo, readOnly: false, view: link });
       else setError('The linked project is not available in this browser.');
     })();
@@ -243,19 +266,9 @@ function Home() {
   };
   // The host owns the URL: mirror the editor's view into a deep-link fragment as it changes.
   if (open) {
-    const onViewChange = (v: ViewLink) =>
-      writeViewLink({
-        project: open.project.id,
-        floor: v.floor,
-        threeD: v.threeD,
-        stack: v.stack,
-        walk: v.walk,
-        camera: v.camera,
-      });
     const hostProps = {
       adapters,
       initialView: open.view,
-      onViewChange,
       onBack: back,
     } as const;
     return (
@@ -269,11 +282,7 @@ function Home() {
           </div>
         }
       >
-        {open.readOnly ? (
-          <SiteViewer project={open.project} {...hostProps} />
-        ) : (
-          <SitePlanner project={open.project} {...hostProps} />
-        )}
+        <PlanningSession key={open.project.id} project={open.project} readOnly={open.readOnly} {...hostProps} />
       </Suspense>
     );
   }

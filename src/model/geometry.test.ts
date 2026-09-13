@@ -52,6 +52,51 @@ describe('snapping', () => {
 });
 
 describe('connected barriers', () => {
+  it('resolves endpoints after transaction-style mutations of an indexed junction array', () => {
+    const p = newProject();
+    const wall = addBarrier(p, [0, 0], [10, 0], 'floor-ground', 'wall')!;
+    expect(barrierEnds(p, wall)).toEqual([
+      [0, 0],
+      [10, 0],
+    ]);
+    p.junctions[0].position = [1, 2];
+    expect(barrierEnds(p, wall)[0]).toEqual([1, 2]);
+    p.junctions.reverse();
+    expect(barrierEnds(p, wall)).toEqual([
+      [1, 2],
+      [10, 0],
+    ]);
+    p.junctions[0] = { ...p.junctions[0], position: [8, 3] };
+    expect(barrierEnds(p, wall)[1]).toEqual([8, 3]);
+    p.junctions.splice(1, 1, { id: 'replacement', floorId: 'floor-ground', position: [4, 5] });
+    wall.startId = 'replacement';
+    expect(barrierEnds(p, wall)[0]).toEqual([4, 5]);
+    p.junctions.push({ id: 'new', floorId: 'floor-ground', position: [7, 6] });
+    wall.endId = 'new';
+    expect(barrierEnds(p, wall)[1]).toEqual([7, 6]);
+  });
+  it('looks up a large floor in linear work rather than scanning every junction per wall', () => {
+    const p = newProject();
+    let reads = 0;
+    p.junctions = Array.from({ length: 2000 }, (_, i) => ({
+      get id() {
+        reads++;
+        return `j${i}`;
+      },
+      floorId: 'floor-ground',
+      position: [i, 0] as Point,
+    }));
+    const wall = { ...sampleProject().barriers[0], startId: '', endId: '' };
+    for (let i = 0; i < 1999; i++) {
+      wall.startId = `j${i}`;
+      wall.endId = `j${i + 1}`;
+      expect(barrierEnds(p, wall)).toEqual([
+        [i, 0],
+        [i + 1, 0],
+      ]);
+    }
+    expect(reads).toBeLessThan(20_000);
+  });
   it('splits an existing wall when a new junction lands on it', () => {
     const p = newProject();
     addBarrier(p, [0, 0], [10, 0], 'floor-ground', 'wall');

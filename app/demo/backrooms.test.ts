@@ -3,7 +3,9 @@ import { barrierEnds, objectArea, parseExport, validateProject, ringArea, pointI
 import { floorDropAt } from '../../src/map/walkSurfaces';
 import { createBackrooms, OFFICE_CELL } from './backrooms';
 import { generateOfficeLayout } from './officeLayout';
-import { flights, primaryShafts } from '../../src/model/vertical';
+import { primaryShafts } from '../../src/model/vertical';
+import { findRoute } from '../../src/model/navigation';
+import { createRouteClearance } from '../../src/model/routeClearance';
 
 function reachable<T>(start: T, edges: [T, T][]): Set<T> {
   const adjacent = new Map<T, T[]>();
@@ -95,15 +97,45 @@ describe('Backrooms reference sample', () => {
     const bound = new Set(project.navNodes!.filter(n => seen.has(n.id)).map(n => n.objectId));
     expect(project.objects.filter(o => o.kind === 'room').every(r => bound.has(r.id))).toBe(true);
   });
-  it('uses one shared staircase and one flight between each adjacent pair of levels', () => {
-    const stairs = project.objects.filter(o => o.kind === 'stairs');
-    expect(stairs).toHaveLength(1);
-    expect(primaryShafts(project)).toEqual(new Set([stairs[0].id]));
-    const climbs = flights(project, stairs[0]);
-    expect(climbs).toHaveLength(project.floors.length - 1);
-    expect(new Set(climbs.map(f => `${f.from.id}/${f.to.id}`)).size).toBe(climbs.length);
-    expect(project.navEdges!.filter(e => e.kind === 'stairs').every(e => e.objectId === stairs[0].id)).toBe(true);
-    expect(project.navNodes!.filter(n => n.objectId === stairs[0].id)).toHaveLength(project.floors.length);
+  it.each([
+    { seed: 'small', size: 12 },
+    { seed: 'another', size: 24 },
+    { seed: 'large', size: 48 },
+  ])('keeps generated routes connected and clear for $seed / $size', options => {
+    const p = createBackrooms(options),
+      nodes = new Map(p.navNodes!.map(n => [n.id, n]));
+    const seen = reachable(
+      p.navNodes![0].id,
+      p.navEdges!.map(e => [e.aId, e.bId]),
+    );
+    expect(seen.size).toBe(p.navNodes!.length);
+    const clearance = createRouteClearance(p);
+    const checks = new Map(p.floors.map(f => [f.id, clearance(f.id)]));
+    // Deterministic samples throughout the graph include door approaches and obstacle detours.
+    for (const edge of p.navEdges!.filter(e => e.kind === 'walk').filter((_, i) => i % 79 === 0)) {
+      const a = nodes.get(edge.aId)!,
+        b = nodes.get(edge.bId)!;
+      expect(checks.get(a.floorId!)!(a.position, b.position)).toBe(true);
+    }
+  });
+  it('does not tour empty bath-room corners en route to the pool', () => {
+    const destination = project.objects.find(
+      o => o.floorId === 'backrooms-pool-0' && o.name === 'Tall pool chamber 1',
+    )!;
+    const route = findRoute(project, { floorId: 'backrooms-office-0', position: [2, 0] }, destination.id)!;
+    // The previous graph took 114 m and ended in a distant room corner.
+    expect(route.distance).toBeLessThan(90);
+    expect(route.nodes.length).toBeLessThan(14);
+    expect(route.legs.filter(l => l.edge.kind === 'elevator')).toHaveLength(1);
+  });
+  it('uses one enterable elevator serving every floor, with no duplicate stairs', () => {
+    expect(project.objects.filter(o => o.kind === 'stairs')).toHaveLength(0);
+    const cars = project.objects.filter(o => o.kind === 'elevator');
+    expect(cars).toHaveLength(1);
+    expect(primaryShafts(project)).toEqual(new Set([cars[0].id]));
+    expect(cars[0].servedFloorIds).toHaveLength(project.floors.length);
+    expect(project.navEdges!.filter(e => e.kind === 'elevator')).toHaveLength(10);
+    expect(project.navNodes!.filter(n => n.objectId === cars[0].id)).toHaveLength(project.floors.length);
   });
   it('has vast halls with rectangular drops and a double-height landing beneath each opening', () => {
     const galleries = project.objects.filter(
@@ -139,7 +171,7 @@ describe('Backrooms reference sample', () => {
       expect(rooms.every(o => o.ceilingHeight! >= 7)).toBe(true);
       expect(rooms.some(o => o.ceilingHeight === 10)).toBe(true);
       const pools = objects.filter(o => o.water);
-      expect(pools).toHaveLength(6);
+      expect(pools).toHaveLength(7);
       const poolRooms = pools.map(pool => rooms.find(room => room.id === pool.parentId)!);
       expect(poolRooms.filter(room => room.width <= 10 && room.depth <= 10)).toHaveLength(4);
       expect(objects.filter(o => o.slide)).toHaveLength(2);

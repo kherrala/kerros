@@ -58,7 +58,7 @@ entry otherwise.
 
 | Export | Description |
 | --- | --- |
-| `StatusReading` | `{ feedId, tone, label, timestamp?, metrics?, details? }` — domain-neutral status. |
+| `StatusReading` | `{ feedId, tone, label, timestamp?, metrics?, open?, carFloorId?, targetFloorId?, carTravelSeconds?, moving?, running?, travel?, details? }` — domain-neutral status. |
 | `StatusMetrics` | `{ occupancy?, capacity?, presence?, co2?, lux?, temperature? }`. |
 | `StatusTone` | `'critical' \| 'warning' \| 'normal' \| 'unknown'`. |
 | `StatusFeed` | `{ subscribe(project, listener): () => void }` — implement against your telemetry. |

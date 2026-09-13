@@ -10,6 +10,7 @@ import {
   openRing,
   pitchOf,
   pointInRing,
+  segmentProjection,
   primaryShafts,
   spaces,
   validateProject,
@@ -189,4 +190,54 @@ describe('demo projects', () => {
       'the lift shafts the guide counts',
     ).toHaveLength(8);
   });
+});
+
+import { flightRun, shaftVoids } from '../../src/model/vertical';
+
+it('opposes each escalator pair within a shared rectangular well and tiles the ground hall', () => {
+  const p = createDemo();
+  const bank = p.objects.filter(o => o.stairModel === 'escalator');
+  const groups = [...new Set(bank.map(o => o.wellGroup))];
+  expect(groups).toHaveLength(2);
+  for (const group of groups) {
+    const pair = bank.filter(o => o.wellGroup === group);
+    expect(pair).toHaveLength(2);
+    const [one, two] = pair;
+    for (const [index, flight] of flights(p, one).entries()) {
+      const a = flightRun(p, one, flight.rise, 'escalator', index);
+      const b = flightRun(p, two, flight.rise, 'escalator', index);
+      expect(Math.abs(a.rotation - b.rotation) % 360).toBe(180);
+      const cuts = shaftVoids(p, flight.to.id, primaryShafts(p));
+      expect(
+        cuts.some(r =>
+          pair.every(o =>
+            footprint(o)[0].every(
+              q =>
+                pointInRing(q, r) || r.some((a, i) => segmentProjection(q, a, r[(i + 1) % r.length]).distance < 1e-7),
+            ),
+          ),
+        ),
+      ).toBe(true);
+    }
+  }
+  expect(p.objects.some(o => o.floorId === 'floor-ground' && o.kind === 'room' && o.material === 'terrazzo')).toBe(
+    true,
+  );
+});
+
+it('Stockmann partitions reach their storey ceiling and all selling levels use matching tiles', () => {
+  const p = createDemo();
+  const ground = p.floors.find(f => f.id === 'floor-ground')!;
+  const partitions = p.barriers.filter(b => b.floorId === ground.id && b.name === 'Partition');
+  expect(partitions.length).toBeGreaterThan(0);
+  for (const wall of partitions) expect(wall.height).toBeCloseTo(ground.height - 0.18);
+  for (const code of ['1', '1A', '2', '-1', '-1A', '-2A']) {
+    const floor = p.floors.find(f => f.code === code)!;
+    const rooms = p.objects.filter(o => o.floorId === floor.id && o.kind === 'room');
+    expect(rooms.length).toBeGreaterThan(0);
+    for (const room of rooms) {
+      expect(room.material).toBe('terrazzo');
+      expect(room.color).toBe('#e6dfcf');
+    }
+  }
 });

@@ -67,6 +67,7 @@ function attached(
   object.barrierId = nearest.b.id;
   object.offset = nearest.t * nearest.length;
   object.width = width;
+  if (kind === 'door' && width >= 2) object.doorType = 'double';
   if (kind !== 'window') object.feedId = `feed-${object.id}`;
   p.objects.push(object);
   return object;
@@ -92,6 +93,7 @@ function partitions(p: ProjectDocument, f: string, segments: [Point, Point][]) {
     .forEach(b => {
       b.name = 'Partition';
       b.thickness = 0.18;
+      b.height = (p.floors.find(floor => floor.id === f)?.height ?? 3.68) - 0.18;
       b.color = '#c3c8d0';
     });
 }
@@ -210,9 +212,9 @@ const boxWalls = (r: Point[]): [Point, Point][] => r.map((pt, i) => [pt, r[(i + 
 // each of the floors that punch the void through their plate, and you stepped off into a hole.
 const STK_ESCALATORS: [string, number, number, number, 'up' | 'down'][] = [
   ['Escalator up', 6, -15.5, 0, 'up'],
-  ['Escalator down', 11, -15.5, 0, 'down'],
+  ['Escalator down', 11, -15.5, 180, 'down'],
   ['Escalator up', 6, 23.5, 0, 'up'],
-  ['Escalator down', 11, 23.5, 0, 'down'],
+  ['Escalator down', 11, 23.5, 180, 'down'],
 ];
 /** The flat comb plate at each end of an escalator run, in metres — the length `SceneLayer.flight()`
  *  takes out of the footprint before it lays the steps out, so the incline is `depth - 2 * COMB`. */
@@ -618,6 +620,7 @@ function createCampus(): ProjectDocument {
         const s = createObject('stairs', [x, y], f, name);
         s.rotation = r;
         s.stairModel = 'escalator';
+        s.wellGroup = `escalator-pair-${y}`;
         s.travel = travel;
         // Bound to a feed, so the sample host can start and stop it the way it commands a lift.
         s.feedId = `feed-${s.id}`;
@@ -636,7 +639,9 @@ function createCampus(): ProjectDocument {
     }
     if (office) stockmannOffices(p, f, STK, ATRIUM, [CORE_E, CORE_W], shaftClearances(p, f));
     else {
-      plate(p, 'room', f, dept, [...voids, CORE_E, CORE_W], color);
+      const retail = plate(p, 'room', f, dept, [...voids, CORE_E, CORE_W], color);
+      retail.material = 'terrazzo';
+      retail.color = '#e6dfcf';
       sub.forEach((name, i) => {
         const poi = createObject('poi', [-40, i * 7 - 7] as Point, f, name);
         poi.symbol = 'personnel';
@@ -649,6 +654,16 @@ function createCampus(): ProjectDocument {
       attached(p, 'door', 'Keskuskatu entrance', [-33, -21], f, 2.2);
     }
     if (level >= 0) windowsAlong(p, f, STK, 'Stockmann glazing', { width: 1.25, height: 2.95, bay: 2.9 });
+  }
+  // The selling floors and both gallery levels share the same shopping-hall tile finish.
+  for (const o of p.objects) {
+    if (
+      ['floor-entresol', 'floor-b1a', 'floor-b1', 'floor-basement'].includes(o.floorId ?? '') &&
+      ['room', 'zone'].includes(o.kind)
+    ) {
+      o.material = 'terrazzo';
+      o.color = '#e6dfcf';
+    }
   }
   // Which levels each shaft actually reaches. The cores above were handed the whole floor list, which
   // is true of every plate level and false of the two mezzanines: those are galleries ringing the

@@ -114,10 +114,27 @@ export function slopeElevation(slope: Slope, point: Point): number {
  *  back to the rectangle its width, depth and rotation describe. One definition, so the model and the
  *  renderer cannot disagree about where a thing is. */
 export const footprint = (o: SiteObject): Ring[] => o.rings ?? [rectangle(o.position, o.width, o.depth, o.rotation)];
+// Store array indices, not coordinates: transaction drafts move/replace junctions in place. Verify
+// each hit so same-length splices and reordering cannot leave the rendering or snapping cache stale.
+const junctionIndices = new WeakMap<ProjectDocument['junctions'], { length: number; ids: Map<string, number> }>();
+function indexedJunction(junctions: ProjectDocument['junctions'], id: string) {
+  let index = junctionIndices.get(junctions);
+  const position = index?.ids.get(id);
+  if (!index || index.length !== junctions.length || position === undefined || junctions[position]?.id !== id) {
+    const ids = new Map<string, number>();
+    junctions.forEach((j, i) => {
+      if (!ids.has(j.id)) ids.set(j.id, i);
+    });
+    index = { length: junctions.length, ids };
+    junctionIndices.set(junctions, index);
+  }
+  const at = index.ids.get(id);
+  return at === undefined ? undefined : junctions[at];
+}
 export function barrierEnds(project: ProjectDocument, barrier: Barrier | VirtualBoundary): [Point, Point] {
   return [
-    project.junctions.find(j => j.id === barrier.startId)!.position,
-    project.junctions.find(j => j.id === barrier.endId)!.position,
+    indexedJunction(project.junctions, barrier.startId)!.position,
+    indexedJunction(project.junctions, barrier.endId)!.position,
   ];
 }
 export function objectPosition(project: ProjectDocument, object: SiteObject): Point {

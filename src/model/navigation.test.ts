@@ -237,6 +237,33 @@ describe('routing', () => {
 });
 
 describe('routing from where you stand', () => {
+  it('uses a live escalator direction and permits walking a stopped machine', () => {
+    const p = tower(1);
+    const stair = createObject('stairs', [0, 0], 'floor-ground', 'Escalator');
+    Object.assign(stair, {
+      stairModel: 'escalator',
+      travel: 'up',
+      feedId: 'escalator',
+      servedFloorIds: ['floor-ground', 'floor-1'],
+    });
+    p.objects.push(stair);
+    const [a, b] = chainVertical(p, stair);
+    const from = { floorId: a.floorId, position: a.position },
+      to = { floorId: b.floorId, position: b.position };
+    expect(findRoute(p, from, to)).not.toBeNull();
+    expect(findRoute(p, to, from)).toBeNull();
+    const statuses = new Map([
+      [
+        'escalator',
+        { feedId: 'escalator', tone: 'normal' as const, label: 'Down', travel: 'down' as const, running: true },
+      ],
+    ]);
+    expect(findRoute(p, from, to, { statuses })).toBeNull();
+    expect(findRoute(p, to, from, { statuses })).not.toBeNull();
+    statuses.get('escalator')!.running = false;
+    expect(findRoute(p, from, to, { statuses })).not.toBeNull();
+    expect(findRoute(p, to, from, { statuses })).not.toBeNull();
+  });
   it('starts at the point, joins the drawn network inside the room, and names the start', () => {
     const p = tower(0);
     const hall = room(p, 'floor-ground', 'Hall', [0, 0], 10);

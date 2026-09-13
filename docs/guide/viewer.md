@@ -4,6 +4,10 @@
 
 ## Basic usage
 
+W/A/S/D pans the map in 2D. Text fields and dialogs retain their normal keyboard behavior.
+In the 3D overview, pools use static translucent surfaces with inspection lighting. Walking mode
+enables animated waves, refraction, caustics and the authored underwater light sources.
+
 ```tsx
 import { FloorViewer } from '@kerros/viewer';
 import '@kerros/viewer/styles.css';

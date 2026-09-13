@@ -20,7 +20,7 @@ test('the production Backrooms opens offices, walking mode and pool water withou
   await page.getByRole('button', { name: 'Open offices', exact: true }).click();
   await expect(page.locator('.map-wrap')).toHaveAttribute('data-frame', 'ready');
   await page.getByRole('button', { name: 'Walk', exact: true }).click();
-  await expect(page.getByRole('slider', { name: 'POV field of view' })).toHaveValue('90');
+  await expect(page.getByRole('slider', { name: 'POV field of view' })).toHaveValue('100');
   await page.getByRole('button', { name: 'Active floor' }).click();
   await page.locator('.place-option').filter({ hasText: 'The endless baths' }).click();
   await expect(page.getByRole('button', { name: 'Active floor' })).toContainText('The endless baths');

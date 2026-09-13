@@ -27,7 +27,7 @@ Guards & ids: `isArea`, `isDevice`, `isOpening`, `uid`. The full list is exporte
 
 ### Materials and lights
 
-Objects and barriers accept `material`, including `carpet` (matte loop pile) and `wallpaper` (a repeated
+Objects and barriers accept `material`, including `terrazzo` (600 mm stone floor tiles), `carpet` (matte loop pile) and `wallpaper` (a repeated
 pattern with paper seams). Textures are generated locally and use metre-scaled UVs.
 
 A `light` object describes a ceiling panel. `width` and `depth` are its dimensions; `height` is its
@@ -63,6 +63,9 @@ and underwater lighting. Lit pools project animated blue caustics onto the tiled
 containing room (`parentId`). This is a visual approximation of ripple-focused light, not a ray-traced
 optics simulation. Setting the floor's ambient light `level` to zero on a pool floor also disables
 daylight fill and ceiling emission: the submerged lamps and their reflected light carry the room.
+Tiled chambers without a pool receive a weaker diffuse approximation through connected open portals;
+sealed walls do not transmit it. Ripple caustics remain inside the source chamber. Tiled perimeter
+walls retain their authored finish instead of receiving the default plaster lining.
 Swimming and buoyancy are not modelled.
 
 A fixture's `slide: { path, radius }` defines an open water slide. Each path point is `[x, y, z]` in
@@ -73,8 +76,8 @@ metres relative to the fixture's position and rotation; `z` is above its floor. 
 A floor's `ambience` is what it sounds like from inside it, and any room or zone can carry its own
 `ambience` to override the floor's. Both are `{ preset, level? }`: `preset` is one of `silent`,
 `office` (ventilation and a faint ballast hum), `backrooms` (louder ballasts, a breathing HVAC and a
-compressor that cycles), `plant` (machinery), or `baths` (original ambient music: slow chords and
-soft glass bells with a long stereo reverb). `level` is 0–1 (default 1). Absent is silence.
+compressor that cycles), `plant` (machinery), `baths` (original ambient music: slow chords and
+soft glass bells with a long stereo reverb), or `elevator` (a gentle lounge melody with electric keys). `level` is 0–1 (default 1). Absent is silence.
 
 ```ts
 floor.ambience = { preset: 'backrooms' };
@@ -103,6 +106,11 @@ meets the decks it joins. `slopeElevation(slope, point)` gives the elevation any
 Below-grade ramps also widen the excavation: the 3D pit is the union of every below-grade floor plate
 *and* every ramp, so a driveway that surfaces out at the street is cut through soil for its whole run
 rather than hanging in open air.
+
+### Door mechanisms
+
+Door objects also accept `doorType?: 'hinged' | 'sliding' | 'double'`. Omission preserves the single hinged leaf used by older documents. For sliding doors, `doorHinge` selects travel toward the wall start (`left`) or end (`right`), and `doorSwing` selects the side carrying the surface-mounted track. Double doors hinge at both jambs and use `doorSwing` for their common opening side. These fields do not change the opening width or portal connectivity.
+
 
 ## Factories
 
@@ -221,12 +229,49 @@ graph (`model/topology.ts`) — all exported flat from `@kerros/schema`.
 
 ## Navigation
 
-- `findRoute(project, fromId, toId): Route | null` — cross-floor A→B routing.
+- `findRoute(project, from, to, options?): Route | null` — cross-floor A→B routing. Each end can be an object ID or `{ floorId, position, name? }`. Optional `statuses` is a `ReadonlyMap<string, StatusReading>`; it supplies current escalator direction and whether a machine is stopped.
+- `buildRoomNavigation(project, access, graph?): RoomNavigationGraph` — core geometric walking graph. `access` contains `{ spaceId, nodeId }` entries associating supplied graph nodes with rooms. The builder connects visible access points directly, adds waypoints around concave corners, floor holes and pools, and checks the full segment against wall thickness and open door/gate apertures. Supplied graph edges are retained, including directed door crossings and vertical connections. It returns new `nodes` and `edges` without mutating the inputs.
 - `routeSteps`, `floorPhrase` — turn-by-turn narration.
 - `validateNavigation`, `addNavNode`, `addNavEdge`, `navPath`, `chainVertical`, `routeAnchors` — authoring the graph.
 - `edgeCost`, `edgeLength`, and the cost constants `ELEVATOR_BASE`, `ELEVATOR_PER_METRE`, `STAIR_CLIMB_FACTOR`, `DOOR_COST`, `NAV_WELD`.
-- Types: `Route`, `RouteStep`, `RouteLeg`.
+- Types: `Route`, `RouteStep`, `RouteLeg`, `RouteOptions`, `RoomAccess`, `RoomNavigationGraph`.
+
+For a controlled doorway, supply a node on each side, associate each node with its room, and connect
+the pair with a `door` edge carrying the required `directed` and `objectId` values. A freely traversable
+opening can share one access node between its two rooms. Keep vertical edges bound to their physical
+stairs or elevator so playback can traverse them. Room navigation belongs to `@kerros/schema`; the
+Backrooms generator supplies room geometry and doorway locations to this same public API.
+
+```ts
+const graph = buildRoomNavigation(project, roomAccess, {
+  nodes: doorwayAndLandingNodes,
+  edges: doorAndVerticalEdges,
+});
+const routable = { ...project, navNodes: graph.nodes, navEdges: graph.edges };
+const route = findRoute(routable, { floorId, position }, destinationId, { statuses });
+```
+
+Rebuild after geometry/access changes. Generated IDs use the reserved `@room-nav:` prefix; rebuilding
+with the preceding graph replaces these entries instead of accumulating waypoints. Authored access
+nodes and crossing edges keep their identities. Without an explicit geometric graph, the existing
+space/portal dual remains the default connectivity graph.
 
 ## Materials
 
 `EXTERIOR_PRESETS`, `ExteriorPreset` — named exterior finishes for 3D massing.
+
+### Door handing and shared stair wells
+
+Doors accept `doorHinge?: 'left' | 'right'` and `doorSwing?: 1 | -1`. The defaults are `left` and `1`,
+preserving existing drawings. Left hinges at the directed wall's start; right hinges at its end.
+Swing `1` opens to the left of the start-to-end axis; `-1` opens to its right. Unattached doors use
+their own rotation as that axis. These settings affect presentation, not passage permissions.
+
+`drawVirtualBoundary(project, floorId, start, end)` is the authoring operation for an unwalled
+boundary, including opening a collinear wall span. Call it inside `transact`. `addVirtualBoundary`
+retains its non-destructive behavior for constructing generated space outlines.
+
+Stairs may set `wellGroup?: string`. Group members intersecting the same level share one rectangular
+floor/ceiling void enclosing their footprints; their individual tread and landing geometry remains.
+The Stockmann sample uses one group per escalator pair. Rotation sets the physical slope orientation;
+`travel` and live `StatusReading.travel` independently set the direction of motion.

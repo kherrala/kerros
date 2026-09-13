@@ -43,6 +43,7 @@ export type MaterialKind =
   | 'timber'
   | 'oak'
   | 'tile'
+  | 'terrazzo'
   | 'grass'
   | 'paving'
   | 'carpet'
@@ -101,8 +102,8 @@ export interface Ambience {
   preset: AmbiencePreset;
   level?: number;
 }
-export type AmbiencePreset = 'silent' | 'office' | 'backrooms' | 'plant' | 'baths';
-export const AMBIENCE_PRESETS: AmbiencePreset[] = ['silent', 'office', 'backrooms', 'plant', 'baths'];
+export type AmbiencePreset = 'silent' | 'office' | 'backrooms' | 'plant' | 'baths' | 'elevator';
+export const AMBIENCE_PRESETS: AmbiencePreset[] = ['silent', 'office', 'backrooms', 'plant', 'baths', 'elevator'];
 /** Colour temperature in kelvin (2700 tungsten, 4000 fluorescent, 6500 daylight) and how brightly,
  *  0 to 1. Kept here rather than in the renderer: what a space is lit by describes the space. */
 export interface InteriorLight {
@@ -202,6 +203,12 @@ export interface SiteObject {
   parentId?: string;
   barrierId?: string;
   offset?: number;
+  /** Door hinge at the wall start (left, default) or end (right). */
+  doorHinge?: 'left' | 'right';
+  /** Door mechanism. Omitted means a conventional single hinged leaf. */
+  doorType?: 'hinged' | 'sliding' | 'double';
+  /** Door opens to the left (+1, default) or right (-1) of the directed wall. */
+  doorSwing?: 1 | -1;
   feedId?: string;
   symbol?:
     | 'personnel'
@@ -230,6 +237,8 @@ export interface SiteObject {
    *  it does not, since a plan that gives a 4.5 m box to a 4.4 m storey means a stair that turns, not
    *  a ladder. */
   stairModel?: 'straight' | 'switchback' | 'dogleg' | 'spiral' | 'escalator';
+  /** Stairs with the same group on a level share one rectangular floor/ceiling opening. */
+  wellGroup?: string;
   /** Escalators only: which way the machine carries you.
    *
    *  It is a property of the machine, not of the drawing and not of its name: an escalator runs one

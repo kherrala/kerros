@@ -7,6 +7,8 @@ import { uid } from './types';
 import { distance, objectPosition, pointInRing } from './geometry';
 import { topology } from './topology';
 import { inSpace, spaceAt } from './spaces';
+import { routeClearance } from './routeClearance';
+import type { StatusReading } from './live';
 
 // Cost model in metres-equivalent, exported so editors and play mode price edges identically: a
 // lift ride costs a flat call-and-wait plus a little per metre of rise, stairs cost their run plus
@@ -183,11 +185,12 @@ function routeEnd(
   const here: NavNode = { id: `@${tag}`, floorId: end.floorId, position: end.position };
   const sameFloor = navNodes(p).filter(n => n.floorId === end.floorId);
   const space = spaceAt(p, end.floorId, end.position);
-  let joins = space ? sameFloor.filter(n => inSpace(space, n.position)) : [];
-  if (!joins.length) {
-    const nearest = [...sameFloor].sort(
-      (a, b) => distance(a.position, end.position) - distance(b.position, end.position),
-    )[0];
+  const clear = routeClearance(p)(end.floorId);
+  let joins = space ? sameFloor.filter(n => inSpace(space, n.position) && clear(end.position, n.position)) : [];
+  if (!space) {
+    const nearest = sameFloor
+      .filter(n => clear(end.position, n.position))
+      .sort((a, b) => distance(a.position, end.position) - distance(b.position, end.position))[0];
     joins = nearest ? [nearest] : [];
   }
   const extraEdges = joins.map(
@@ -216,7 +219,15 @@ function routeEnd(
 /** Shortest route between two ends — objects (rooms, doors, POIs, …) or points on a floor — over
  *  the authored graph, with human step instructions. Returns null when either end has no anchor or
  *  no path exists. */
-export function findRoute(p: ProjectDocument, fromEnd: RouteEnd, toEnd: RouteEnd): Route | null {
+export interface RouteOptions {
+  statuses?: ReadonlyMap<string, StatusReading>;
+}
+export function findRoute(
+  p: ProjectDocument,
+  fromEnd: RouteEnd,
+  toEnd: RouteEnd,
+  options: RouteOptions = {},
+): Route | null {
   const start = routeEnd(p, fromEnd, 'from'),
     end = routeEnd(p, toEnd, 'to');
   if (!start || !end) return null;
@@ -232,32 +243,52 @@ export function findRoute(p: ProjectDocument, fromEnd: RouteEnd, toEnd: RouteEnd
     const a = byId.get(e.aId),
       b = byId.get(e.bId);
     if (!a || !b) continue;
+    const machine =
+      e.kind === 'stairs' && e.objectId
+        ? p.objects.find(o => o.id === e.objectId && o.stairModel === 'escalator')
+        : undefined;
+    const reading = machine?.feedId ? options.statuses?.get(machine.feedId) : undefined;
+    if (machine && (reading?.travel || reading?.running === false)) {
+      const up = elevation(p, b.floorId) > elevation(p, a.floorId);
+      const forward = (reading.travel ?? machine.travel ?? 'up') === (up ? 'up' : 'down');
+      if (reading.running === false || forward)
+        (adjacency.get(a.id) ?? adjacency.set(a.id, []).get(a.id)!).push({ edge: e, other: b });
+      if (reading.running === false || !forward)
+        (adjacency.get(b.id) ?? adjacency.set(b.id, []).get(b.id)!).push({ edge: e, other: a });
+      continue;
+    }
     (adjacency.get(a.id) ?? adjacency.set(a.id, []).get(a.id)!).push({ edge: e, other: b });
     // A directed edge is passable one way only — an escalator, or a door you cannot come back
     // through. Adding the return leg anyway is how a one-way route quietly becomes a round trip.
     if (!e.directed) (adjacency.get(b.id) ?? adjacency.set(b.id, []).get(b.id)!).push({ edge: e, other: a });
   }
+  const queue = new RouteQueue();
   const dist = new Map<string, number>(),
     prev = new Map<string, { node: NavNode; edge: NavEdge }>(),
     done = new Set<string>();
-  for (const s of starts) if (s.cost < (dist.get(s.node.id) ?? Infinity)) dist.set(s.node.id, s.cost);
+  for (const s of starts)
+    if (s.cost < (dist.get(s.node.id) ?? Infinity)) {
+      dist.set(s.node.id, s.cost);
+      queue.push(s.node.id, s.cost);
+    }
+  const goalCosts = new Map(goals.map(g => [g.node.id, g.cost]));
+  let bestGoal = Infinity;
   for (;;) {
-    // Plain scan Dijkstra — authored graphs stay small (hundreds of nodes).
-    let current: string | null = null,
-      best = Infinity;
-    for (const [id, d] of dist)
-      if (!done.has(id) && d < best) {
-        best = d;
-        current = id;
-      }
-    if (current === null) break;
+    // A visibility graph can have thousands of nodes. A heap and an admissible goal bound avoid
+    // rescanning every reached node and searching the rest of the building after arrival is known.
+    const entry = queue.pop();
+    if (!entry || entry.cost > bestGoal) break;
+    const { id: current, cost: best } = entry;
+    if (done.has(current)) continue;
     done.add(current);
+    if (goalCosts.has(current)) bestGoal = Math.min(bestGoal, best + goalCosts.get(current)!);
     const node = byId.get(current)!;
     for (const { edge, other } of adjacency.get(current) ?? []) {
       const next = best + edgeCost(p, edge, node, other);
       if (next < (dist.get(other.id) ?? Infinity)) {
         dist.set(other.id, next);
         prev.set(other.id, { node, edge });
+        queue.push(other.id, next);
       }
     }
   }
@@ -283,6 +314,43 @@ export function findRoute(p: ProjectDocument, fromEnd: RouteEnd, toEnd: RouteEnd
     distance: walked,
     cost: goal.total,
   };
+}
+
+/** Stable min-heap: equal-cost paths keep insertion order, so a regenerated plan routes identically. */
+class RouteQueue {
+  private items: { id: string; cost: number; order: number }[] = [];
+  private order = 0;
+  private before(a: (typeof this.items)[number], b: (typeof this.items)[number]) {
+    return a.cost < b.cost || (a.cost === b.cost && a.order < b.order);
+  }
+  push(id: string, cost: number) {
+    const item = { id, cost, order: this.order++ };
+    let i = this.items.length;
+    this.items.push(item);
+    while (i > 0) {
+      const parent = (i - 1) >> 1;
+      if (!this.before(item, this.items[parent])) break;
+      this.items[i] = this.items[parent];
+      i = parent;
+    }
+    this.items[i] = item;
+  }
+  pop() {
+    const first = this.items[0],
+      last = this.items.pop();
+    if (this.items.length && last) {
+      let i = 0;
+      while (i * 2 + 1 < this.items.length) {
+        let child = i * 2 + 1;
+        if (child + 1 < this.items.length && this.before(this.items[child + 1], this.items[child])) child++;
+        if (!this.before(this.items[child], last)) break;
+        this.items[i] = this.items[child];
+        i = child;
+      }
+      this.items[i] = last;
+    }
+    return first;
+  }
 }
 
 // ——— Step instructions.

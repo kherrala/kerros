@@ -6,13 +6,14 @@
 // testable; AmbienceEngine plays it, cross-fading as the walker crosses from one space into the next.
 import type { Ambience, AmbiencePreset, Point, ProjectDocument } from '../model/types';
 import { spaceAt } from '../model/spaces';
-import { bathMusic } from './bathMusic';
+import { bathMusic, elevatorMusic } from './bathMusic';
 
 export const AMBIENCES: { id: AmbiencePreset; label: string; description: string }[] = [
   { id: 'silent', label: 'Silent', description: 'Nothing but the walk' },
   { id: 'office', label: 'Office', description: 'Ventilation and a faint ballast hum' },
   { id: 'backrooms', label: 'Backrooms', description: 'Ballasts, breathing air handling, a compressor somewhere' },
   { id: 'plant', label: 'Plant room', description: 'Machinery, close and loud' },
+  { id: 'elevator', label: 'Elevator music', description: 'Gentle electric keys and an original lounge melody' },
   { id: 'baths', label: 'Bath music', description: 'Slow suspended chords, soft glass bells and a spacious echo' },
 ];
 
@@ -191,6 +192,7 @@ function compressor(ctx: AudioContext, out: AudioNode, level: number): Layer {
 
 const RECIPES: Record<Exclude<AmbiencePreset, 'silent'>, (ctx: AudioContext, out: AudioNode) => Layer[]> = {
   baths: (ctx, out) => [bathMusic(ctx, out)],
+  elevator: (ctx, out) => [elevatorMusic(ctx, out)],
   office: (ctx, out) => [airHandling(ctx, out, 0.24, 0.04), ballast(ctx, out, 0.07)],
   backrooms: (ctx, out) => [airHandling(ctx, out, 0.34, 0.06), ballast(ctx, out, 0.2), compressor(ctx, out, 0.22)],
   plant: (ctx, out) => [

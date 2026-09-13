@@ -30,7 +30,6 @@ export function addPoolrooms(p: ProjectDocument, seed: string, span: number) {
         [at[0] + width / 2, at[1] + depth / 2],
         [at[0] - width / 2, at[1] + depth / 2],
       ]);
-    const routes = new Map<number, { id: string; position: Point }[]>();
     const rooms: SiteObject[] = layout.rooms.map((room, i) => {
       const at = metric([room.x + room.width / 2, room.y + room.depth / 2]);
       const o: SiteObject = {
@@ -39,7 +38,7 @@ export function addPoolrooms(p: ProjectDocument, seed: string, span: number) {
         kind: 'room',
         name:
           i === 0
-            ? 'Bath stair landing'
+            ? 'Bath elevator lobby'
             : i <= 2
               ? `Tall pool chamber ${i}`
               : `Tiled chamber ${String(i).padStart(2, '0')}`,
@@ -59,28 +58,8 @@ export function addPoolrooms(p: ProjectDocument, seed: string, span: number) {
         id: nodeId(i),
         floorId,
         objectId: o.id,
-        position: i === 0 ? [2, 0] : [at[0] - o.width / 2 + 1.5, at[1] - o.depth / 2 + 1.5],
+        position: i === 0 ? [2, 0] : at,
       });
-      if (i) {
-        const corners = [
-          [-1, -1],
-          [1, -1],
-          [1, 1],
-          [-1, 1],
-        ].map(([x, y], corner) => ({
-          id: corner ? `${o.id}-corner-${corner}` : nodeId(i),
-          position: [at[0] + x * (o.width / 2 - 1.5), at[1] + y * (o.depth / 2 - 1.5)] as Point,
-        }));
-        routes.set(i, corners);
-        p.navNodes!.push(...corners.slice(1).map(corner => ({ ...corner, floorId })));
-        for (let k = 0; k < 4; k++)
-          p.navEdges!.push({
-            id: `${o.id}-walkway-${k}`,
-            kind: 'walk',
-            aId: corners[k].id,
-            bId: corners[(k + 1) % 4].id,
-          });
-      }
       return o;
     });
     p.zones!.push({ id: `${floorId}-zone`, name, spaceIds: rooms.map(o => o.id), purpose: 'baths' });
@@ -139,37 +118,27 @@ export function addPoolrooms(p: ProjectDocument, seed: string, span: number) {
       });
       p.portals!.push({ id, a: roomId(edge.a), b: roomId(edge.b), name: 'Tiled doorway' });
       p.navNodes!.push({ id: `${id}-node`, floorId, position: along(0.5) });
-      for (const room of [edge.a, edge.b]) {
-        const at = along(0.5);
-        const corner = routes
-          .get(room)
-          ?.slice()
-          .sort(
-            (a, b) =>
-              Math.hypot(a.position[0] - at[0], a.position[1] - at[1]) -
-              Math.hypot(b.position[0] - at[0], b.position[1] - at[1]),
-          )[0];
-        p.navEdges!.push({
-          id: `${id}-edge-${room}`,
-          kind: 'walk',
-          aId: corner?.id ?? nodeId(room),
-          bId: `${id}-node`,
-        });
-      }
     });
     const quiet = rooms
       .slice(3)
       .sort((a, b) => a.width * a.depth - b.width * b.depth)
       .slice(0, 4);
-    for (const [i, room] of [rooms[1], rooms[2], ...quiet].entries()) {
-      const at = room.position,
-        width = Math.min(room.width - 3.6, room.width * (i === 1 ? 0.5 : 0.65)),
-        depth = Math.min(room.depth - 3.6, room.depth * 0.55);
+    for (const [i, room] of [rooms[1], rooms[2], ...quiet, rooms[0]].entries()) {
+      const arrival = room === rooms[0];
+      const at: Point = arrival ? [cell * 0.5, cell * 0.5] : room.position,
+        width = arrival ? 3.2 : Math.min(room.width - 3.6, room.width * (i === 1 ? 0.5 : 0.65)),
+        depth = arrival ? 3.2 : Math.min(room.depth - 3.6, room.depth * 0.55);
       const pool: SiteObject = {
         id: `${floorId}-pool-${i}`,
         floorId,
         kind: 'zone',
-        name: i === 0 ? 'Stillwater pool' : i === 1 ? 'Slide pool' : `Quiet immersion pool ${i - 1}`,
+        name: arrival
+          ? 'Arrival reflecting pool'
+          : i === 0
+            ? 'Stillwater pool'
+            : i === 1
+              ? 'Slide pool'
+              : `Quiet immersion pool ${i - 1}`,
         position: at,
         width,
         depth,
@@ -194,7 +163,12 @@ export function addPoolrooms(p: ProjectDocument, seed: string, span: number) {
             depth: 0.28,
             height: 0.28,
             rotation: side === 1 ? 0 : 180,
-            light: { mountHeight: -0.7, kelvin: 9500, intensity: Math.min(180, width * depth * 3), range: 18 },
+            light: {
+              mountHeight: -0.7,
+              kelvin: 9500,
+              intensity: arrival ? 90 : Math.min(180, width * depth * 3),
+              range: 18,
+            },
           });
       if (i === 1) {
         const scale = Math.min(room.width, room.depth) / 42;
@@ -223,7 +197,7 @@ export function addPoolrooms(p: ProjectDocument, seed: string, span: number) {
           });
         }
       }
-      for (let vent = 0; vent < 3; vent++)
+      for (let vent = 0; !arrival && vent < 3; vent++)
         p.objects.push({
           id: `${pool.id}-vent-${vent}`,
           floorId,
@@ -263,17 +237,38 @@ export function addPoolrooms(p: ProjectDocument, seed: string, span: number) {
       },
     );
   }
-  // One shaft serves the whole building. Separate office/bath names previously made two
-  // independent shafts claim every floor and render coincident flights through the baths.
   const stairs = p.objects.filter(o => o.kind === 'stairs');
-  const stair = stairs.at(-1)!;
-  stair.name = 'Office and bath stair';
-  stair.servedFloorIds = p.floors.map(f => f.id);
-  stair.depth = 12;
-  stair.material = 'tile';
-  stair.color = '#f2f3ef';
   const oldIds = new Set(stairs.map(o => o.id));
-  p.objects = p.objects.filter(o => !oldIds.has(o.id) || o === stair);
-  for (const node of p.navNodes ?? []) if (node.objectId && oldIds.has(node.objectId)) node.objectId = stair.id;
-  for (const edge of p.navEdges ?? []) if (edge.objectId && oldIds.has(edge.objectId)) edge.objectId = stair.id;
+  const elevator: SiteObject = {
+    id: 'backrooms-elevator',
+    floorId: p.floors.at(-1)!.id,
+    kind: 'elevator',
+    name: 'Office and bath elevator',
+    feedId: 'backrooms-elevator-car',
+    position: [-3, 0],
+    width: 2.8,
+    depth: 2.8,
+    height: 2.7,
+    rotation: 0,
+    servedFloorIds: p.floors.map(f => f.id),
+    doorSides: ['front'],
+    ambience: { preset: 'elevator', level: 0.5 },
+  };
+  p.objects = p.objects.filter(o => !oldIds.has(o.id));
+  p.objects.push(elevator);
+  const landings = p.navNodes!.filter(n => n.objectId && oldIds.has(n.objectId));
+  for (const node of landings) {
+    node.objectId = elevator.id;
+    node.position = [-3, 2.2];
+  }
+  p.navEdges = p.navEdges!.filter(e => e.kind !== 'stairs');
+  for (let i = 0; i < landings.length; i++)
+    for (let j = i + 1; j < landings.length; j++)
+      p.navEdges.push({
+        id: `backrooms-elevator-trip-${i}-${j}`,
+        kind: 'elevator',
+        aId: landings[i].id,
+        bId: landings[j].id,
+        objectId: elevator.id,
+      });
 }

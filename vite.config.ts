@@ -1,6 +1,7 @@
 import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import { readFileSync } from 'node:fs';
 
 /** Which chunk a module belongs to, keyed by a fragment of its resolved id; first match wins.
  *
@@ -28,6 +29,10 @@ const CHUNKS: ReadonlyArray<readonly [marker: string, chunk: string]> = [
   // fails if the `map` chunk acquires three again, which is what makes the list safe to keep.
   ['/src/map/SceneLayer', 'scene'],
   ['/src/map/FixtureLights', 'scene'],
+  ['/src/map/Cabin', 'scene'],
+  ['/src/map/ElevatorCabin', 'scene'],
+  ['/src/map/Doors', 'scene'],
+  ['/src/map/Passenger', 'scene'],
   ['/src/map/UndergroundContext', 'scene'],
   ['/src/map/architecture', 'scene'],
   ['/src/map/materials', 'scene'],
@@ -35,6 +40,8 @@ const CHUNKS: ReadonlyArray<readonly [marker: string, chunk: string]> = [
   ['/src/map/surfaces', 'scene'],
   ['/src/map/textures', 'scene'],
   ['/src/map/water', 'scene'],
+  ['/src/map/walkJourney', 'walk-journey'],
+  ['/src/map/journey', 'map-journey'],
   ['/src/map/', 'map'],
   ['/src/model/', 'model'],
   ['/src/schema/', 'model'],
@@ -61,7 +68,7 @@ const chunkFor = (id: string): string | undefined => {
   // query-string ids are Vite's html-proxy modules for the `<style>` block inside index.html; the
   // dev hub is deliberately self-contained, and folding its inline CSS in here would make it link
   // the app's 126 kB stylesheet instead.
-  if (id.endsWith('.css')) return id.includes('?') ? undefined : 'styles';
+  if (id.endsWith('.css')) return id.includes('?') || id.includes('/website/') ? undefined : 'styles';
   // Vite's dynamic-import preload helper is a virtual module, and left alone Rollup files it under
   // whichever chunk reaches it first. When MapCanvas started naming SceneLayer with a dynamic import
   // that became `map` — and since every entry needs the helper the instant it names a lazy import,
@@ -87,7 +94,11 @@ const FACADES: ReadonlyArray<readonly [module: string, chunk: string]> = [
 ];
 
 export default defineConfig({
-  plugins: [react()],
+  publicDir: 'docs/public',
+  plugins: [react(), {
+    name: 'kerros-landing',
+    transformIndexHtml: { order: 'pre', handler: html => html.replace('<!-- kerros-landing -->', readFileSync(new URL('website/landing.html', import.meta.url), 'utf8')) },
+  }],
   resolve: {
     alias: {
       // The `/host` subpaths come first: Vite matches a string alias against the start of the id, so

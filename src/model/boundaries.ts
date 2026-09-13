@@ -13,6 +13,7 @@ import {
   openRing,
   pointInRing,
   rectangle,
+  removeBarrier,
   ringArea,
   segmentProjection,
 } from './geometry';
@@ -162,6 +163,13 @@ export function normalizeBoundaries(p: ProjectDocument, floorId: string | null) 
     e.endId = canonical.get(e.endId) ?? e.endId;
   }
   p.junctions = p.junctions.filter(j => !canonical.has(j.id));
+  const positions = new Map(p.junctions.map(j => [j.id, j.position]));
+  // Resolve endpoints once, before the broad-phase pair scan. Looking each one up in the
+  // full junction list inside the nested loop made planarization cubic in floor size.
+  const spans = edges.map(e => ({
+    points: [positions.get(e.startId)!, positions.get(e.endId)!] as [Point, Point],
+    box: bounds([positions.get(e.startId)!, positions.get(e.endId)!]),
+  }));
   const cuts = new Map<string, { t: number; id: string }[]>();
   const cut = (e: BoundaryEdge, at: Point) => {
     const [a, b] = ends(p, e),
@@ -177,17 +185,11 @@ export function normalizeBoundaries(p: ProjectDocument, floorId: string | null) 
   };
   for (let i = 0; i < edges.length; i++)
     for (let k = i + 1; k < edges.length; k++) {
+      if (!boundsMeet(spans[i].box, spans[k].box)) continue;
       const one = edges[i],
         two = edges[k],
-        [a, b] = ends(p, one),
-        [c, d] = ends(p, two);
-      if (
-        Math.max(a[0], b[0]) + EPS < Math.min(c[0], d[0]) ||
-        Math.max(c[0], d[0]) + EPS < Math.min(a[0], b[0]) ||
-        Math.max(a[1], b[1]) + EPS < Math.min(c[1], d[1]) ||
-        Math.max(c[1], d[1]) + EPS < Math.min(a[1], b[1])
-      )
-        continue;
+        [a, b] = spans[i].points,
+        [c, d] = spans[k].points;
       const ux = b[0] - a[0],
         uy = b[1] - a[1],
         vx = d[0] - c[0],
@@ -234,7 +236,13 @@ export function normalizeBoundaries(p: ProjectDocument, floorId: string | null) 
     replaceBoundaryUses(p, e.id, [{ edgeId: kept.id, reversed: flipped }]);
     for (const o of p.objects.filter(o => o.barrierId === e.id)) {
       o.barrierId = kept.id;
-      if (flipped) o.offset = distance(...ends(p, kept)) - (o.offset ?? 0);
+      if (flipped) {
+        o.offset = distance(...ends(p, kept)) - (o.offset ?? 0);
+        if (o.kind === 'door') {
+          o.doorHinge = o.doorHinge === 'right' ? 'left' : 'right';
+          o.doorSwing = o.doorSwing === -1 ? 1 : -1;
+        }
+      }
     }
     removed.add(e.id);
   }
@@ -340,7 +348,13 @@ export function boundaryRegions(p: ProjectDocument, floorId: string | null): Bou
 function wallBodies(p: ProjectDocument, floorId: string | null): Ring[][] {
   // Subdividing a straight wall must not change its swept body through separate rounding at
   // each new endpoint. Reconstitute collinear runs for clipping, retaining the individual IDs.
-  const runs = p.barriers.filter(b => b.floorId === floorId).map(b => ({ points: ends(p, b), thickness: b.thickness }));
+  const positions = new Map(p.junctions.map(j => [j.id, j.position]));
+  const runs = p.barriers
+    .filter(b => b.floorId === floorId)
+    .map(b => ({
+      points: [positions.get(b.startId)!, positions.get(b.endId)!] as [Point, Point],
+      thickness: b.thickness,
+    }));
   for (let i = 0; i < runs.length; i++) {
     let merged = true;
     while (merged) {
@@ -388,8 +402,39 @@ function tidy(ring: Ring): Ring {
   if (out.length > 1 && distance(out[0], out.at(-1)!) < EPS) out.pop();
   return closeRing(out);
 }
-function netRings(p: ProjectDocument, floorId: string | null, rings: Ring[], allowEmpty = false): Ring[] {
-  const solids = wallBodies(p, floorId);
+type Bounds = { minX: number; minY: number; maxX: number; maxY: number };
+const bounds = (ring: Ring): Bounds => {
+  let minX = Infinity,
+    minY = Infinity,
+    maxX = -Infinity,
+    maxY = -Infinity;
+  for (const [x, y] of ring) {
+    minX = Math.min(minX, x);
+    minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x);
+    maxY = Math.max(maxY, y);
+  }
+  return { minX, minY, maxX, maxY };
+};
+const boundsMeet = (a: Bounds, b: Bounds) =>
+  a.minX <= b.maxX + EPS && a.maxX + EPS >= b.minX && a.minY <= b.maxY + EPS && a.maxY + EPS >= b.minY;
+
+/** Short-lived evaluation scope: coordinates are fixed during one refresh/validation pass. Reuse
+ * wall bodies across its spaces, without caching a mutable transaction draft between edits. */
+function netEvaluator(p: ProjectDocument) {
+  const floors = new Map<string | null, { rings: Ring[]; box: Bounds }[]>();
+  return (floorId: string | null, rings: Ring[], allowEmpty = false): Ring[] => {
+    let solids = floors.get(floorId);
+    if (!solids) {
+      solids = wallBodies(p, floorId).map(rings => ({ rings, box: bounds(rings[0]) }));
+      floors.set(floorId, solids);
+    }
+    const box = bounds(rings[0]);
+    const nearby = solids.filter(s => boundsMeet(s.box, box)).map(s => s.rings);
+    return netRings(rings, nearby, allowEmpty);
+  };
+}
+function netRings(rings: Ring[], solids: Ring[][], allowEmpty = false): Ring[] {
   const pieces = solids.length ? difference(rings, ...solids) : [quantize(rings)];
   const usable = pieces.filter(pg => area(pg) >= MIN_SPACE_AREA);
   if (!usable.length && allowEmpty) return [];
@@ -402,7 +447,7 @@ function netRings(p: ProjectDocument, floorId: string | null, rings: Ring[], all
 }
 export function derivedSpaceRings(p: ProjectDocument, o: SiteObject): Ring[] {
   if (o.geometry?.mode !== 'boundaries') return footprint(o);
-  return netRings(p, o.floorId, boundaryRings(p, o.geometry.loops, o.floorId));
+  return netEvaluator(p)(o.floorId, boundaryRings(p, o.geometry.loops, o.floorId));
 }
 function cacheRings(o: SiteObject, rings: Ring[]) {
   o.rings = rings;
@@ -447,6 +492,30 @@ export function addVirtualBoundary(p: ProjectDocument, floorId: string | null, a
   const id = uid();
   (p.virtualBoundaries ??= []).push({ id, floorId, startId, endId });
   return id;
+}
+
+/** The drawing tool intentionally opens any collinear wall span. Ordinary addVirtualBoundary
+ * remains non-destructive for generated space outlines and model normalization. */
+export function drawVirtualBoundary(p: ProjectDocument, floorId: string | null, a: Point, b: Point): string {
+  const length = distance(a, b);
+  if (length < MIN_RING_EDGE) throw new Error('A space boundary is too short.');
+  const onLine = (q: Point) => Math.abs((b[0] - a[0]) * (q[1] - a[1]) - (b[1] - a[1]) * (q[0] - a[0])) / length <= EPS;
+  for (const wall of [...p.barriers].filter(w => w.floorId === floorId)) {
+    const [start, end] = ends(p, wall);
+    if (!onLine(start) || !onLine(end)) continue;
+    const cuts = [a, b].flatMap(q => {
+      const hit = segmentProjection(q, start, end);
+      return hit.distance <= EPS && hit.t > 0 && hit.t < 1 ? [{ t: hit.t, id: junctionAt(p, floorId, hit.point) }] : [];
+    });
+    splitEdge(p, wall, cuts);
+  }
+  for (const wall of [...p.barriers].filter(w => w.floorId === floorId)) {
+    if (!ends(p, wall).every(q => segmentProjection(q, a, b).distance <= EPS)) continue;
+    // Retain the edge identity and room loops, even when no room has claimed it yet.
+    (p.virtualBoundaries ??= []).push({ id: wall.id, floorId, startId: wall.startId, endId: wall.endId });
+    removeBarrier(p, wall.id);
+  }
+  return addVirtualBoundary(p, floorId, a, b);
 }
 
 /** Explicit conversion: retain the drawn shape with shared virtual edges, or adopt its enclosing
@@ -610,19 +679,26 @@ export function preserveBoundary(p: ProjectDocument, edge: BoundaryEdge) {
 
 /** Regenerate by explicit loops, subdividing identities only when a new boundary divides a space.
  * No old/new footprint-overlap matching is involved in ordinary wall movements. */
-export function refreshBoundarySpaces(p: ProjectDocument): string[] {
+export function refreshBoundarySpaces(p: ProjectDocument, topologyChanged?: Set<string | null>): string[] {
   const created: string[] = [],
     regions = new Map<string | null, BoundaryRegion[]>();
+  const net = netEvaluator(p);
   for (const o of [...p.objects]) {
     if (o.geometry?.mode !== 'boundaries') continue;
     const envelope = boundaryRings(p, o.geometry.loops, o.floorId);
+    // Moving a vertex changes the shape of a face, not its identity. Only a changed edge graph
+    // needs face discovery and polygon containment against every other region on the floor.
+    if (topologyChanged && !topologyChanged.has(o.floorId)) {
+      cacheRings(o, net(o.floorId, envelope));
+      continue;
+    }
     if (!regions.has(o.floorId)) regions.set(o.floorId, boundaryRegions(p, o.floorId));
     const inside = regions.get(o.floorId)!.filter(r => totalArea(difference(r.rings, envelope)) < EPS);
     if (!inside.length) throw new Error('The space boundaries no longer form a closed region.');
     inside.sort((a, b) => area(b.rings) - area(a.rings));
     // Interior walls can eliminate a tiny region, but a labelled space must never disappear silently.
     const usable = inside
-      .map(r => ({ region: r, rings: netRings(p, o.floorId, r.rings, inside.length > 1) }))
+      .map(r => ({ region: r, rings: net(o.floorId, r.rings, inside.length > 1) }))
       .filter(r => r.rings.length)
       .sort((a, b) => area(b.rings) - area(a.rings));
     if (!usable.length) throw new Error('The walls would remove all usable area from this space.');
@@ -671,13 +747,21 @@ export function synchronizeGeometry(before: ProjectDocument, p: ProjectDocument)
     ]);
   const floors = new Set(boundaryEdges(p).map(e => e.floorId));
   for (const floor of floors) if (signature(before, floor) !== signature(p, floor)) normalizeBoundaries(p, floor);
-  refreshBoundarySpaces(p);
+  const topology = (doc: ProjectDocument, floor: string | null) =>
+    JSON.stringify(
+      boundaryEdges(doc)
+        .filter(e => e.floorId === floor)
+        .map(e => [e.id, e.startId, e.endId]),
+    );
+  const changed = new Set([...floors].filter(floor => topology(before, floor) !== topology(p, floor)));
+  refreshBoundarySpaces(p, changed);
 }
 
 /** Validate the explicit topology and its cache. Independent polygons retain their existing rules. */
 export function validateSpaceBoundaries(p: ProjectDocument) {
   const occupied = new Set<string>();
   const faces = new Map<string | null, Set<string>>();
+  const net = netEvaluator(p);
   const loopKey = (loops: BoundaryUse[][]) =>
     loops
       .flat()
@@ -716,7 +800,7 @@ export function validateSpaceBoundaries(p: ProjectDocument) {
         if (occupied.has(key)) throw new Error('Two spaces cannot occupy the same side of a shared boundary.');
         occupied.add(key);
       }
-    const calculated = derivedSpaceRings(p, o);
+    const calculated = net(o.floorId, rings);
     if (
       !o.rings ||
       calculated.length !== o.rings.length ||

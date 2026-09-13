@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react';
 import { ArrowRight, Shuffle } from 'lucide-react';
-import { BACKROOMS_SEED, type BackroomsOptions } from './demo/backrooms';
+import { BACKROOMS_SEED } from './demo/ids';
+import type { BackroomsOptions } from './demo/backrooms';
 import { generateOfficeLayout } from './demo/officeLayout';
 
 export function BackroomsCard({ onOpen }: { onOpen: (options: BackroomsOptions) => Promise<void> }) {

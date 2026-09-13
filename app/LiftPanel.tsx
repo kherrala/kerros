@@ -13,34 +13,13 @@
 // and sends the door reading after it.
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowDown, ArrowUp, DoorOpen, Minus, Pause, Play } from 'lucide-react';
-import type { Floor, ProjectDocument, SiteObject, StatusReading } from '@kerros/viewer';
+import type { ProjectDocument, SiteObject, StatusReading } from '@kerros/viewer';
+import { lifts, LiftSimulation, type LiftState } from './liftSimulation';
+export { lifts } from './liftSimulation';
 
-/** Metres per second, and the seconds a lift holds its doors. An ordinary passenger lift. */
-const SPEED = 1.5;
-const DWELL = 6000;
-
-export interface LiftState {
-  carFloorId: string;
-  open: boolean;
-}
 export interface EscalatorState {
   running: boolean;
   travel: 'up' | 'down';
-}
-
-/** Every lift in the document that is bound to a feed, with the levels it serves. A lift with no
- *  `feedId` has nothing to report and nothing to command — the binding is what makes it live. */
-export function lifts(project: ProjectDocument): { object: SiteObject; floors: Floor[] }[] {
-  return project.objects
-    .filter(o => o.kind === 'elevator' && o.feedId)
-    .map(object => ({
-      object,
-      floors: [...new Set(object.servedFloorIds ?? (object.floorId ? [object.floorId] : []))]
-        .map(id => project.floors.find(f => f.id === id))
-        .filter((f): f is Floor => !!f)
-        .sort((a, b) => b.elevation - a.elevation),
-    }))
-    .filter(l => l.floors.length > 1);
 }
 
 /** Every escalator bound to a feed. An escalator has two things a building can tell you about it and
@@ -55,7 +34,7 @@ export function escalators(project: ProjectDocument): SiteObject[] {
 export function useLiftController(project: ProjectDocument) {
   const [state, setState] = useState<Map<string, LiftState>>(new Map());
   const [steps, setSteps] = useState<Map<string, EscalatorState>>(new Map());
-  const timers = useRef<number[]>([]);
+  const simulation = useRef<LiftSimulation | null>(null);
   const banks = useMemo(() => lifts(project), [project]);
   const stairs = useMemo(() => escalators(project), [project]);
 
@@ -65,47 +44,18 @@ export function useLiftController(project: ProjectDocument) {
     setSteps(new Map(stairs.map(o => [o.feedId!, { running: true, travel: o.travel ?? 'up' }])));
   }, [stairs]);
 
-  // Park every lift at the bottom of its shaft, which is where an idle one waits.
+  const bankKey = JSON.stringify(banks.map(b => [b.object.feedId, b.floors.map(f => [f.id, f.elevation])]));
   useEffect(() => {
-    setState(new Map(banks.map(l => [l.object.feedId!, { carFloorId: l.floors.at(-1)!.id, open: false }])));
+    const controller = new LiftSimulation(banks, () => setState(new Map(controller.state)));
+    simulation.current = controller;
+    setState(new Map(controller.state));
     return () => {
-      timers.current.forEach(clearTimeout);
-      timers.current = [];
+      controller.dispose();
+      simulation.current = null;
     };
-  }, [banks]);
-
-  const call = useCallback(
-    (feedId: string, floorId: string) => {
-      const bank = banks.find(l => l.object.feedId === feedId);
-      const now = state.get(feedId);
-      if (!bank || !now) return;
-      const from = bank.floors.find(f => f.id === now.carFloorId),
-        to = bank.floors.find(f => f.id === floorId);
-      if (!to) return;
-      // Doors shut first, then the ride, then they open — the order a lift does it in, and the order
-      // the readings would arrive in. Timed off the distance, so a long ride takes longer.
-      const ride = (Math.abs((to.elevation ?? 0) - (from?.elevation ?? 0)) / SPEED) * 1000;
-      setState(m => new Map(m).set(feedId, { carFloorId: floorId, open: false }));
-      timers.current.forEach(clearTimeout);
-      timers.current = [
-        window.setTimeout(() => setState(m => new Map(m).set(feedId, { carFloorId: floorId, open: true })), ride + 250),
-        window.setTimeout(
-          () => setState(m => new Map(m).set(feedId, { carFloorId: floorId, open: false })),
-          ride + 250 + DWELL,
-        ),
-      ];
-    },
-    [banks, state],
-  );
-
-  const hold = useCallback((feedId: string, open: boolean) => {
-    timers.current.forEach(clearTimeout);
-    timers.current = [];
-    setState(m => {
-      const now = m.get(feedId);
-      return now ? new Map(m).set(feedId, { ...now, open }) : m;
-    });
-  }, []);
+  }, [bankKey]);
+  const call = useCallback((feedId: string, floorId: string) => simulation.current?.call(feedId, floorId), []);
+  const hold = useCallback((feedId: string, open: boolean) => simulation.current?.hold(feedId, open), []);
 
   const run = useCallback((feedId: string, running: boolean) => {
     setSteps(m => {
@@ -126,7 +76,19 @@ export function useLiftController(project: ProjectDocument) {
       ...[...state].map(([feedId, s]) => ({
         feedId,
         tone: 'normal' as const,
-        label: s.open ? 'Doors open' : 'Standing',
+        label:
+          s.phase === 'moving'
+            ? 'Moving'
+            : s.phase === 'opening'
+              ? 'Opening doors'
+              : s.phase === 'closing'
+                ? 'Closing doors'
+                : s.open
+                  ? 'Doors open'
+                  : 'Standing',
+        targetFloorId: s.targetFloorId,
+        carTravelSeconds: s.carTravelSeconds,
+        moving: s.phase !== 'standing',
         carFloorId: s.carFloorId,
         open: s.open,
         timestamp: Date.now(),
@@ -180,6 +142,7 @@ export function LiftPanel({
                     key={f.id}
                     className={here ? 'active' : ''}
                     title={`Send ${object.name} to ${f.name}`}
+                    disabled={now?.phase !== 'standing'}
                     onClick={() => {
                       call(object.feedId!, f.id);
                       onFloor?.(f.id);
@@ -199,6 +162,7 @@ export function LiftPanel({
             </div>
             <button
               className={`lift-doors ${now?.open ? 'active' : ''}`}
+              disabled={now?.phase !== 'standing'}
               onClick={() => hold(object.feedId!, !now?.open)}
             >
               <DoorOpen size={13} />

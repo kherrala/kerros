@@ -13,12 +13,14 @@
 import maplibregl, { type Map as GLMap } from 'maplibre-gl';
 import type { Origin, Point, Ring } from '../model/types';
 import { toLngLat } from '../model/geometry';
+import { StairWalker, type StairSurface } from './stairSurfaces';
 
 /** Eye above the slab it stands on. A constant, not the floor's height: a mezzanine and a hall are
  *  different rooms but the same visitor. */
-export const EYE = 1.7;
+export { EYE, BODY } from './walkDimensions';
+import { EYE, BODY } from './walkDimensions';
 /** Shoulder radius. Generous enough that you do not clip a corner, tight enough for a 0.9 m door. */
-export const BODY = 0.28;
+
 /** Faster than anyone walks a corridor, because on a screen the corridor is the size of a hand and
  *  a literal 1.4 m/s reads as wading. Games settle around 3–4 m/s for the same reason. */
 export const WALK_SPEED = 3;
@@ -59,7 +61,7 @@ export const MAX_MAP_ZOOM = 26,
  *  crispness of a retina display for a third of its cost. */
 export const WALK_PIXEL_RATIO = 1.25;
 /** Horizontal field of view in degrees. Kept stable when side panels resize the viewport. */
-export const DEFAULT_WALK_FOV = 90,
+export const DEFAULT_WALK_FOV = 100,
   MIN_WALK_FOV = 60,
   MAX_WALK_FOV = 120;
 
@@ -142,8 +144,8 @@ export function unstick(p: Point, walls: Ring[], r = BODY): Point {
     for (const ring of walls) {
       let near: Point | null = null,
         nearD = Infinity;
-      for (let i = 0; i < ring.length - 1; i++) {
-        const c = onSegment(out, ring[i], ring[i + 1]);
+      for (let i = 0; i < ring.length; i++) {
+        const c = onSegment(out, ring[i], ring[(i + 1) % ring.length]);
         const d = Math.hypot(out[0] - c[0], out[1] - c[1]);
         if (d < nearD) {
           nearD = d;
@@ -303,10 +305,14 @@ export interface WalkTerrain {
   /** Eye height above the presented ground plane: EYE plus whatever lifts the slab. */
   eye: number;
   floorId?: string | null;
+  elevation?: number;
+  stairs?: StairSurface[];
   dropAt?: (at: Point) => { floorId: string; distance: number } | undefined;
 }
 
 export interface WalkCallbacks {
+  /** Rebase at a stair landing, or before descending below the active scene's datum. */
+  onFloor?(floorId: string): void;
   /** A real opening has a landing below. Rebase the scene onto that floor before animating descent. */
   onDrop?(floorId: string): void;
   /** Fired once per frame in which anything changed — position, heading, pitch or pointer lock. */
@@ -368,7 +374,9 @@ export class WalkController {
   private path: Point[] | null = null;
   private travelled = 0;
   private arrive?: () => void;
+  private followOptions?: { speed?: number; physical?: boolean; onCancel?: () => void };
   private fall?: { floorId: string; remaining: number; speed: number; ready: boolean };
+  private stairs = new StairWalker();
   position: Point = [0, 0];
   heading = 0;
   pitch = REST_PITCH;
@@ -448,6 +456,8 @@ export class WalkController {
   /** The floor under the walker changed, or its walls were edited. */
   setTerrain(terrain: WalkTerrain) {
     this.terrain = terrain;
+    this.stairs.sync(terrain.floorId ?? null, terrain.elevation ?? 0);
+    this.stairs.refresh(terrain.stairs ?? [], this.position);
     if (this.fall) {
       if (terrain.floorId === this.fall.floorId) this.fall.ready = true;
       else this.fall = undefined;
@@ -473,21 +483,29 @@ export class WalkController {
 
   /** Walk a path on its own, as far as it goes on this floor, then call `onArrive`. Taking any
    *  control cancels it: a tour you cannot interrupt is a video. */
-  follow(points: Point[], onArrive: () => void) {
+  follow(
+    points: Point[],
+    onArrive: () => void,
+    options?: { speed?: number; physical?: boolean; onCancel?: () => void },
+  ) {
     const pts = points.filter((p, i) => !i || Math.hypot(p[0] - points[i - 1][0], p[1] - points[i - 1][1]) > 0.01);
     if (pts.length < 2) return onArrive();
     this.path = pts;
     this.travelled = 0;
     this.arrive = onArrive;
+    this.followOptions = options;
     const start = alongPath(pts, 0);
     this.position = start.at;
-    this.heading = start.heading;
+    if (!this.running) this.heading = start.heading;
     if (this.running) this.apply();
   }
 
-  cancelFollow() {
+  cancelFollow(notify = true) {
+    const cancelled = this.followOptions?.onCancel;
     this.path = null;
     this.arrive = undefined;
+    this.followOptions = undefined;
+    if (notify) cancelled?.();
   }
 
   get following() {
@@ -497,6 +515,7 @@ export class WalkController {
   /** Put the walker somewhere — arriving at a new floor, or jumping to a route's start. */
   place(position: Point, heading = this.heading) {
     this.fall = undefined;
+    this.stairs.reset(this.terrain.elevation ?? 0);
     this.position = position;
     this.heading = wrap(heading);
     if (this.running) this.apply();
@@ -520,6 +539,10 @@ export class WalkController {
       looking: this.locked || this.dragging,
       locked: this.locked,
     };
+  }
+
+  get onStairs() {
+    return !!this.stairs.active;
   }
 
   /** A click takes the mouse: the pointer is locked to the canvas and its movement turns the head,
@@ -658,12 +681,37 @@ export class WalkController {
       if (this.keys.size) this.cancelFollow();
       else return this.advance(dt);
     }
-    if (!this.keys.size) return;
+    if (this.stairs.pending) return;
+    const drive = this.stairs.active?.drive;
+    if (!this.keys.size && !drive?.some(Boolean)) return;
     const moved = stride(this.keys, this.heading, dt);
     this.heading = moved.heading;
-    if (moved.step)
-      this.position = unstick([this.position[0] + moved.step[0], this.position[1] + moved.step[1]], this.terrain.walls);
-    const drop = this.terrain.dropAt?.(this.position);
+    const delta: Point = [
+      (moved.step?.[0] ?? 0) + (drive?.[0] ?? 0) * dt,
+      (moved.step?.[1] ?? 0) + (drive?.[1] ?? 0) * dt,
+    ];
+    // Small substeps cannot tunnel through a riser or rail when a frame is slow or Shift is held.
+    const steps = Math.max(1, Math.ceil(Math.hypot(...delta) / 0.12));
+    for (let i = 0; i < steps; i++) {
+      const next = unstick(
+        [this.position[0] + delta[0] / steps, this.position[1] + delta[1] / steps],
+        this.terrain.walls,
+      );
+      this.position = this.stairs.step(
+        this.position,
+        next,
+        this.terrain.stairs ?? [],
+        this.terrain.floorId ?? null,
+        this.terrain.elevation ?? 0,
+      );
+      if (this.stairs.pending) break;
+    }
+    if (this.stairs.pending && this.on.onFloor) {
+      this.apply();
+      this.on.onFloor(this.stairs.pending);
+      return;
+    }
+    const drop = !this.stairs.active && this.terrain.dropAt?.(this.position);
     if (drop && this.on.onDrop) {
       this.cancelFollow();
       this.fall = { floorId: drop.floorId, remaining: drop.distance, speed: 0, ready: false };
@@ -678,14 +726,37 @@ export class WalkController {
    *  turn instead of a cut. */
   private advance(dt: number) {
     if (!this.path) return;
-    this.travelled += TOUR_SPEED * dt;
-    const step = alongPath(this.path, this.travelled);
-    this.position = step.at;
+    if (this.stairs.pending) return;
+    const delta = (this.followOptions?.speed ?? TOUR_SPEED) * dt;
+    const count = Math.max(1, Math.ceil(delta / 0.08));
+    let step = alongPath(this.path, this.travelled);
+    for (let i = 0; i < count; i++) {
+      this.travelled += delta / count;
+      step = alongPath(this.path, this.travelled);
+      if (this.followOptions?.physical) {
+        const next = this.stairs.step(
+          this.position,
+          unstick(step.at, this.terrain.walls),
+          this.terrain.stairs ?? [],
+          this.terrain.floorId ?? null,
+          this.terrain.elevation ?? 0,
+        );
+        if (Math.hypot(next[0] - step.at[0], next[1] - step.at[1]) > 0.04) {
+          this.cancelFollow();
+          return;
+        }
+        this.position = next;
+        if (this.stairs.pending) {
+          this.on.onFloor?.(this.stairs.pending);
+          break;
+        }
+      } else this.position = step.at;
+    }
     this.heading = easeHeading(this.heading, step.heading, TURN_RATE * dt);
     this.apply();
     if (step.done) {
       const arrived = this.arrive;
-      this.cancelFollow();
+      this.cancelFollow(false);
       arrived?.();
     }
   }
@@ -701,7 +772,7 @@ export class WalkController {
     const camera = eyeCamera(
       map.transform,
       [eye[0], eye[1]],
-      this.terrain.eye + (this.fall?.ready ? this.fall.remaining : 0),
+      this.terrain.eye + (this.fall?.ready ? this.fall.remaining : this.stairs.height - (this.terrain.elevation ?? 0)),
       bearing,
       this.pitch,
     );

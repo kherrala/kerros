@@ -1,8 +1,26 @@
 import type { Point, ProjectDocument, SiteObject } from '../model/types';
-import { pointInRing } from '../model/geometry';
+import { objectArea, pointInRing } from '../model/geometry';
+import { spacePoint } from '../model/spaces';
 
 const contains = (o: SiteObject, at: Point) =>
   !!o.rings?.length && pointInRing(at, o.rings[0]) && !o.rings.slice(1).some(hole => pointInRing(at, hole));
+
+/** Keep a valid position across storeys, including a fall's landing. A floor picker can instead
+ * select a smaller footprint: enter it at a dry navigation point, not in the void outside it. */
+export function floorArrival(project: ProjectDocument, floorId: string | null, at: Point): Point {
+  if (!floorId) return at;
+  const rooms = project.objects.filter(o => o.floorId === floorId && (o.kind === 'room' || o.kind === 'zone'));
+  if (rooms.some(o => contains(o, at))) return at;
+  const pools = project.objects.filter(o => o.floorId === floorId && o.water);
+  const dry = (p: Point) => rooms.some(o => contains(o, p)) && !pools.some(o => contains(o, p));
+  const node = project.navNodes?.find(n => n.floorId === floorId && dry(n.position));
+  if (node) return node.position;
+  for (const room of rooms.sort((a, b) => objectArea(b) - objectArea(a))) {
+    const point = spacePoint(project, room);
+    if (dry(point)) return point;
+  }
+  return at;
+}
 
 /** Only authored openings trigger a drop. Gaps outside the building, an undrawn floor, and
  * overlapping areas that still provide a slab are not floor holes. */

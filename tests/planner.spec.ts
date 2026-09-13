@@ -1,7 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import type { ProjectDocument } from '../src/model/types';
 import { newProject } from '../src/model/testFixtures';
-import { MIN_SEGMENT, barrierEnds, distance, toLngLat } from '../src/model/geometry';
+import { barrierEnds, distance, toLngLat } from '../src/model/geometry';
 import { validateProject } from '../src/model/validate';
 
 test.beforeEach(async ({ page }) => {
@@ -119,10 +119,16 @@ async function savedProject(page: Page): Promise<ProjectDocument> {
         open.onerror = () => reject(open.error);
         open.onsuccess = () => {
           const db = open.result;
-          const req = db.transaction('projects').objectStore('projects').getAll();
+          const id = new URLSearchParams(location.hash.slice(1)).get('p');
+          if (!id) {
+            db.close();
+            reject(new Error('The active project has no view-link ID.'));
+            return;
+          }
+          const req = db.transaction('projects').objectStore('projects').get(id);
           req.onsuccess = () => {
             db.close();
-            resolve(req.result[0]);
+            resolve(req.result);
           };
           req.onerror = () => {
             db.close();
@@ -801,7 +807,7 @@ test('a bad polygon click leaves an editable draft with undo point', async ({ pa
   expect(() => validateProject(saved)).not.toThrow();
 });
 
-test('a wall endpoint drag stops at valid geometry and the next drag still works', async ({ page }) => {
+test('an invalid endpoint drop restores the original wall and the next drag still works', async ({ page }) => {
   await page.goto('/app.html');
   await page.getByRole('button', { name: /New blank site/ }).click();
   await ready(page);
@@ -814,14 +820,24 @@ test('a wall endpoint drag stops at valid geometry and the next drag still works
   const start = page.getByRole('button', { name: 'Move wall endpoint 1' });
   const end = page.getByRole('button', { name: 'Move wall endpoint 2' });
   await expect(end).toBeVisible();
+  const original = await savedProject(page);
   const target = await start.boundingBox();
   const source = await end.boundingBox();
   await page.mouse.move(source!.x + source!.width / 2, source!.y + source!.height / 2);
   await page.mouse.down();
   await page.mouse.move(target!.x + target!.width / 2, target!.y + target!.height / 2, { steps: 5 });
+  // Even an invalid location remains a responsive preview; persistence is untouched until release.
+  const destination = barrierEnds(original, original.barriers[0])[0];
+  await expect
+    .poll(async () =>
+      distance([Number(await end.getAttribute('data-wx')), Number(await end.getAttribute('data-wy'))], destination),
+    )
+    .toBeLessThan(0.001);
+  expect((await savedProject(page)).junctions).toEqual(original.junctions);
   await page.mouse.up();
   const limited = await savedProject(page);
-  expect(distance(...barrierEnds(limited, limited.barriers[0]))).toBeCloseTo(MIN_SEGMENT, 3);
+  expect(limited.barriers).toEqual(original.barriers);
+  expect(limited.junctions).toEqual(original.junctions);
   expect(() => validateProject(limited)).not.toThrow();
   const limitedHandle = await end.boundingBox();
   await page.mouse.move(limitedHandle!.x + limitedHandle!.width / 2, limitedHandle!.y + limitedHandle!.height / 2);
@@ -1013,8 +1029,8 @@ test('POV field of view widens the lens without moving the eye and remembers the
   const plan = await camera();
   await page.getByRole('button', { name: 'Walk', exact: true }).click();
   const slider = page.getByRole('slider', { name: 'POV field of view' });
-  await expect(slider).toHaveValue('90');
-  await expect.poll(async () => (await camera()).horizontal).toBeCloseTo(90, 4);
+  await expect(slider).toHaveValue('100');
+  await expect.poll(async () => (await camera()).horizontal).toBeCloseTo(100, 4);
   const before = await camera();
   await slider.focus();
   await slider.press('End');
@@ -1140,6 +1156,14 @@ test('junction drag preview and release agree on an imported oblique wall', asyn
   await page.mouse.down();
   const dest = await screen(at(5.1, 0.015));
   await page.mouse.move(dest.x, dest.y, { steps: 4 });
+  await expect
+    .poll(async () =>
+      distance(
+        [Number(await handle.getAttribute('data-wx')), Number(await handle.getAttribute('data-wy'))],
+        at(5.1, 0),
+      ),
+    )
+    .toBeLessThan(0.02);
   const preview = [Number(await handle.getAttribute('data-wx')), Number(await handle.getAttribute('data-wy'))] as [
     number,
     number,
@@ -1192,6 +1216,14 @@ test('wall move preview snaps its adjacent segment into line before release', as
   await page.mouse.down();
   const dest = await screen(at(2, 1.2));
   await page.mouse.move(dest.x, dest.y, { steps: 4 });
+  await expect
+    .poll(async () =>
+      distance(
+        [Number(await handle.getAttribute('data-wx')), Number(await handle.getAttribute('data-wy'))],
+        at(2, 1.23),
+      ),
+    )
+    .toBeLessThan(1e-6);
   const preview = [Number(await handle.getAttribute('data-wx')), Number(await handle.getAttribute('data-wy'))] as [
     number,
     number,
@@ -1206,4 +1238,80 @@ test('wall move preview snaps its adjacent segment into line before release', as
   expect(distance([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], preview)).toBeLessThan(1e-6);
   expect(distance(b, at(4, 1.23))).toBeLessThan(1e-6);
   expect(() => validateProject(after)).not.toThrow();
+});
+
+test('door drag flips its opening side, preserves handing and saves the previewed position', async ({ page }) => {
+  const { createObject } = await import('../src/model/factory');
+  const { addBarrier } = await import('../src/model/geometry');
+  const p = newProject('Door gestures');
+  const wall = addBarrier(p, [-6, 0], [6, 0], 'floor-ground', 'wall')!;
+  const door = createObject('door', [0, 0], 'floor-ground', 'Handed door');
+  Object.assign(door, { barrierId: wall.id, offset: 6, width: 1 });
+  p.objects.push(door);
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: /New blank site/ }).click();
+  await ready(page);
+  await importFile(page, 'doors.json', 'application/json', Buffer.from(JSON.stringify(p)), 'Project');
+  await flatCamera(page);
+  await page
+    .getByRole('button', { name: /^Objects/ })
+    .first()
+    .click();
+  await page.getByRole('textbox', { name: /Search/ }).fill('Handed door');
+  await page.locator('.sidebar .object-row').filter({ hasText: 'Handed door' }).click();
+  await expect(page.getByRole('combobox', { name: 'Door hinge' })).toBeVisible();
+  await page.getByRole('combobox', { name: 'Door hinge' }).selectOption('right');
+  const drag = async (x: number, y: number) => {
+    const handle = page.getByRole('button', { name: 'Slide along the wall', exact: true });
+    const box = (await handle.boundingBox())!;
+    const target = await page.evaluate(
+      ll => {
+        const m = (window as any).__kerrosMap,
+          p = m.project(ll),
+          b = m.getContainer().getBoundingClientRect();
+        return { x: p.x + b.left, y: p.y + b.top };
+      },
+      toLngLat([x, y], p.origin),
+    );
+    await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+    await page.mouse.down();
+    await page.mouse.move(target.x, target.y, { steps: 8 });
+    await page.mouse.up();
+  };
+  await drag(2, -1);
+  await expect(page.getByRole('combobox', { name: 'Opening side' })).toHaveValue('-1');
+  await expect.poll(async () => (await savedProject(page)).objects.find(o => o.kind === 'door')?.doorSwing).toBe(-1);
+  let result = (await savedProject(page)).objects.find(o => o.kind === 'door')!;
+  expect(result.doorHinge).toBe('right');
+  expect(result.position[0]).toBeCloseTo(2, 1);
+  expect(result.position[1]).toBeCloseTo(0, 5);
+  await drag(-1, 1);
+  await expect(page.getByRole('combobox', { name: 'Opening side' })).toHaveValue('1');
+  await expect.poll(async () => (await savedProject(page)).objects.find(o => o.kind === 'door')?.doorSwing).toBe(1);
+  result = (await savedProject(page)).objects.find(o => o.kind === 'door')!;
+  expect(result.doorHinge).toBe('right');
+  await page.reload();
+  expect((await savedProject(page)).objects.find(o => o.kind === 'door')?.doorHinge).toBe('right');
+  await ready(page);
+  await flatCamera(page);
+  await page.getByRole('button', { name: 'All drawing tools' }).click();
+  await page.getByRole('button', { name: 'Virtual boundary', exact: true }).click();
+  for (const x of [3, 4.5]) {
+    const pixel = await page.evaluate(
+      ll => {
+        const map = (window as any).__kerrosMap,
+          at = map.project(ll),
+          box = map.getContainer().getBoundingClientRect();
+        return { x: at.x + box.left, y: at.y + box.top };
+      },
+      toLngLat([x, 0], p.origin),
+    );
+    await clickAt(page, pixel);
+  }
+  await page.keyboard.press('Enter');
+  await expect.poll(async () => (await savedProject(page)).virtualBoundaries?.length).toBe(1);
+  const cut = await savedProject(page);
+  expect(cut.barriers).toHaveLength(2);
+  expect(cut.objects.find(o => o.kind === 'door')?.doorHinge).toBe('right');
+  validateProject(cut);
 });

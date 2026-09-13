@@ -105,19 +105,16 @@ function fitAttachedOpenings(project: ProjectDocument, changed: Set<string>) {
   }
 }
 
-/** A drag stops at a valid position instead of failing the entire gesture. This uses the full
- *  document rules, so the limit accounts for connected walls, openings, holes and parent areas.
- *  Trials always start from the original document; none can leak into history or persistence. */
-export function dragGeometry(project: ProjectDocument, _floorId: string | null, move: GeometryDrag): ProjectDocument {
+function geometryMutation(project: ProjectDocument, move: GeometryDrag) {
   const deltas = new Map<string, Point>();
   let vertex: Point | undefined;
   if (move.kind === 'junction') {
     const j = project.junctions.find(j => j.id === move.id);
-    if (!j) return project;
+    if (!j) return;
     deltas.set(j.id, [move.point[0] - j.position[0], move.point[1] - j.position[1]]);
   } else if (move.kind === 'barrier') {
     const b = boundaryEdges(project).find(b => b.id === move.id);
-    if (!b) return project;
+    if (!b) return;
     const [a, c] = barrierEnds(project, b);
     const length = distance(a, c);
     const nx = -(c[1] - a[1]) / length,
@@ -126,29 +123,42 @@ export function dragGeometry(project: ProjectDocument, _floorId: string | null, 
     for (const id of [b.startId, b.endId]) deltas.set(id, [nx * slide, ny * slide]);
   } else {
     const ring = project.objects.find(o => o.id === move.id)?.rings?.[move.ringIndex];
-    if (project.objects.find(o => o.id === move.id)?.geometry?.mode === 'boundaries') return project;
+    if (project.objects.find(o => o.id === move.id)?.geometry?.mode === 'boundaries') return;
     vertex = ring && openRing(ring)[move.index];
-    if (!vertex) return project;
+    if (!vertex) return;
   }
-  const trial = (fraction: number) =>
-    transact(project, draft => {
-      for (const j of draft.junctions) {
-        const delta = deltas.get(j.id);
-        if (delta) j.position = [j.position[0] + delta[0] * fraction, j.position[1] + delta[1] * fraction];
-      }
-      if (move.kind === 'ring') {
-        const o = draft.objects.find(o => o.id === move.id)!;
-        const ring = openRing(o.rings![move.ringIndex]);
-        ring[move.index] = [
-          vertex![0] + (move.point[0] - vertex![0]) * fraction,
-          vertex![1] + (move.point[1] - vertex![1]) * fraction,
-        ];
-        o.rings![move.ringIndex] = closeRing(ring);
-        o.position = centroid(o.rings![0]);
-      } else {
-        fitAttachedOpenings(draft, new Set(deltas.keys()));
-      }
-    });
+  return (draft: ProjectDocument, fraction: number) => {
+    for (const j of draft.junctions) {
+      const delta = deltas.get(j.id);
+      if (delta) j.position = [j.position[0] + delta[0] * fraction, j.position[1] + delta[1] * fraction];
+    }
+    if (move.kind === 'ring') {
+      const o = draft.objects.find(o => o.id === move.id)!;
+      const ring = openRing(o.rings![move.ringIndex]);
+      ring[move.index] = [
+        vertex![0] + (move.point[0] - vertex![0]) * fraction,
+        vertex![1] + (move.point[1] - vertex![1]) * fraction,
+      ];
+      o.rings![move.ringIndex] = closeRing(ring);
+      o.position = centroid(o.rings![0]);
+    } else {
+      fitAttachedOpenings(draft, new Set(deltas.keys()));
+    }
+  };
+}
+
+/** Apply one requested drop to a transaction draft. The editor previews snapping alone and calls
+ * this once on release; transact either accepts the entire move or leaves the original intact. */
+export function applyGeometryDrag(project: ProjectDocument, move: GeometryDrag) {
+  geometryMutation(project, move)?.(project, 1);
+}
+
+/** Optional constrained authoring operation for hosts and scripted drawing: find a valid position
+ * along a requested movement. Interactive editor drags use applyGeometryDrag on release instead. */
+export function dragGeometry(project: ProjectDocument, _floorId: string | null, move: GeometryDrag): ProjectDocument {
+  const mutation = geometryMutation(project, move);
+  if (!mutation) return project;
+  const trial = (fraction: number) => transact(project, draft => mutation(draft, fraction));
   const full = trial(1);
   if (full.ok) return full.project;
   let low = 0,
