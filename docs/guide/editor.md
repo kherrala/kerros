@@ -6,6 +6,14 @@
 
 For drawing behavior, read [Space geometry & walls](/guide/geometry): how **Space from walls** builds an outline, what follows a moved wall, how splitting and merging work, and how snapping differs from coordinate precision.
 
+## Walking through a floor
+
+Choose **Walk** to view the active floor at eye height. Use W/S or the up/down arrows to move, A/D or the left/right arrows to turn, and click the view to look around with the mouse. Escape releases the mouse; press it again to leave Walk.
+
+The **Field of view** slider in the upper right adjusts the horizontal viewing angle from **60° to 120°**, with **90°** as the default. It changes how much you can see without moving you or changing your eye height. Your browser remembers the setting, including after a reload. Leaving Walk restores the normal map camera's field of view.
+
+Selecting an object from the list turns you toward it from your current position.
+
 ## Adapters
 
 The editor is storage- and integration-agnostic. You pass a `PlannerAdapters` object:

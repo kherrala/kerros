@@ -20,6 +20,7 @@ export const en = {
     select: 'Select',
     pan: 'Pan',
     wall: 'Wall',
+    boundary: 'Virtual boundary',
     partition: 'Partition',
     fence: 'Fence',
     zone: 'Zone polygon',

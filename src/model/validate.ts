@@ -5,6 +5,7 @@
 // Loading validates (importProject, parseExport, the repositories), and editing validates through
 // `transact`, which works on a clone and refuses to return a document that fails any rule — so an
 // invalid state is never observable, only reported as the error that would have created it.
+import { synchronizeGeometry, validateSpaceBoundaries } from './boundaries';
 import {
   MIN_SEGMENT,
   OPENING_MIN_SEGMENT,
@@ -13,6 +14,7 @@ import {
   distance,
   intersects,
   openRing,
+  objectArea,
   pointInRing,
   ringArea,
 } from './geometry';
@@ -20,6 +22,7 @@ import { navEdges, navNodes } from './navigation';
 import { EXTERIOR_PRESETS } from './materials';
 import { AMBIENCE_PRESETS, OBJECT_KINDS, isArea, isOpening, isSpace } from './types';
 import type { Ambience, Point, ProjectDocument, Ring, SiteObject } from './types';
+import { MIN_FACE_AREA, MIN_SPACE_AREA } from './precision';
 
 /** How far from the site origin a coordinate may sit, in metres. A guard against corrupt data, not a
  *  modelling limit: no site is 100 km across, but a NaN that became 1e15 through arithmetic would
@@ -35,13 +38,13 @@ const distinct = (ids: readonly unknown[]) => new Set(ids).size === ids.length;
 
 /** Geometric sanity of an area's rings: a real outer boundary, no self-crossings, holes inside and
  *  disjoint. Returns an error message or null. */
-export function validateRings(rings: Ring[]): string | null {
+export function validateRings(rings: Ring[], minEdge = 0.001, minArea = 0.01): string | null {
   if (!rings.length) return 'Draw an outer boundary first.';
   for (const ring of rings) {
     const p = openRing(ring);
-    if (p.length < 3 || ringArea(p) < 0.01) return 'An area needs at least three vertices and a non-zero area.';
+    if (p.length < 3 || ringArea(p) < minArea) return 'An area needs at least three vertices and a non-zero area.';
     for (let i = 0; i < p.length; i++) {
-      if (distance(p[i], p[(i + 1) % p.length]) < 0.001) return 'Remove duplicate vertices.';
+      if (distance(p[i], p[(i + 1) % p.length]) < minEdge) return 'Remove duplicate vertices.';
       for (let j = i + 1; j < p.length; j++) {
         if (j === i + 1 || (i === 0 && j === p.length - 1)) continue;
         if (intersects(p[i], p[(i + 1) % p.length], p[j], p[(j + 1) % p.length]))
@@ -74,7 +77,8 @@ export function validateRelationships(project: ProjectDocument): string | null {
   }
   for (const object of project.objects) {
     if (object.rings) {
-      const error = validateRings(object.rings);
+      const shared = object.geometry?.mode === 'boundaries';
+      const error = validateRings(object.rings, shared ? 1e-6 : 0.001, shared ? MIN_FACE_AREA : 0.01);
       if (error) return error;
     }
     if (object.parentId) {
@@ -197,7 +201,7 @@ export function validateProject(value: unknown): ProjectDocument {
   for (const key of ['buildings', 'floors', 'junctions', 'barriers', 'objects', 'drawings'])
     if (!Array.isArray(v[key]) || (v[key] as unknown[]).some(x => !object(x) || !string(x.id)))
       fail(`malformed ${key}.`);
-  for (const key of ['navNodes', 'navEdges', 'zones', 'portals', 'portalGroups'] as const)
+  for (const key of ['navNodes', 'navEdges', 'zones', 'portals', 'portalGroups', 'virtualBoundaries'] as const)
     if (
       v[key] !== undefined &&
       (!Array.isArray(v[key]) || (v[key] as unknown[]).some(x => !object(x) || !string(x.id)))
@@ -209,6 +213,7 @@ export function validateProject(value: unknown): ProjectDocument {
     ...p.floors,
     ...p.junctions,
     ...p.barriers,
+    ...(p.virtualBoundaries ?? []),
     ...p.objects,
     ...p.drawings,
     ...(p.navNodes ?? []),
@@ -266,6 +271,18 @@ export function validateProject(value: unknown): ProjectDocument {
   for (const e of [...p.junctions, ...p.barriers, ...p.objects, ...p.drawings])
     if (e.floorId !== null && !floorIds.has(e.floorId)) fail('unknown floor reference.');
   if (p.junctions.some(j => !point(j.position))) fail('invalid junction coordinates.');
+  for (const edge of p.virtualBoundaries ?? []) {
+    const a = p.junctions.find(j => j.id === edge.startId),
+      b = p.junctions.find(j => j.id === edge.endId);
+    if (
+      !a ||
+      !b ||
+      a.floorId !== edge.floorId ||
+      b.floorId !== edge.floorId ||
+      distance(a.position, b.position) < 0.001 - 1e-6
+    )
+      fail('invalid virtual boundary.');
+  }
   if (
     p.barriers.some(
       b =>
@@ -448,6 +465,7 @@ export function validateProject(value: unknown): ProjectDocument {
   }
   const error = validateRelationships(p);
   if (error) fail(error);
+  validateSpaceBoundaries(p);
   const navError = validateNavigation(p);
   if (navError) fail(navError);
   return p;
@@ -486,6 +504,15 @@ export function transact(
   try {
     const draft = structuredClone(project); // clones of frozen objects are mutable: drafts stay editable
     change(draft);
+    synchronizeGeometry(project, draft);
+    // Older imported outlines remain readable. New or resized areas use the same usable-area
+    // minimum as enclosure and splitting; changing a name never invalidates a legacy small area.
+    for (const o of draft.objects)
+      if (isArea(o.kind) && objectArea(o) < MIN_SPACE_AREA) {
+        const old = project.objects.find(previous => previous.id === o.id && isArea(previous.kind));
+        if (!old || objectArea(old) !== objectArea(o))
+          throw new Error(`A space needs at least ${MIN_SPACE_AREA} m² of usable area.`);
+      }
     validateProject(draft);
     return { ok: true, project: options?.freeze === false ? draft : freezeProject(draft) };
   } catch (error) {

@@ -872,6 +872,181 @@ test('the fourth wall snaps to the shared T junction', async ({ page }) => {
   expect(() => validateProject(saved)).not.toThrow();
 });
 
+test('a shared room follows virtual boundaries through splitting, dragging and reload', async ({ page }) => {
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: /New blank site/ }).click();
+  await ready(page);
+  await flatCamera(page);
+  await page.getByRole('button', { name: 'All drawing tools' }).click();
+  await page.getByRole('button', { name: 'Room polygon', exact: true }).click();
+  for (const [x, y] of [
+    [0.3, 0.3],
+    [0.7, 0.3],
+    [0.7, 0.7],
+    [0.3, 0.7],
+  ])
+    await clickAt(page, await canvasPoint(page, x, y));
+  await page.keyboard.press('Enter');
+  const initial = await savedProject(page);
+  expect(initial.objects[0].geometry?.mode).toBe('boundaries');
+  expect(initial.virtualBoundaries).toHaveLength(4);
+  await expect(page.getByRole('combobox', { name: 'Space geometry' })).toHaveValue('boundaries');
+  const handle = page.getByRole('button', { name: 'Move space boundary 2', exact: true });
+  await expect(handle).toBeVisible();
+  const box = (await handle.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(box.x + box.width / 2 + 35, box.y + box.height / 2, { steps: 8 });
+  await page.mouse.up();
+  const moved = await savedProject(page);
+  expect(moved.objects[0].id).toBe(initial.objects[0].id);
+  expect(moved.objects[0].rings).not.toEqual(initial.objects[0].rings);
+
+  await page.getByRole('button', { name: 'All drawing tools' }).click();
+  await page.getByRole('button', { name: 'Virtual boundary', exact: true }).click();
+  await clickAt(page, await canvasPoint(page, 0.5, 0.25));
+  await clickAt(page, await canvasPoint(page, 0.5, 0.75));
+  await page.keyboard.press('Enter');
+  const divided = await savedProject(page);
+  expect(divided.objects).toHaveLength(2);
+  expect(divided.objects.every(o => o.geometry?.mode === 'boundaries')).toBe(true);
+  expect(() => validateProject(divided)).not.toThrow();
+  await page.reload();
+  await expect(page.getByTestId('map-canvas')).toBeVisible();
+  const restored = await savedProject(page);
+  expect(restored.objects).toEqual(divided.objects);
+  expect(restored.virtualBoundaries).toEqual(divided.virtualBoundaries);
+});
+
+test('selecting objects from the list keeps the POV camera at the walker', async ({ page }) => {
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: /New blank site/ }).click();
+  await ready(page);
+  await flatCamera(page);
+  await page.getByRole('button', { name: 'Zone polygon tool' }).click();
+  for (const [x, y] of [
+    [0.25, 0.25],
+    [0.75, 0.25],
+    [0.75, 0.75],
+    [0.25, 0.75],
+  ])
+    await clickAt(page, await canvasPoint(page, x, y));
+  await page.keyboard.press('Enter');
+  for (const [name, x, y] of [
+    ['East target', 0.65, 0.4],
+    ['West target', 0.35, 0.6],
+  ] as const) {
+    await page.getByRole('button', { name: 'POI marker tool' }).click();
+    await clickAt(page, await canvasPoint(page, x, y));
+    await rename(page, name);
+  }
+  const project = await savedProject(page);
+  await page.getByRole('button', { name: 'Walk', exact: true }).click();
+  const pose = () =>
+    page.evaluate(() => {
+      const { __kerrosWalk: walk, __kerrosMap: map } = window as unknown as {
+        __kerrosWalk: { pose: { position: number[]; heading: number; pitch: number } };
+        __kerrosMap: {
+          transform: { getCameraAltitude(): number; getCameraLngLat(): { lng: number; lat: number } };
+          isMoving(): boolean;
+        };
+      };
+      return {
+        ...walk.pose,
+        eye: map.transform.getCameraLngLat(),
+        altitude: map.transform.getCameraAltitude(),
+        moving: map.isMoving(),
+      };
+    });
+  await expect.poll(async () => (await pose()).pitch).toBeGreaterThan(80);
+  const before = await pose();
+  await page
+    .getByRole('button', { name: /^Objects/ })
+    .first()
+    .click();
+  for (const name of ['East target', 'West target']) {
+    await page.getByRole('textbox', { name: /Search/ }).fill(name);
+    await page.locator('.sidebar .object-row').filter({ hasText: name }).first().click();
+    const object = project.objects.find(o => o.name === name)!;
+    const expected =
+      ((Math.atan2(object.position[0] - before.position[0], object.position[1] - before.position[1]) * 180) / Math.PI +
+        360) %
+      360;
+    await expect.poll(async () => Math.abs((await pose()).heading - expected)).toBeLessThan(0.01);
+    const after = await pose();
+    expect(after.position).toEqual(before.position);
+    expect(after.altitude).toBeCloseTo(before.altitude, 4);
+    expect(after.eye.lng).toBeCloseTo(before.eye.lng, 8);
+    expect(after.eye.lat).toBeCloseTo(before.eye.lat, 8);
+    expect(after.pitch).toBe(before.pitch);
+    expect(after.moving).toBe(false);
+  }
+});
+
+test('POV field of view widens the lens without moving the eye and remembers the preference', async ({ page }) => {
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: /New blank site/ }).click();
+  await ready(page);
+  await flatCamera(page);
+  const camera = () =>
+    page.evaluate(() => {
+      const { __kerrosWalk: walk, __kerrosMap: map } = window as unknown as {
+        __kerrosWalk?: { pose: { position: number[]; heading: number; pitch: number } };
+        __kerrosMap: {
+          getVerticalFieldOfView(): number;
+          getCanvas(): HTMLCanvasElement;
+          transform: { getCameraAltitude(): number; getCameraLngLat(): { lng: number; lat: number } };
+        };
+      };
+      const vertical = map.getVerticalFieldOfView();
+      const canvas = map.getCanvas();
+      return {
+        pose: walk?.pose,
+        eye: map.transform.getCameraLngLat(),
+        altitude: map.transform.getCameraAltitude(),
+        vertical,
+        horizontal:
+          (2 * Math.atan((Math.tan((vertical * Math.PI) / 360) * canvas.clientWidth) / canvas.clientHeight) * 180) /
+          Math.PI,
+      };
+    });
+  const plan = await camera();
+  await page.getByRole('button', { name: 'Walk', exact: true }).click();
+  const slider = page.getByRole('slider', { name: 'POV field of view' });
+  await expect(slider).toHaveValue('90');
+  await expect.poll(async () => (await camera()).horizontal).toBeCloseTo(90, 4);
+  const before = await camera();
+  await slider.focus();
+  await slider.press('End');
+  await expect(slider).toHaveValue('120');
+  await expect.poll(async () => (await camera()).horizontal).toBeCloseTo(120, 4);
+  // Arrow keys edit the slider, without also turning or walking the avatar.
+  await slider.press('ArrowLeft');
+  await expect(slider).toHaveValue('119');
+  await expect.poll(async () => (await camera()).horizontal).toBeCloseTo(119, 4);
+  for (const viewport of [
+    { width: 1280, height: 900 },
+    { width: 1000, height: 1000 },
+  ]) {
+    await page.setViewportSize(viewport);
+    await expect.poll(async () => (await camera()).horizontal).toBeCloseTo(119, 4);
+    const after = await camera();
+    expect(after.pose).toEqual(before.pose);
+    expect(after.eye.lng).toBeCloseTo(before.eye.lng, 8);
+    expect(after.eye.lat).toBeCloseTo(before.eye.lat, 8);
+    expect(after.altitude).toBeCloseTo(before.altitude, 4);
+  }
+  await expect(page.getByRole('button', { name: 'Zoom out', exact: true })).toBeHidden();
+  await page.getByRole('button', { name: '3D', exact: true }).click();
+  await expect(slider).toBeHidden();
+  await expect.poll(async () => (await camera()).vertical).toBeCloseTo(plan.vertical, 6);
+  await page.reload();
+  await ready(page);
+  await page.getByRole('button', { name: 'Walk', exact: true }).click();
+  await expect(slider).toHaveValue('119');
+  await expect.poll(async () => (await camera()).horizontal).toBeCloseTo(119, 4);
+});
+
 test('draws a 12 cm wall return with precise positioning and keeps it through undo and redo', async ({ page }) => {
   await page.goto('/app.html');
   await page.getByRole('button', { name: /New blank site/ }).click();

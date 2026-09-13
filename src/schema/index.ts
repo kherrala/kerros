@@ -9,6 +9,9 @@ export type {
   InteriorLight,
   LightFixture,
   Junction,
+  VirtualBoundary,
+  BoundaryUse,
+  SpaceGeometry,
   Barrier,
   SiteObject,
   Drawing,
@@ -59,6 +62,21 @@ export { derivedGraph } from '../model/topology';
 export { isArea, isDevice, isOpening, isSpace, uid, OBJECT_KINDS } from '../model/types';
 export { createObject, emptyProject } from '../model/factory';
 export { enclosedRegion, enclosedRegions, refitEnclosedRooms } from '../model/spaces';
+export {
+  boundaryEdges,
+  boundaryRegions,
+  boundaryRegionAt,
+  boundaryRings,
+  derivedSpaceRings,
+  followsBoundaries,
+  connectSpace,
+  disconnectSpace,
+  addVirtualBoundary,
+  addBoundaryHole,
+  normalizeBoundaries,
+  refreshBoundarySpaces,
+} from '../model/boundaries';
+export type { BoundaryEdge, BoundaryRegion } from '../model/boundaries';
 export { coverageOf, DEFAULT_RANGE, DEFAULT_FOV } from '../model/coverage';
 export { copyProject, openingFloorId } from '../model/project';
 export {

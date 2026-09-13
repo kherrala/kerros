@@ -131,6 +131,19 @@ export interface Junction {
   floorId: string | null;
   position: Point;
 }
+/** An unwalled space boundary. Physical boundaries use Barrier IDs and endpoints directly. */
+export interface VirtualBoundary {
+  id: string;
+  floorId: string | null;
+  startId: string;
+  endId: string;
+}
+export interface BoundaryUse {
+  edgeId: string;
+  /** Traverse from endId to startId. Absent means startId to endId. */
+  reversed?: boolean;
+}
+export type SpaceGeometry = { mode: 'independent' } | { mode: 'boundaries'; loops: BoundaryUse[][] };
 export interface Barrier {
   id: string;
   floorId: string | null;
@@ -163,6 +176,9 @@ export interface SiteObject {
   position: Point;
   rotation: number;
   rings?: Ring[];
+  /** Boundary-driven spaces keep rings and dimensions as a validated, generated cache.
+   * Absent is an independent outline, preserving existing/imported projects without guessing. */
+  geometry?: SpaceGeometry;
   /** Makes this area a sloped plane rather than a flat plate; see Slope. */
   slope?: Slope;
   width: number;
@@ -332,6 +348,7 @@ export interface ProjectDocument {
   floors: Floor[];
   junctions: Junction[];
   barriers: Barrier[];
+  virtualBoundaries?: VirtualBoundary[];
   objects: SiteObject[];
   drawings: Drawing[];
   referenceNote?: string;
@@ -371,6 +388,7 @@ export type Tool =
   | 'select'
   | 'pan'
   | 'wall'
+  | 'boundary'
   | 'partition'
   | 'fence'
   | 'zone'

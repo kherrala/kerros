@@ -49,6 +49,7 @@ import { neutralBasemap } from '../adapters/basemap';
 import { ambient, mixColor, type Sun, sunlight } from './lighting';
 import { EntityIcon } from '../components/Icons';
 import { draftFeatures, makeFeatures, navGraphFeatures, onFloor, visibleOnFloor, wallPieces } from './features';
+import { boundaryEdges } from '../model/boundaries';
 import {
   ROUTE_COLOR,
   ROUTE_EDGE,
@@ -62,7 +63,19 @@ import { aimCenter, floorAim, JourneyPlayer } from './journey';
 import type { Route } from '../model/navigation';
 import { LIFT, SLAB } from './levels';
 import type { SceneLayer } from './SceneLayer';
-import { EYE, HEAD_ROOM, MAX_MAP_ZOOM, unstick, type WalkAvatar, WalkController, type WalkPose } from './walk';
+import {
+  DEFAULT_WALK_FOV,
+  EYE,
+  HEAD_ROOM,
+  MAX_MAP_ZOOM,
+  MAX_WALK_FOV,
+  MIN_WALK_FOV,
+  unstick,
+  walkFieldOfView,
+  type WalkAvatar,
+  WalkController,
+  type WalkPose,
+} from './walk';
 import { AmbienceEngine, ambienceAt } from './ambience';
 import { inSpace, spaceAt, spacePoint } from '../model/spaces';
 import { servedFloors } from '../model/vertical';
@@ -214,6 +227,7 @@ const NO_HINT: WalkHint = { looking: false, sound: true, locked: false, up: null
 /** Where the walker's choice to mute lives between walks. A person who turned the hum off does not
  *  want it back on at the next door. */
 const MUTED_KEY = 'kerros:walk-muted';
+const FOV_KEY = 'kerros:walk-fov';
 
 export function MapCanvas(props: MapCanvasProps) {
   const container = useRef<HTMLDivElement>(null),
@@ -265,13 +279,20 @@ export function MapCanvas(props: MapCanvasProps) {
   const guideData = useMemo<GeoJSON.FeatureCollection>(
     () => ({
       type: 'FeatureCollection',
-      features: (props.guides ?? []).map(g => ({
+      features: [
+        ...(props.guides ?? []),
+        ...(props.canEdit && !props.threeD
+          ? (props.project.virtualBoundaries ?? [])
+              .filter(e => e.floorId === props.floorId)
+              .map(e => ({ id: e.id, role: 'boundary', line: barrierEnds(props.project, e) }))
+          : []),
+      ].map(g => ({
         type: 'Feature' as const,
-        properties: { role: g.role },
+        properties: { role: g.role, ...('id' in g ? { id: g.id, kind: 'boundary' } : {}) },
         geometry: { type: 'LineString' as const, coordinates: g.line.map(pt => toLngLat(pt, props.project.origin)) },
       })),
     }),
-    [props.guides, props.project.origin],
+    [props.guides, props.project, props.floorId, props.canEdit, props.threeD],
   );
   // 'route' joins the Tool union in the authoring workstream; the cast keeps this file self-contained.
   const routeTool = (props.tool as string) === 'route';
@@ -1311,7 +1332,7 @@ export function MapCanvas(props: MapCanvasProps) {
             [e.point.x - 3, e.point.y - 3],
             [e.point.x + 3, e.point.y + 3],
           ],
-          { layers: ['kerros-walls', 'kerros-areas'].filter(id => m.getLayer(id)) },
+          { layers: ['kerros-guide-line', 'kerros-walls', 'kerros-areas'].filter(id => m.getLayer(id)) },
         );
         hover =
           (hits.find(
@@ -1377,7 +1398,7 @@ export function MapCanvas(props: MapCanvasProps) {
         adoptAt(e.point);
         return;
       }
-      const ids = ['kerros-walls', 'kerros-areas'].filter(id => m.getLayer(id));
+      const ids = ['kerros-guide-line', 'kerros-walls', 'kerros-areas'].filter(id => m.getLayer(id));
       const hits = p.threeD
         ? []
         : m.queryRenderedFeatures(
@@ -1519,6 +1540,13 @@ export function MapCanvas(props: MapCanvasProps) {
   /** Where the walk left the person, written by the walk's own teardown. */
   const leftAt = useRef<WalkAvatar | null>(null);
   const [walkHint, setWalkHint] = useState<WalkHint>(NO_HINT);
+  const [walkFov, setWalkFov] = useState(() => {
+    try {
+      return walkFieldOfView(Number(localStorage.getItem(FOV_KEY) ?? DEFAULT_WALK_FOV));
+    } catch {
+      return DEFAULT_WALK_FOV;
+    }
+  });
   const hintRef = useRef<WalkHint>(NO_HINT);
   const hintAt = useRef(0);
   const avatarAt = useRef(0);
@@ -1809,6 +1837,7 @@ export function MapCanvas(props: MapCanvasProps) {
     // but arriving with a car's flank filling half the frame is no way to start. A metre of room
     // first, where there is a metre to be had, then the walking radius.
     const position = unstick(unstick(start.position, walkWalls, 1), walkWalls);
+    controller.setFieldOfView(walkFov);
     controller.attach(m, p.project.origin, { ...start, position });
     return () => {
       // The last step is the one the marker shows.
@@ -1833,6 +1862,9 @@ export function MapCanvas(props: MapCanvasProps) {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.walk]);
+  useEffect(() => {
+    walker.current?.setFieldOfView(walkFov);
+  }, [walkFov]);
   useEffect(() => {
     // Walk mode draws the active floor on the map's own ground plane (SceneLayer rebases it), so the
     // eye is the same height above it on every storey — only the walls change.
@@ -1981,7 +2013,7 @@ export function MapCanvas(props: MapCanvasProps) {
   ]);
   useEffect(() => {
     syncDraft();
-  }, [props.draft, props.hover, props.guides, props.tool, ready]);
+  }, [guideData, props.draft, props.hover, props.guides, props.tool, ready]);
   // A React marker pass may commit positions computed before the camera's latest frame; snap them
   // to the current camera immediately after every commit so symbols never trail a pan.
   useEffect(() => {
@@ -2071,6 +2103,10 @@ export function MapCanvas(props: MapCanvasProps) {
     const m = map.current;
     if (journey.current?.playing) return;
     const o = props.project.objects.find(o => o.id === props.focusId);
+    if (props.walk) {
+      if (o) walker.current?.lookAt(objectPosition(props.project, o));
+      return;
+    }
     // Through the depth aim: the object's plan position is on the ground, and the storey it belongs
     // to is drawn metres under it, so centring on the raw coordinate leaves a basement object well
     // up the frame — the miss runs along the view axis, not across it. The object's OWN floor, with
@@ -2135,7 +2171,7 @@ export function MapCanvas(props: MapCanvasProps) {
       } else if (kind === 'barrier') {
         // Translating a whole wall along its normal only (orthogonal slide); walls sharing those
         // junctions stretch to follow, so the mesh stays connected.
-        const b = p.project.barriers.find(x => x.id === id);
+        const b = boundaryEdges(p.project).find(x => x.id === id);
         if (b) {
           const [a, c] = barrierEnds(p.project, b);
           const mid: Point = [(a[0] + c[0]) / 2, (a[1] + c[1]) / 2];
@@ -2148,7 +2184,7 @@ export function MapCanvas(props: MapCanvasProps) {
           const a2: Point = [a[0] + dx, a[1] + dy],
             c2: Point = [c[0] + dx, c[1] + dy];
           lines.push([a2, c2]);
-          for (const other of p.project.barriers.filter(
+          for (const other of boundaryEdges(p.project).filter(
             x =>
               x.id !== id &&
               (x.startId === b.startId || x.endId === b.startId || x.startId === b.endId || x.endId === b.endId),
@@ -2238,7 +2274,7 @@ export function MapCanvas(props: MapCanvasProps) {
           if (other && node && other.floorId === node.floorId) lines.push([other.position, local]);
         }
       } else
-        for (const b of p.project.barriers.filter(b => b.startId === id || b.endId === id)) {
+        for (const b of boundaryEdges(p.project).filter(b => b.startId === id || b.endId === id)) {
           const j = p.project.junctions.find(j => j.id === (b.startId === id ? b.endId : b.startId));
           if (j) lines.push([j.position, local]);
         }
@@ -2287,7 +2323,7 @@ export function MapCanvas(props: MapCanvasProps) {
     window.addEventListener('pointerup', up, { once: true });
   }
   const selectedObject = props.project.objects.find(o => o.id === props.selected);
-  const selectedBarrier = props.project.barriers.find(b => b.id === props.selected);
+  const selectedBarrier = boundaryEdges(props.project).find(b => b.id === props.selected);
   const floor = props.project.floors.find(f => f.id === props.floorId);
   const depthView = undergroundView(props.project, props.floorId, props.threeD && props.stack);
   const m = map.current;
@@ -2500,6 +2536,59 @@ export function MapCanvas(props: MapCanvasProps) {
         {props.canEdit &&
           props.tool === 'select' &&
           !props.threeD &&
+          selectedObject?.geometry?.mode === 'boundaries' &&
+          (() => {
+            const used = new Set(selectedObject.geometry.loops.flat().map(u => u.edgeId));
+            const edges = boundaryEdges(props.project).filter(e => used.has(e.id));
+            const junctions = new Set(edges.flatMap(e => [e.startId, e.endId]));
+            return (
+              <>
+                {props.project.junctions
+                  .filter(j => junctions.has(j.id))
+                  .map((j, i) => {
+                    const s = screen(j.position);
+                    return (
+                      s && (
+                        <button
+                          key={j.id}
+                          aria-label={`Move space boundary corner ${i + 1}`}
+                          className="vertex-handle"
+                          data-wx={j.position[0]}
+                          data-wy={j.position[1]}
+                          style={{ left: s.x, top: s.y }}
+                          onPointerDown={e => startDrag(e, 'junction', j.id)}
+                        />
+                      )
+                    );
+                  })}
+                {edges.map((edge, i) => {
+                  const [a, b] = barrierEnds(props.project, edge),
+                    mid: Point = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2],
+                    s = screen(mid);
+                  return (
+                    s && (
+                      <button
+                        key={edge.id}
+                        aria-label={`Move space boundary ${i + 1}`}
+                        title="Drag this boundary; connected spaces follow"
+                        className="move-handle"
+                        data-wx={mid[0]}
+                        data-wy={mid[1]}
+                        style={{ left: s.x, top: s.y }}
+                        onPointerDown={e => startDrag(e, 'barrier', edge.id)}
+                      >
+                        ✥
+                      </button>
+                    )
+                  );
+                })}
+              </>
+            );
+          })()}
+        {props.canEdit &&
+          props.tool === 'select' &&
+          !props.threeD &&
+          selectedObject?.geometry?.mode !== 'boundaries' &&
           selectedObject?.rings?.flatMap((r, ri) =>
             openRing(r).map((p, i) => {
               const s = screen(p);
@@ -2523,6 +2612,7 @@ export function MapCanvas(props: MapCanvasProps) {
           // basement or inside the slab over a tower.
           !props.threeD &&
           selectedObject &&
+          selectedObject.geometry?.mode !== 'boundaries' &&
           (() => {
             const s = screen(selectedObject.position);
             // An opening cannot go wherever the pointer went — it belongs to its wall. Same handle,
@@ -2545,6 +2635,7 @@ export function MapCanvas(props: MapCanvasProps) {
           props.tool === 'select' &&
           !props.threeD &&
           selectedObject &&
+          selectedObject.geometry?.mode !== 'boundaries' &&
           !selectedObject.barrierId &&
           selectedObject.rotation !== undefined &&
           (() => {
@@ -2727,7 +2818,7 @@ export function MapCanvas(props: MapCanvasProps) {
           );
         })()}
       </div>
-      {props.threeD && (
+      {props.threeD && !props.walk && (
         <label className="pitch-control" title="Camera inclination (⇧W / ⇧S)">
           <Mountain size={14} />
           <input
@@ -2741,103 +2832,130 @@ export function MapCanvas(props: MapCanvasProps) {
           />
         </label>
       )}
-      <div className="map-navigator">
-        {!props.walk && (
-          <>
-            <button
-              className={`pegman ${peg ? 'lifted' : ''}`}
-              title="Drag onto the map to walk from there"
-              aria-label="Drag onto the map to walk from there"
-              onPointerDown={e => {
-                if (e.button !== 0) return;
-                e.currentTarget.setPointerCapture(e.pointerId);
-                const r = container.current?.getBoundingClientRect();
-                if (r) setPeg({ x: e.clientX - r.left, y: e.clientY - r.top });
-              }}
-              onPointerMove={e => {
-                if (!peg) return;
-                const r = container.current?.getBoundingClientRect();
-                if (r) setPeg({ x: e.clientX - r.left, y: e.clientY - r.top });
-              }}
-              onPointerUp={dropPeg}
-              onPointerCancel={e => {
-                e.currentTarget.releasePointerCapture(e.pointerId);
-                setPeg(null);
-              }}
-              // A click without a drag walks from wherever the walker last stood, or the middle
-              // of the view — the same as the Walk button, for anyone who does not think to drag.
-              onClick={() => {
-                const m = map.current;
-                const p = latest.current;
-                if (!m) return;
-                const a = p.avatar && p.avatar.floorId === p.floorId ? p.avatar : null;
-                p.onWalkAt?.(
-                  a ?? {
-                    floorId: p.floorId,
-                    position: floorPoint(m, m.getCanvas().clientWidth / 2, m.getCanvas().clientHeight / 2),
-                    heading: m.getBearing() - (p.project.origin[2] ?? 0),
-                  },
-                );
-              }}
-            >
-              <PersonStanding size={19} />
-            </button>
-            <div />
-          </>
-        )}
-        <button title="Zoom in" aria-label="Zoom in" onClick={() => map.current?.zoomIn()}>
-          <Plus size={18} />
-        </button>
-        <button title="Zoom out" aria-label="Zoom out" onClick={() => map.current?.zoomOut()}>
-          <Minus size={18} />
-        </button>
-        <div />
-        {props.threeD && (
-          <>
-            <button
-              title="Tilt view"
-              aria-label="Tilt view"
-              onClick={() => {
-                const m = map.current;
-                if (m) m.easeTo({ pitch: m.getPitch() >= 50 ? 20 : m.getPitch() + 15, duration: 400 });
-              }}
-            >
-              <Mountain size={17} />
-            </button>
-            <button
-              title="Rotate left"
-              aria-label="Rotate left"
-              onClick={() => {
-                const m = map.current;
-                if (m) m.easeTo({ bearing: m.getBearing() - 45, duration: 450 });
-              }}
-            >
-              <RotateCcw size={17} />
-            </button>
-            <button
-              title="Rotate right"
-              aria-label="Rotate right"
-              onClick={() => {
-                const m = map.current;
-                if (m) m.easeTo({ bearing: m.getBearing() + 45, duration: 450 });
-              }}
-            >
-              <RotateCw size={17} />
-            </button>
-            <div />
-          </>
-        )}
-        <button title="Fit floor" aria-label="Fit floor" onClick={() => fit(props.floorId)}>
-          <LocateFixed size={18} />
-        </button>
-        <button
-          title="Reset north"
-          aria-label="Reset north"
-          onClick={() => map.current?.easeTo({ bearing: siteBearing(props.project), pitch: props.threeD ? 35 : 0 })}
-        >
-          <Compass size={18} />
-        </button>
-      </div>
+      {!props.walk && (
+        <div className="map-navigator">
+          {!props.walk && (
+            <>
+              <button
+                className={`pegman ${peg ? 'lifted' : ''}`}
+                title="Drag onto the map to walk from there"
+                aria-label="Drag onto the map to walk from there"
+                onPointerDown={e => {
+                  if (e.button !== 0) return;
+                  e.currentTarget.setPointerCapture(e.pointerId);
+                  const r = container.current?.getBoundingClientRect();
+                  if (r) setPeg({ x: e.clientX - r.left, y: e.clientY - r.top });
+                }}
+                onPointerMove={e => {
+                  if (!peg) return;
+                  const r = container.current?.getBoundingClientRect();
+                  if (r) setPeg({ x: e.clientX - r.left, y: e.clientY - r.top });
+                }}
+                onPointerUp={dropPeg}
+                onPointerCancel={e => {
+                  e.currentTarget.releasePointerCapture(e.pointerId);
+                  setPeg(null);
+                }}
+                // A click without a drag walks from wherever the walker last stood, or the middle
+                // of the view — the same as the Walk button, for anyone who does not think to drag.
+                onClick={() => {
+                  const m = map.current;
+                  const p = latest.current;
+                  if (!m) return;
+                  const a = p.avatar && p.avatar.floorId === p.floorId ? p.avatar : null;
+                  p.onWalkAt?.(
+                    a ?? {
+                      floorId: p.floorId,
+                      position: floorPoint(m, m.getCanvas().clientWidth / 2, m.getCanvas().clientHeight / 2),
+                      heading: m.getBearing() - (p.project.origin[2] ?? 0),
+                    },
+                  );
+                }}
+              >
+                <PersonStanding size={19} />
+              </button>
+              <div />
+            </>
+          )}
+          <button title="Zoom in" aria-label="Zoom in" onClick={() => map.current?.zoomIn()}>
+            <Plus size={18} />
+          </button>
+          <button title="Zoom out" aria-label="Zoom out" onClick={() => map.current?.zoomOut()}>
+            <Minus size={18} />
+          </button>
+          <div />
+          {props.threeD && (
+            <>
+              <button
+                title="Tilt view"
+                aria-label="Tilt view"
+                onClick={() => {
+                  const m = map.current;
+                  if (m) m.easeTo({ pitch: m.getPitch() >= 50 ? 20 : m.getPitch() + 15, duration: 400 });
+                }}
+              >
+                <Mountain size={17} />
+              </button>
+              <button
+                title="Rotate left"
+                aria-label="Rotate left"
+                onClick={() => {
+                  const m = map.current;
+                  if (m) m.easeTo({ bearing: m.getBearing() - 45, duration: 450 });
+                }}
+              >
+                <RotateCcw size={17} />
+              </button>
+              <button
+                title="Rotate right"
+                aria-label="Rotate right"
+                onClick={() => {
+                  const m = map.current;
+                  if (m) m.easeTo({ bearing: m.getBearing() + 45, duration: 450 });
+                }}
+              >
+                <RotateCw size={17} />
+              </button>
+              <div />
+            </>
+          )}
+          <button title="Fit floor" aria-label="Fit floor" onClick={() => fit(props.floorId)}>
+            <LocateFixed size={18} />
+          </button>
+          <button
+            title="Reset north"
+            aria-label="Reset north"
+            onClick={() => map.current?.easeTo({ bearing: siteBearing(props.project), pitch: props.threeD ? 35 : 0 })}
+          >
+            <Compass size={18} />
+          </button>
+        </div>
+      )}
+      {props.walk && (
+        <label className="walk-fov" title="Horizontal field of view">
+          <span>
+            Field of view <output>{walkFov}°</output>
+          </span>
+          <input
+            type="range"
+            min={MIN_WALK_FOV}
+            max={MAX_WALK_FOV}
+            step={1}
+            value={walkFov}
+            aria-label="POV field of view"
+            aria-valuetext={`${walkFov} degrees horizontally`}
+            onChange={e => {
+              const value = walkFieldOfView(Number(e.target.value));
+              setWalkFov(value);
+              try {
+                localStorage.setItem(FOV_KEY, String(value));
+              } catch {
+                /* The control still works when preferences cannot be stored. */
+              }
+            }}
+          />
+        </label>
+      )}
       {props.walk && (
         <div className="walk-hud">
           <div className="walk-status">

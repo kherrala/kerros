@@ -8,6 +8,7 @@ export default defineConfig({
   base: '/kerros/',
   cleanUrls: false, // Support static hosts without extensionless-URL rewrites.
   lastUpdated: true,
+  markdown: { math: true },
   head: [
     ['meta', { name: 'theme-color', content: '#0e7c7b' }],
     ['meta', { property: 'og:title', content: 'Kerros — indoor mapping toolkit' }],
@@ -40,6 +41,10 @@ export default defineConfig({
             { text: 'Theming', link: '/guide/theming' },
             { text: 'Extending', link: '/guide/extending' },
           ],
+        },
+        {
+          text: 'Academic interest',
+          items: [{ text: 'Mathematical foundations', link: '/guide/geometry-mathematics' }],
         },
       ],
       '/reference/': [

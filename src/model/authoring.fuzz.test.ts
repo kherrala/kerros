@@ -12,7 +12,7 @@ import {
   removeBarrier,
   rectangle,
   objectArea,
-  junctionIssue,
+  barrierStrokeIssue,
   snapPoint,
   MIN_SEGMENT,
   ringArea,
@@ -37,7 +37,7 @@ const seeds = [
   ...new Set([
     ...Array.from({ length: cases }, (_, i) => firstSeed + i),
     // Keep failures from longer stress runs in the ordinary suite too.
-    ...(process.env.GEOMETRY_FUZZ_SEED ? [] : [53, 151, 211]),
+    ...(process.env.GEOMETRY_FUZZ_SEED ? [] : [53, 89, 151, 211, 526, 721, 802, 885]),
   ]),
 ];
 function random(seed: number) {
@@ -53,7 +53,12 @@ function session(seed: number) {
   let project = newProject();
   let history = makeHistory(project);
   const trace: string[] = [];
-  const step = (action: string, change: (draft: ProjectDocument) => void, expectedError?: string) => {
+  const step = (
+    action: string,
+    change: (draft: ProjectDocument) => void,
+    expectedError?: string,
+    mayCloseGap = false,
+  ) => {
     trace.push(action);
     const before = JSON.stringify(project);
     let attempted: ProjectDocument | undefined;
@@ -68,6 +73,12 @@ function session(seed: number) {
       return;
     }
     if (!result.ok) {
+      // Thick walls may close a gap before their centrelines meet. One semantic space cannot
+      // store disconnected footprints: refuse that precise constraint, then keep using tools.
+      if (mayCloseGap && /^The wall would leave \d+ disconnected usable regions/.test(result.error)) {
+        validateProject(project);
+        return;
+      }
       const invalid = attempted?.objects.filter(o => o.rings && validateRings(o.rings));
       throw new Error(
         `Seed ${seed}, step ${trace.length}: ${result.error}\n${trace.join('\n')}\nInvalid areas: ${JSON.stringify(invalid)}`,
@@ -280,8 +291,13 @@ describe('randomized building authoring', () => {
         const x = -9 + Math.floor(rng() * 7) * 3;
         const a = at(x, -11),
           b = at(x, 11);
-        const issue = junctionIssue(s.project, a, 'floor-ground') ?? junctionIssue(s.project, b, 'floor-ground');
-        s.step(`draw wall ${JSON.stringify([a, b])}`, p => drawBarrier(p, 'floor-ground', a, b), issue ?? undefined);
+        const issue = barrierStrokeIssue(s.project, a, b, 'floor-ground');
+        s.step(
+          `draw wall ${JSON.stringify([a, b])}`,
+          p => drawBarrier(p, 'floor-ground', a, b),
+          issue ?? undefined,
+          true,
+        );
       } else if (tool === 1) {
         const atPoint = at(-9 + rng() * 18, -7 + rng() * 14);
         const offer = proposeWall(s.project, 'floor-ground', atPoint);

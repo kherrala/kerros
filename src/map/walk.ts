@@ -58,6 +58,19 @@ export const MAX_MAP_ZOOM = 26,
  *  A plan is read; a walk is watched, and a watched picture has to move. 1.25 keeps most of the
  *  crispness of a retina display for a third of its cost. */
 export const WALK_PIXEL_RATIO = 1.25;
+/** Horizontal field of view in degrees. Kept stable when side panels resize the viewport. */
+export const DEFAULT_WALK_FOV = 90,
+  MIN_WALK_FOV = 60,
+  MAX_WALK_FOV = 120;
+
+export function walkFieldOfView(value: number): number {
+  return Number.isFinite(value) ? Math.min(MAX_WALK_FOV, Math.max(MIN_WALK_FOV, value)) : DEFAULT_WALK_FOV;
+}
+
+/** MapLibre takes a vertical angle; tan(h/2) = aspect · tan(v/2). */
+export function verticalFieldOfView(horizontal: number, aspect: number): number {
+  return (2 * Math.atan(Math.tan((walkFieldOfView(horizontal) * Math.PI) / 360) / aspect) * 180) / Math.PI;
+}
 /** Degrees the view turns per pixel the mouse moves while the pointer is locked. */
 export const MOUSE_LOOK = 0.12;
 /** Degrees per pixel when dragging instead — the fallback when the browser refuses the lock. A drag
@@ -341,6 +354,8 @@ export class WalkController {
   private maxPitch = 60;
   private maxZoom = 22;
   private pixelRatio = 1;
+  private planFov = 0;
+  private fieldOfView = DEFAULT_WALK_FOV;
   private running = false;
   private dragging = false;
   private locked = false;
@@ -373,6 +388,7 @@ export class WalkController {
     // put them back with the handlers.
     this.maxPitch = map.getMaxPitch();
     this.maxZoom = map.getMaxZoom();
+    this.planFov = map.getVerticalFieldOfView();
     map.setMaxPitch(Math.max(this.maxPitch, MAX_PITCH));
     map.setMaxZoom(Math.max(this.maxZoom, WALK_ZOOM));
     this.pixelRatio = map.getPixelRatio();
@@ -386,10 +402,11 @@ export class WalkController {
     window.addEventListener('keydown', this.down, true);
     window.addEventListener('keyup', this.up, true);
     window.addEventListener('blur', this.release);
+    map.on('resize', this.resize);
     this.last = performance.now();
     this.frame = requestAnimationFrame(this.tick);
     canvas.style.cursor = 'crosshair';
-    this.apply();
+    this.resize();
   }
 
   detach() {
@@ -403,6 +420,7 @@ export class WalkController {
     window.removeEventListener('keyup', this.up, true);
     window.removeEventListener('blur', this.release);
     if (!map) return;
+    map.off('resize', this.resize);
     const canvas = map.getCanvas();
     canvas.removeEventListener('pointerdown', this.grab);
     canvas.removeEventListener('pointermove', this.look);
@@ -416,6 +434,7 @@ export class WalkController {
     this.handlers = [];
     map.setMaxPitch(this.maxPitch);
     map.setMaxZoom(this.maxZoom);
+    map.setVerticalFieldOfView(this.planFov);
     if (map.getPixelRatio() !== this.pixelRatio) map.setPixelRatio(this.pixelRatio);
     this.map = undefined;
   }
@@ -425,6 +444,22 @@ export class WalkController {
     this.terrain = terrain;
     if (this.running) this.apply();
   }
+
+  /** Widen the lens without changing the person's position, heading or eye height. */
+  setFieldOfView(value: number) {
+    this.fieldOfView = walkFieldOfView(value);
+    if (this.running) this.resize();
+  }
+
+  private resize = () => {
+    const map = this.map;
+    if (!map) return;
+    const canvas = map.getCanvas();
+    if (canvas.clientWidth > 0 && canvas.clientHeight > 0)
+      map.setVerticalFieldOfView(verticalFieldOfView(this.fieldOfView, canvas.clientWidth / canvas.clientHeight));
+    // A new lens changes cameraToCenterDistance; solve zoom again to keep the eye in place.
+    this.apply();
+  };
 
   /** Walk a path on its own, as far as it goes on this floor, then call `onArrive`. Taking any
    *  control cancels it: a tour you cannot interrupt is a video. */
@@ -453,6 +488,16 @@ export class WalkController {
   place(position: Point, heading = this.heading) {
     this.position = position;
     this.heading = wrap(heading);
+    if (this.running) this.apply();
+  }
+
+  /** Inspect something from the current position. Only the walker writes a POV camera: panning
+   *  its ground target like a plan camera would move the eye far behind the selected object. */
+  lookAt(point: Point) {
+    const dx = point[0] - this.position[0],
+      dy = point[1] - this.position[1];
+    if (Math.hypot(dx, dy) < 1e-6) return;
+    this.heading = wrap((Math.atan2(dx, dy) * 180) / Math.PI);
     if (this.running) this.apply();
   }
 

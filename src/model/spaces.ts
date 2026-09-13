@@ -162,7 +162,8 @@ export function refitEnclosedRooms(project: ProjectDocument, floorId: string | n
   // whoever made the edit — mergeSpaces, or leaving them be — not for a re-fit to answer.
   const claims: { room: SiteObject; ring: Ring }[] = [];
   for (const room of project.objects) {
-    if (room.floorId !== floorId || room.kind !== 'room' || !room.rings?.length) continue;
+    if (room.floorId !== floorId || room.kind !== 'room' || !room.rings?.length || room.geometry !== undefined)
+      continue;
     if (!matches(room.rings[0], before)) continue; // drawn, not enclosed — leave it be
     // The region that best stands where this room stood. Best overlap, not containment, for the
     // same concave reason.

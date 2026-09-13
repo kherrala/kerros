@@ -73,7 +73,6 @@ import {
   objectArea,
   objectPosition,
   pointInRing,
-  ringArea,
   rectangle,
   snapPoint,
   splitRoom,
@@ -81,7 +80,7 @@ import {
 } from './model/geometry';
 import { fitOpening, mainAxis, proposeWall, type OpeningFit, type WallProposal } from './model/walls';
 import { mergeSpaces, spacesRejoinedBy } from './model/inference';
-import { enclosedRegion, enclosedRegions, refitEnclosedRooms } from './model/spaces';
+import { addBoundaryHole, addVirtualBoundary, boundaryEdges, boundaryRegionAt, connectSpace } from './model/boundaries';
 import { pruneOntology } from './model/ontology';
 import { derivedGraph } from './model/topology';
 import { importPlanEntities, type PlanImportReport } from './import/planImport';
@@ -116,7 +115,7 @@ interface Alignment {
   drawing: Drawing;
   preview: boolean;
 }
-const DRAW_TOOLS: Tool[] = ['wall', 'fence', 'zone', 'room', 'rectangle', 'hole', 'measure', 'evacuation'];
+const DRAW_TOOLS: Tool[] = ['wall', 'boundary', 'fence', 'zone', 'room', 'rectangle', 'hole', 'measure', 'evacuation'];
 /** Snap labels that mean "an angle is being held", and so deserve naming what it is held to. */
 const HELD = new Set(['Parallel', 'Square', '15°', '30°', '45°', '60°', '75°']);
 /** Default leaf widths, so the preview can size itself before the object exists. Matches factory.ts. */
@@ -394,20 +393,8 @@ export function SitePlanner({
     setHistory(current => commitHistory(current, result.project));
     return true;
   };
-  /** Commit a change that moves walls, and let the rooms those walls define follow them.
-   *
-   *  A room keeps its own outline — that is what lets a space exist where no wall does — so without
-   *  this, editing a wall and resizing the room beside it are two jobs, and the plan quietly drifts
-   *  out of agreement with itself. Snapshotting the enclosed regions either side of the change is
-   *  what tells the two apart: a room that was standing in one of them was being defined by the
-   *  walls and takes its new shape; a room that was drawn freehand is nobody's business but its
-   *  author's. Every mutation that moves, thickens, adds or removes a wall goes through here. */
-  const reshape = (change: (draft: ProjectDocument) => void): boolean =>
-    commit(p => {
-      const enclosed = enclosedRegions(p, floorId);
-      change(p);
-      refitEnclosedRooms(p, floorId, enclosed);
-    });
+  // Geometry synchronization lives in transact, including host edits and every drawing tool.
+  const reshape = commit;
   useEffect(() => {
     if (!readOnly) onChangeRef.current?.(project);
   }, [project, readOnly]);
@@ -538,6 +525,7 @@ export function SitePlanner({
     const entity =
       project.objects.find(o => o.id === id) ??
       project.barriers.find(b => b.id === id) ??
+      project.virtualBoundaries?.find(b => b.id === id) ??
       project.drawings.find(d => d.id === id);
     if (entity && entity.floorId !== floorId && entity.floorId !== null) {
       setFloorId(entity.floorId);
@@ -578,7 +566,7 @@ export function SitePlanner({
     commit(p => transformObject(p.objects.find(o => o.id === id)!, patch));
   }
   function finish() {
-    if (tool === 'wall' || tool === 'fence' || tool === 'measure') {
+    if (tool === 'wall' || tool === 'boundary' || tool === 'fence' || tool === 'measure') {
       setDraft([]);
       setTool('select');
       return;
@@ -592,7 +580,8 @@ export function SitePlanner({
       if (tool === 'hole') {
         const o = p.objects.find(o => o.id === selected);
         if (!o?.rings) throw new Error('Select an area first.');
-        o.rings.push(rings[0]);
+        if (o.geometry?.mode === 'boundaries') addBoundaryHole(p, o, rings[0]);
+        else o.rings.push(rings[0]);
       } else {
         const object = createObject(tool as ObjectKind, centroid(draft), floorId);
         object.rings = rings;
@@ -601,6 +590,7 @@ export function SitePlanner({
         object.width = Math.max(...xs) - Math.min(...xs);
         object.depth = Math.max(...ys) - Math.min(...ys);
         p.objects.push(object);
+        if (tool === 'room') connectSpace(p, object.id);
         setSelected(object.id);
       }
     });
@@ -637,38 +627,43 @@ export function SitePlanner({
     // trace an outline the drawing has already stated. The click lands in exactly one enclosed
     // region or in none, so there is nothing to aim at but the room itself.
     if (tool === 'enclose') {
-      const ring = enclosedRegion(project, floorId, raw);
-      if (!ring) {
+      const region = boundaryRegionAt(project, floorId, raw);
+      if (!region) {
         notify('Nothing encloses that point. The walls around it have a gap, or it is outside the building.');
         return;
       }
       let existing = false;
       let roomName = '';
+      let area = 0;
+      let found = false;
       const done = commit(p => {
         const result = encloseRoom(p, floorId, raw);
         if (!result) return;
+        found = true;
         existing = result.existing;
         roomName = result.room.name;
+        area = objectArea(result.room);
         setSelected(result.room.id);
       });
       // Only when it took. A rejected commit has already said why, and a second toast claiming
       // success on top of it would contradict the first.
-      if (done)
+      if (done && found)
         notify(
           existing
-            ? `“${roomName}” re-fitted to the walls around it · ${Math.abs(ringArea(ring)).toFixed(1)} m²`
-            : `Space taken from the walls · ${Math.abs(ringArea(ring)).toFixed(1)} m²`,
+            ? `“${roomName}” follows its boundaries · ${area.toFixed(1)} m²`
+            : `Space follows its boundaries · ${area.toFixed(1)} m²`,
         );
       return;
     }
     const anchor = draft.at(-1);
     const axis = snapping && anchor ? mainAxis(project, floorId) : 0;
     const point = snapping ? snapPoint(project, floorId, raw, toleranceRef.current, anchor, true, axis).point : raw;
-    if (tool === 'wall' || tool === 'fence') {
+    if (tool === 'wall' || tool === 'fence' || tool === 'boundary') {
       if (!draft.length) setDraft([point]);
       else if (
         commit(p => {
-          drawBarrier(p, floorId, draft.at(-1)!, point, tool);
+          if (tool === 'boundary') addVirtualBoundary(p, floorId, draft.at(-1)!, point);
+          else drawBarrier(p, floorId, draft.at(-1)!, point, tool);
         })
       )
         setDraft([point]);
@@ -984,7 +979,7 @@ export function SitePlanner({
     if (!editing) return;
     let destination = point;
     if (kind === 'barrier') {
-      const wall = project.barriers.find(b => b.id === id)!;
+      const wall = boundaryEdges(project).find(b => b.id === id)!;
       const [a, b] = barrierEnds(project, wall);
       const length = distance(a, b);
       const nx = -(b[1] - a[1]) / length,
@@ -1028,6 +1023,7 @@ export function SitePlanner({
       clone.id = uid();
       clone.name += ' copy';
       clone.feedId = undefined;
+      clone.geometry = { mode: 'independent' };
       clone.parentId = undefined;
       clone.position = add(clone.position, [2, -2]);
       clone.rings = clone.rings?.map(r => r.map(pt => add(pt, [2, -2])));
@@ -1097,7 +1093,23 @@ export function SitePlanner({
     // A wall that was the only thing between two spaces leaves them open to each other. Saying
     // nothing would leave the plan showing two rooms where there is now one; merging silently would
     // destroy a name, its feed bindings and its zone memberships. So ask, and let the answer say which.
-    const rejoin = project.barriers.some(b => b.id === selected) ? spacesRejoinedBy(project, selected) : null;
+    const virtual = project.virtualBoundaries?.some(b => b.id === selected);
+    const owners = virtual
+      ? project.objects.filter(
+          o => o.geometry?.mode === 'boundaries' && o.geometry.loops.some(l => l.some(u => u.edgeId === selected)),
+        )
+      : [];
+    if (virtual && owners.length === 1) {
+      notify('This boundary closes a space. Move it, or switch the space to Independent outline before removing it.');
+      setDeleteOpen(false);
+      return;
+    }
+    const rejoin =
+      owners.length === 2
+        ? owners
+        : project.barriers.some(b => b.id === selected)
+          ? spacesRejoinedBy(project, selected)
+          : null;
     if (rejoin && !merge) {
       // One question at a time. The delete prompt has been answered — the wall is going — and what
       // is left to settle is what happens to the two spaces it separated. Leaving it open stacks a
@@ -1108,17 +1120,16 @@ export function SitePlanner({
       return;
     }
     if (
-      // reshape, not commit: deleting a wall leaves the rooms it bounded the wrong shape. Where the
-      // deletion merges two rooms' regions into one the re-fit declines — that ambiguity is what the
-      // merge prompt above exists to settle.
+      // The transaction preserves referenced walls as virtual edges and regenerates space caches.
       reshape(p => {
         p.objects = p.objects.filter(o => o.id !== selected && o.barrierId !== selected);
         p.objects.forEach(o => {
           if (o.parentId === selected) o.parentId = undefined;
         });
         p.barriers = p.barriers.filter(b => b.id !== selected);
+        if (p.virtualBoundaries) p.virtualBoundaries = p.virtualBoundaries.filter(b => b.id !== selected);
         p.drawings = p.drawings.filter(d => d.id !== selected);
-        p.junctions = p.junctions.filter(j => p.barriers.some(b => b.startId === j.id || b.endId === j.id));
+        p.junctions = p.junctions.filter(j => boundaryEdges(p).some(b => b.startId === j.id || b.endId === j.id));
         // Navigation cascade: drop the nav node itself if selected, nodes bound to any removed object,
         // and every edge that lost an endpoint or its bound object (validateNavigation rejects dangling refs).
         if (p.navNodes?.length) {
@@ -2088,7 +2099,7 @@ export function SitePlanner({
                             ? 'Click to build the wall shown · it squares to what it is nearest'
                             : 'Hover inside a space to be offered the wall it is missing'
                           : tool === 'enclose'
-                            ? 'Click inside a room the walls close around · click a space again to re-fit it'
+                            ? 'Click inside a closed boundary to create or select its space'
                             : tool === 'split'
                               ? draft.length
                                 ? 'Now click the opposite wall to cut the room in two'
@@ -2124,12 +2135,14 @@ export function SitePlanner({
                   <div className="tool-palette">
                     <div>
                       <h3>Draw your space</h3>
-                      {(['wall', 'fence', 'room', 'enclose', 'zone', 'rectangle', 'hole'] as Tool[]).map(t => (
-                        <button key={t} onClick={() => chooseTool(t)}>
-                          <EntityIcon kind={t} />
-                          {en.tools[t]}
-                        </button>
-                      ))}
+                      {(['wall', 'boundary', 'fence', 'room', 'enclose', 'zone', 'rectangle', 'hole'] as Tool[]).map(
+                        t => (
+                          <button key={t} onClick={() => chooseTool(t)}>
+                            <EntityIcon kind={t} />
+                            {en.tools[t]}
+                          </button>
+                        ),
+                      )}
                     </div>
                     <div>
                       <h3>Openings &amp; devices</h3>
@@ -2575,7 +2588,11 @@ export function SitePlanner({
       )}
       {merge && (
         <Modal
-          title="This wall was dividing two spaces"
+          title={
+            project.virtualBoundaries?.some(b => b.id === merge.wallId)
+              ? 'This boundary divides two spaces'
+              : 'This wall was dividing two spaces'
+          }
           subtitle={`Removing it leaves “${merge.a.name}” and “${merge.b.name}” open to each other. Keeping them apart is fine — they simply become connected. Merging is not reversible by redrawing the wall: the space that is absorbed loses its name, its feed binding and any zones it had joined.`}
           onClose={() => setMerge(null)}
         >
@@ -2671,8 +2688,9 @@ export function SitePlanner({
             </p>
             <h3>Connected by design</h3>
             <p>
-              Walls snap to junctions. Doors and windows attach to walls; gates attach to fences. Select an area and use
-              “Cut a hole” for courtyards or exclusions. Parent zones must contain their children.
+              Rooms follow shared walls and virtual boundaries. New spaces need at least 1 m² of usable area. Doors and
+              windows attach to walls; gates attach to fences. Select an area and use “Cut a hole” for courtyards or
+              exclusions. Parent zones must contain their children.
             </p>
             <h3>Explore and monitor</h3>
             <p>

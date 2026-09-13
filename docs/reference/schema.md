@@ -12,6 +12,8 @@ The framework-free core: the data model and pure operations. No React, no MapLib
 | `SiteObject` | Any placed object; `kind: ObjectKind`, optional `rings`, `slope`, `feedId`, `category`, `metadata`. |
 | `Slope` | Makes an area a sloped plane: `{ axis: [Point, Point]; high; low }`. |
 | `Barrier` | A wall or fence segment between junctions. |
+| `VirtualBoundary` | An unwalled edge sharing the same junction network. |
+| `BoundaryUse`, `SpaceGeometry` | A directed edge reference and an area’s independent/shared-boundary geometry mode. |
 | `Drawing` | A reference image aligned to the map. |
 | `Origin`, `Point`, `Ring` | Spatial primitives (local metres). |
 | `NavNode`, `NavEdge`, `NavEdgeKind` | The routing graph. Derived from spaces and portals when a document authors none. |
@@ -94,9 +96,19 @@ rather than hanging in open air.
 
 ## Geometry
 
-See [Space geometry & walls](/guide/geometry) for the relationship between shared wall junctions, independent space polygons and generated rendering meshes.
+See [Space geometry & walls](/guide/geometry) for the relationship between shared wall and virtual boundaries, generated space footprints, independent outlines and rendering meshes.
 
 `geoOrigin`, `toLngLat`, `toLocal` (coordinate conversions), `rectangle`, `rotate`, `centroid`, `distance`, `closeRing`, `openRing`, `ringArea`, `objectArea`, `pointInRing`, `objectPosition`, `objectRotation`, `addBarrier`, `barrierEnds`, `segmentProjection`, `slopeElevation`.
+
+Connected-space operations, called inside `transact`:
+
+- `addVirtualBoundary(project, floorId, a, b)` — draw an unwalled boundary.
+- `connectSpace(project, objectId, source?)` — connect an existing area using its outline (default) or explicitly adopt surrounding `'walls'`.
+- `disconnectSpace(project, objectId)` — retain the current polygon as an independent outline.
+- `boundaryEdges`, `boundaryRings`, `boundaryRegions`, `boundaryRegionAt` — query the shared graph and its centreline faces, including holes. Small unlabelled faces are included.
+- `derivedSpaceRings(project, space)` — derive a connected space’s usable footprint after subtracting walls.
+
+The `addBoundary`, `connectSpace` and `disconnectSpace` mutation variants expose these edits as data. Transactions normalize crossings and update affected space loops automatically.
 
 ## Documents
 
@@ -114,7 +126,7 @@ transaction that cannot produce an invalid result.
   with the reason. Runs every rule — structure, geometry, spatial relationships, the ontology, the
   navigation graph. The focused sub-validators `validateRings`, `validateRelationships` and
   `validateNavigation` are exported for targeted checks.
-- `transact(project, change, options?)` — the atomic gate: work on a clone, apply `change`, run
+- `transact(project, change, options?)` — the atomic gate: work on a clone, apply `change`, normalize boundaries, regenerate connected spaces, run
   every rule, and return `{ ok: true, project }` — **deep-frozen**, so an out-of-band edit throws at
   the assignment — or `{ ok: false, error }` with the original untouched. A change that throws is a
   refusal, not a crash. `{ freeze: false }` hands back a mutable result when you really want one.
@@ -127,7 +139,7 @@ transaction that cannot produce an invalid result.
 - Geometry limits: `MIN_SEGMENT` (0.01 m — rejects degenerate walls while preserving short returns
   and jambs), `OPENING_MIN_SEGMENT` (the same base limit; actual opening width determines how much
   wall is needed), `COORD_LIMIT` (100 km — a corruption guard, not a site size). The 0.5 m drawing
-  grid is independent of validation; turn snapping off for precise small details.
+  grid is independent of validation; turn snapping off for precise small details. New or resized areas require at least 1 m² of usable area, after holes and (for connected spaces) walls.
 
 ## Spaces, zones and portals
 
@@ -138,8 +150,8 @@ graph (`model/topology.ts`) — all exported flat from `@kerros/schema`.
 
 ### Space queries
 
-- `enclosedRegion(project, floorId, point)` / `enclosedRegions(project, floorId, minArea?)` — derive enclosed outer outlines from barrier footprints; the default minimum region area is 1 m². See the [current limits](/guide/geometry#current-limits) for holes and small spaces.
-- `refitEnclosedRooms(project, floorId, before)` — update room outlines that matched the pre-edit enclosed regions, where the replacement is unambiguous. Call inside a transaction after changing walls; `transact` itself does not perform refitting.
+- `enclosedRegion(project, floorId, point)` / `enclosedRegions(project, floorId, minArea?)` — derive enclosed outer outlines from barrier footprints; the default minimum region area is 1 m². This legacy helper returns outer rings only; use `boundaryRegions` for shared topology and holes.
+- `refitEnclosedRooms(project, floorId, before)` — legacy overlap-based refitting for rooms without an explicit geometry mode. Connected spaces are regenerated automatically by `transact`; they do not use this helper.
 - `spaces(project)` — every space; a room *is* a space, nothing is duplicated.
 - `spaceAt(project, floorId, point)` — the **smallest** space containing a point.
 - `spacePoint(project, space)` — where a space sits for routing (footprint centroid).
@@ -170,7 +182,7 @@ graph (`model/topology.ts`) — all exported flat from `@kerros/schema`.
 - `refreshPortals(project)` — re-read both kinds from the plan. Hand-authored portals survive
   wholesale; `passage`/`attests`/`name`/`metadata` set on an inferred portal are carried onto its
   replacement.
-- `divideSpaces` / `spacesDividedBy` — split every space a new wall cuts across.
+- `divideSpaces` / `spacesDividedBy` — legacy independent-outline splitting. Connected spaces subdivide through the transaction’s boundary synchronization.
 - `spacesRejoinedBy(project, barrierId)` — the two spaces a wall was the only thing keeping apart.
 - `mergeSpaces(project, keepId, absorbedId)` — unite footprints after a confirmed merge; never
   automatic, because one identity is always destroyed.

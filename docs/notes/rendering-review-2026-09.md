@@ -1,4 +1,21 @@
-# Rendering engine review — open findings (2026-09-12)
+# Rendering engine review (2026-09-12)
+
+## Reopened verification — 2026-09-13
+
+The earlier statement that every finding was closed was too broad. The sections below preserve
+the original findings and the reported fix passes; their old line numbers describe that checkpoint.
+They are not a current open-item checklist.
+
+- **Fixed and browser-tested:** selecting an object from the list in Walk now turns the walker
+  toward it without moving the eye. The plan-camera focus ease previously moved the POV far away.
+- **Added and browser-tested:** a horizontal POV field-of-view control, 60–120° with a 90° default.
+  Changing it or resizing the viewport preserves the eye position and height; exiting Walk restores
+  the map lens, and the preference survives reloads.
+- **Still open:** walk collision uses active-floor walls and fixtures. Lift shells, escalator rails,
+  walls beneath a mezzanine and plate edges need a shared collision representation.
+- **Under investigation:** the reported underground and entresol appearance problems. A browser
+  capture pass exercises the entresol, ground hall, Herkku and P1/P2 without WebGL or geometry
+  exceptions. That smoke check does not establish that their visual geometry is correct.
 
 Checkpoint commit: `25b65fe`. Two background workflows were running when this was written:
 a verify pass over the findings below, and an implementation pass on the demo data and the
@@ -8,10 +25,10 @@ Findings below came from seven independent reviewers reading the engine against 
 Stockmann demo. Each names a file, the failure, and the proposed fix. They are ordered by
 severity. Unticked items are not yet done.
 
-## Closed
+## Historical closure report
 
-Every item in this review is now fixed. The list below is kept as the record of what was wrong and
-where, because the same mistakes are easy to make again.
+The earlier pass reported the list closed. The current verification above supersedes that claim.
+The list below is kept as a record of what was wrong and where.
 
 The work landed over several passes. The last one verified each remaining item against the code
 before touching it, and found that most of the low-severity tail had already been swept up by the
@@ -33,7 +50,7 @@ gated with the rest. What genuinely remained:
   storey with it, and the void pre-filter tested corners rather than bounding boxes, so a long
   ramp crossing an aisle at right angles missed it entirely and the plate bridged the trench.
 
-## Status after the fix pass
+## Historical status after the fix pass
 
 Four agents worked the list in disjoint files. Everything below marked **fixed** landed in the
 commit this note sits in; the rest are still open.
@@ -63,8 +80,8 @@ at the top and bottom of a run are visible. Shafts are clamped to the drawn leve
 Primary verticals survive the stack's shell skip. Switchback lanes are symmetric, comb plates are
 flush, and escalator voids are cut to the headroom zone.
 
-**Still open:** the low-severity items at the end of this note, plus anything the reviewers never
-reached — two of the seven lenses (visibility and materials) never reported.
+**At that checkpoint:** the low-severity items at the end of this note were still open, plus anything
+the reviewers never reached — two of the seven lenses (visibility and materials) never reported.
 
 ## Confirmed and fixed already (in 25b65fe)
 
@@ -76,7 +93,7 @@ reached — two of the seven lenses (visibility and materials) never reported.
 - Car fixture was modelled across its short axis.
 - Walk-mode ceiling voids opened onto the sky; a well lid one storey up now closes them.
 
-## Open — high
+## Original findings — high
 
 1. **Ground hall never draws the entresol** (`src/map/SceneLayer.ts:1280`). `under` only carries a
    level downward. On `floor-ground`, all 12 shafts serve `floor-entresol` (2.4 m), so 12 flights
@@ -110,7 +127,7 @@ reached — two of the seven lenses (visibility and materials) never reported.
     (`src/map/SceneLayer.ts:1545`) with basement flights hanging beneath. Include the storey below
     in the envelope when it is below grade, or cap the wells.
 
-## Open — medium
+## Original findings — medium
 
 - Outdoor geometry (parcel, fences, shadow plane) rides up to the walked storey because
   `relative(null)` is 0 (`SceneLayer.ts:1287`). Same `ground` offset.
@@ -140,7 +157,7 @@ reached — two of the seven lenses (visibility and materials) never reported.
   for a width-axis object (`stockmannGarage.ts:263`); spiral stairs exist twice and routing picks
   a different twin than rendering (`demo.ts:667`).
 
-## Open — low
+## Original findings — low
 
 - Escalator comb plates stand 0.2-0.32 m proud of both floors; criss-cross flights share a
   coincident landing and their trusses interpenetrate (`SceneLayer.ts:759, 802`).

@@ -6,13 +6,16 @@
 // bearing — so 0° is the site's own grid rather than true north, and a building laid out along its
 // street needs no reference angle at all beyond the default.
 import polygonClipping from 'polygon-clipping';
+import { boundaryEdges } from './boundaries';
+import { drawBarrier } from './authoring';
+import { transact } from './validate';
 import {
   OPENING_MIN_SEGMENT,
   barrierEnds,
   barrierJoinPoint,
+  barrierStrokeIssue,
   closeRing,
   distance,
-  junctionIssue,
   openRing,
   pointInRing,
   rectangle,
@@ -234,7 +237,13 @@ export function proposeWall(
   for (const [a, b] of walls)
     if (Math.abs(axisDelta(axisOf(a, b), axis)) <= ALIGNED && segmentProjection(point, a, b).distance < clear)
       return null;
-  const edges = [...walls, ...floorOutline(project, floorId).flatMap(ringEdges)];
+  const graph = boundaryEdges(project)
+    .filter(b => b.floorId === floorId)
+    .map(b => barrierEnds(project, b));
+  // A space's centreline boundaries outrank its derived inner-face outline. Stopping at a
+  // cached wall face leaves a small disconnected stub when the wall there is now virtual.
+  const edges = graph;
+  const fallback = floorOutline(project, floorId).flatMap(ringEdges);
   const end = (sign: number): Point | null => {
     const d: Point = [dir[0] * sign, dir[1] * sign];
     let best = Number.POSITIVE_INFINITY;
@@ -242,6 +251,11 @@ export function proposeWall(
       const t = rayHit(point, d, a, b);
       if (t !== null && t < best) best = t;
     }
+    if (!Number.isFinite(best))
+      for (const [a, b] of fallback) {
+        const t = rayHit(point, d, a, b);
+        if (t !== null && t < best) best = t;
+      }
     return Number.isFinite(best) ? [point[0] + d[0] * best, point[1] + d[1] * best] : null;
   };
   const start = end(1),
@@ -249,7 +263,18 @@ export function proposeWall(
   if (!start || !finish) return null;
   const a = barrierJoinPoint(project, start, floorId),
     b = barrierJoinPoint(project, finish, floorId);
-  if (junctionIssue(project, a, floorId) || junctionIssue(project, b, floorId)) return null;
+  if (barrierStrokeIssue(project, a, b, floorId)) return null;
+  if (
+    project.objects.some(o => o.floorId === floorId && o.geometry?.mode === 'boundaries') &&
+    !transact(
+      project,
+      draft => {
+        drawBarrier(draft, floorId, a, b);
+      },
+      { freeze: false },
+    ).ok
+  )
+    return null;
   return distance(a, b) >= 1 ? { segment: [a, b], axis, reference } : null;
 }
 

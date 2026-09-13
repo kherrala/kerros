@@ -1541,6 +1541,33 @@
 }
 /* Walk mode's head-up display: everything the person walking needs and nothing the map wants.
    Pointer-events are off throughout — the canvas underneath has to receive the drag. */
+.walk-fov {
+  position: absolute;
+  top: 68px;
+  right: 14px;
+  z-index: 24;
+  display: grid;
+  gap: 6px;
+  width: 190px;
+  padding: 10px 12px;
+  border-radius: var(--radius);
+  background: var(--panel);
+  box-shadow: var(--shadow-md);
+  color: var(--ink-soft);
+  font-size: 12px;
+}
+.walk-fov span {
+  display: flex;
+  justify-content: space-between;
+}
+.walk-fov output {
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.walk-fov input {
+  width: 100%;
+  accent-color: var(--accent);
+}
 .walk-hud {
   position: absolute;
   inset: 0;

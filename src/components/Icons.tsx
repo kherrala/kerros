@@ -53,47 +53,49 @@ export function EntityIcon({
     return <Custom size={size} />;
   }
   const Icon =
-    kind === 'poi'
-      ? {
-          personnel: PersonStanding,
-          service: ArrowDownToLine,
-          driveway: CarFront,
-          parking: CarFront,
-          assembly: Footprints,
-          info: Info,
-          aed: HeartPulse,
-          extinguisher: FireExtinguisher,
-          firstaid: BriefcaseMedical,
-          exit: LogOut,
-          firealarm: BellRing,
-        }[symbol ?? 'personnel']
-      : ((
-          {
-            door: DoorOpen,
-            window: PanelTop,
-            gate: Fence,
-            fence: Fence,
-            wall: SquareDashed,
-            turnstile: ScanLine,
-            reader: KeyRound,
-            camera: Camera,
-            elevator: ArrowUpRight,
-            stairs: travel === 'down' ? MoveDownRight : MoveUpRight,
-            office: Building2,
-            container: Container,
-            storage: Package,
-            zone: LandPlot,
-            room: Grid2X2,
-            enclose: SquareDashedBottom,
-            building: Building2,
-            parcel: LandPlot,
-            rectangle: Square,
-            sensor: Activity,
-            light: Lightbulb,
-            alarm: Siren,
-            equipment: Cpu,
-            evacuation: ShieldAlert,
-          } as Record<string, typeof MapPin>
-        )[kind] ?? MapPin);
+    kind === 'boundary'
+      ? SquareDashed
+      : kind === 'poi'
+        ? {
+            personnel: PersonStanding,
+            service: ArrowDownToLine,
+            driveway: CarFront,
+            parking: CarFront,
+            assembly: Footprints,
+            info: Info,
+            aed: HeartPulse,
+            extinguisher: FireExtinguisher,
+            firstaid: BriefcaseMedical,
+            exit: LogOut,
+            firealarm: BellRing,
+          }[symbol ?? 'personnel']
+        : ((
+            {
+              door: DoorOpen,
+              window: PanelTop,
+              gate: Fence,
+              fence: Fence,
+              wall: SquareDashed,
+              turnstile: ScanLine,
+              reader: KeyRound,
+              camera: Camera,
+              elevator: ArrowUpRight,
+              stairs: travel === 'down' ? MoveDownRight : MoveUpRight,
+              office: Building2,
+              container: Container,
+              storage: Package,
+              zone: LandPlot,
+              room: Grid2X2,
+              enclose: SquareDashedBottom,
+              building: Building2,
+              parcel: LandPlot,
+              rectangle: Square,
+              sensor: Activity,
+              light: Lightbulb,
+              alarm: Siren,
+              equipment: Cpu,
+              evacuation: ShieldAlert,
+            } as Record<string, typeof MapPin>
+          )[kind] ?? MapPin);
   return <Icon size={size} strokeWidth={1.75} />;
 }

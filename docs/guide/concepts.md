@@ -9,6 +9,7 @@ A `ProjectDocument` is a plain, JSON-serializable object — the single source o
 - **`buildings`** and **`floors`** — floors carry an `elevation` and `height` and belong to a building.
 - **`objects`** (`SiteObject[]`) — rooms, zones, doors, cameras, stairs, elevators, POIs, sensors, and more (see `ObjectKind`).
 - **`barriers`** (`Barrier[]`) — walls and fences; openings (doors/windows) attach to them.
+- **`junctions`** and optional **`virtualBoundaries`** — the shared boundary network used by connected spaces.
 - **`drawings`** — reference images (PDF/PNG) aligned to the map.
 - **`navNodes` / `navEdges`** — the optional indoor routing graph.
 - **`origin`** — the geographic anchor (see Coordinates below).
@@ -29,7 +30,7 @@ Need survey-grade coordinates from a projected CRS? Convert them to lng/lat with
 
 ## Objects, barriers and openings
 
-Walls and fences are **barriers**, defined by shared junction endpoints — they are the authoritative wall geometry, and wall surfaces are derived at render time. **Openings** (doors, windows, gates) attach to a barrier via `barrierId` + an `offset` along it. Areas (rooms, drawn zones) store separate polygons (`rings`), and may contain child areas. Their corners do not reference wall junctions. See [Space geometry & walls](/guide/geometry) for how outlines follow wall edits, the limits of that consistency, and why the document is not a shared mesh.
+Walls and fences are **barriers**, defined by shared junction endpoints — they are the authoritative wall geometry, and wall surfaces are derived at render time. **Openings** (doors, windows, gates) attach to a barrier via `barrierId` + an `offset` along it. Connected areas reference ordered loops of physical or virtual edges; their `rings` are generated from those boundaries and wall thickness. Independent areas keep their own polygons. See [Space geometry & walls](/guide/geometry) for conversion, consistent wall edits and the distinction between the shared planar model and generated rendering meshes.
 
 ## Live status
 
@@ -51,7 +52,7 @@ authored. See [Spaces, zones & portals](/guide/ontology).
 ## The document is always valid
 
 There is no such thing as a half-edited Kerros document. Every change — the editor's and yours —
-goes through one gate: `transact` clones the document, applies the change, runs **every** rule
+goes through one gate: `transact` clones the document, applies the change, normalizes shared boundaries, regenerates connected space footprints, runs **every** rule
 (structure, geometry, spatial relationships, ontology, navigation), and only then returns the
 result, deep-frozen so nothing can alter it except the next transaction. If the change throws or
 breaks any rule, you get the reason back and the original document, untouched.

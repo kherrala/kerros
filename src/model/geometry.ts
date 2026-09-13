@@ -1,6 +1,18 @@
 import polygonClipping from 'polygon-clipping';
-import type { Barrier, Drawing, Origin, Point, ProjectDocument, Ring, SiteObject, Slope } from './types';
+import type {
+  Barrier,
+  Drawing,
+  Origin,
+  Point,
+  ProjectDocument,
+  Ring,
+  SiteObject,
+  Slope,
+  VirtualBoundary,
+} from './types';
 import { uid } from './types';
+import { boundaryEdges, preserveBoundary, replaceBoundaryUses, splitBoundarySpace } from './boundaries';
+import { GEOMETRY_EPS, JOIN_EPS, MIN_RING_EDGE, MIN_SPACE_AREA, MIN_WALL_LENGTH } from './precision';
 
 export const distance = (a: Point, b: Point) => Math.hypot(a[0] - b[0], a[1] - b[1]);
 export const rotate = (p: Point, degrees: number): Point => {
@@ -102,7 +114,7 @@ export function slopeElevation(slope: Slope, point: Point): number {
  *  back to the rectangle its width, depth and rotation describe. One definition, so the model and the
  *  renderer cannot disagree about where a thing is. */
 export const footprint = (o: SiteObject): Ring[] => o.rings ?? [rectangle(o.position, o.width, o.depth, o.rotation)];
-export function barrierEnds(project: ProjectDocument, barrier: Barrier): [Point, Point] {
+export function barrierEnds(project: ProjectDocument, barrier: Barrier | VirtualBoundary): [Point, Point] {
   return [
     project.junctions.find(j => j.id === barrier.startId)!.position,
     project.junctions.find(j => j.id === barrier.endId)!.position,
@@ -136,7 +148,7 @@ const cross = (a: Point, b: Point, c: Point) => (b[0] - a[0]) * (c[1] - a[1]) - 
 /** Whether segments a–b and c–d cross or touch, endpoints included. */
 export function intersects(a: Point, b: Point, c: Point, d: Point) {
   const on = (p: Point, x: Point, y: Point) =>
-    Math.abs(cross(x, y, p)) < 1e-8 &&
+    Math.abs(cross(x, y, p)) < 1e-8 * distance(x, y) &&
     p[0] >= Math.min(x[0], y[0]) - 1e-8 &&
     p[0] <= Math.max(x[0], y[0]) + 1e-8 &&
     p[1] >= Math.min(x[1], y[1]) - 1e-8 &&
@@ -173,7 +185,8 @@ export function snapPoint(
     label = '';
   let junctionScore = 1;
   const degrees = new Map<string, number>();
-  for (const b of project.barriers) for (const id of [b.startId, b.endId]) degrees.set(id, (degrees.get(id) ?? 0) + 1);
+  for (const b of boundaryEdges(project))
+    for (const id of [b.startId, b.endId]) degrees.set(id, (degrees.get(id) ?? 0) + 1);
   for (const junction of project.junctions.filter(j => j.floorId === floorId)) {
     const d = distance(point, junction.position);
     const degree = degrees.get(junction.id) ?? 0;
@@ -196,7 +209,7 @@ export function snapPoint(
   if (held && previous) {
     const dx = held.point[0] - previous[0],
       dy = held.point[1] - previous[1];
-    for (const barrier of project.barriers.filter(b => b.floorId === floorId)) {
+    for (const barrier of boundaryEdges(project).filter(b => b.floorId === floorId)) {
       const [a, b] = barrierEnds(project, barrier);
       const ex = b[0] - a[0],
         ey = b[1] - a[1];
@@ -216,7 +229,7 @@ export function snapPoint(
     }
     if (result) return { point: result, label };
   }
-  for (const barrier of project.barriers.filter(b => b.floorId === floorId)) {
+  for (const barrier of boundaryEdges(project).filter(b => b.floorId === floorId)) {
     const projected = segmentProjection(point, ...barrierEnds(project, barrier));
     if (projected.distance < best) {
       best = projected.distance;
@@ -271,13 +284,12 @@ export function holdAngle(
 /** One centimetre is the model's degeneracy guard, independent of the drawing grid and zoom.
  *  Short returns, jambs and staggered junctions are real geometry; their screen handles spread
  *  apart when necessary so they remain editable. */
-export const MIN_SEGMENT = 0.01;
+export const MIN_SEGMENT = MIN_WALL_LENGTH;
 /** An opening needs a valid wall AND enough length for its actual width. Kept as an exported
  *  base limit for callers; there is no additional one-metre restriction on narrow doors/windows. */
 export const OPENING_MIN_SEGMENT = MIN_SEGMENT;
 /** Automatic joins only absorb sub-millimetre coordinate noise. Interactive snapping has its
  *  own screen-based reach, so a deliberate centimetre-scale feature survives with snapping off. */
-const JOIN_EPS = 0.001;
 
 /** Weld a connection near the end of a wall to that end. The snap preview and the actual
  *  junction use the same rule, so an ordinary T-junction cannot leave an uneditable stub. */
@@ -313,6 +325,49 @@ export function junctionIssue(project: ProjectDocument, point: Point, floorId: s
   return null;
 }
 
+/** Preflight the complete stroke, including openings crossed between its endpoints. */
+export function barrierStrokeIssue(
+  project: ProjectDocument,
+  a: Point,
+  b: Point,
+  floorId: string | null,
+): string | null {
+  a = barrierJoinPoint(project, a, floorId);
+  b = barrierJoinPoint(project, b, floorId);
+  const atStart = junctionIssue(project, a, floorId) ?? junctionIssue(project, b, floorId);
+  if (atStart) return atStart;
+  const ux = b[0] - a[0],
+    uy = b[1] - a[1];
+  const length = distance(a, b),
+    cuts = [0, length];
+  const tooShort = (span: number, minimum: number) => span > GEOMETRY_EPS && span < minimum - GEOMETRY_EPS;
+  for (const wall of boundaryEdges(project).filter(w => w.floorId === floorId)) {
+    const [c, d] = barrierEnds(project, wall),
+      vx = d[0] - c[0],
+      vy = d[1] - c[1];
+    const det = ux * vy - uy * vx;
+    if (Math.abs(det) < 1e-12 * length * distance(c, d)) {
+      for (const q of [c, d]) {
+        const hit = segmentProjection(q, a, b);
+        if (hit.distance <= GEOMETRY_EPS) cuts.push(hit.t * length);
+      }
+      continue;
+    }
+    const t = ((c[0] - a[0]) * vy - (c[1] - a[1]) * vx) / det;
+    const s = ((c[0] - a[0]) * uy - (c[1] - a[1]) * ux) / det;
+    if (t < 0 || t > 1 || s < 0 || s > 1) continue;
+    cuts.push(t * length);
+    if (tooShort(Math.min(s, 1 - s) * distance(c, d), 'kind' in wall ? MIN_SEGMENT : MIN_RING_EDGE))
+      return 'That crossing would leave a boundary segment too short.';
+    const issue = junctionIssue(project, [a[0] + t * ux, a[1] + t * uy], floorId);
+    if (issue) return issue;
+  }
+  cuts.sort((x, y) => x - y);
+  if (cuts.some((cut, i) => i > 0 && tooShort(cut - cuts[i - 1], MIN_SEGMENT)))
+    return 'That crossing would leave a boundary segment too short.';
+  return null;
+}
+
 export function joinAt(project: ProjectDocument, point: Point, floorId: string | null): string {
   point = barrierJoinPoint(project, point, floorId);
   const existing = project.junctions.find(j => j.floorId === floorId && distance(j.position, point) < JOIN_EPS);
@@ -331,6 +386,7 @@ export function joinAt(project: ProjectDocument, point: Point, floorId: string |
     const oldEnd = barrier.endId;
     barrier.endId = id;
     project.barriers.push({ ...barrier, id: newId, startId: id, endId: oldEnd });
+    replaceBoundaryUses(project, barrier.id, [{ edgeId: barrier.id }, { edgeId: newId }]);
     attachments.forEach(o => {
       if ((o.offset ?? 0) > cut) {
         o.barrierId = newId;
@@ -351,11 +407,15 @@ export function joinAt(project: ProjectDocument, point: Point, floorId: string |
  *  A junction survives if any other wall still ends there; the ontology is pruned by the caller,
  *  which knows whether spaces are also being merged. */
 export function removeBarrier(project: ProjectDocument, barrierId: string) {
+  const removed = project.barriers.find(b => b.id === barrierId);
+  if (removed) preserveBoundary(project, removed);
   const openings = new Set(project.objects.filter(o => o.barrierId === barrierId).map(o => o.id));
   project.objects = project.objects.filter(o => !openings.has(o.id));
   for (const o of project.objects) if (o.parentId && openings.has(o.parentId)) o.parentId = undefined;
   project.barriers = project.barriers.filter(b => b.id !== barrierId);
-  project.junctions = project.junctions.filter(j => project.barriers.some(b => b.startId === j.id || b.endId === j.id));
+  project.junctions = project.junctions.filter(j =>
+    boundaryEdges(project).some(b => b.startId === j.id || b.endId === j.id),
+  );
   if (project.navNodes?.length) {
     const alive = new Set(project.objects.map(o => o.id));
     project.navNodes = project.navNodes.filter(n => n.objectId === undefined || alive.has(n.objectId));
@@ -421,6 +481,7 @@ export function splitRoom(
 ): string {
   const o = project.objects.find(x => x.id === roomId);
   if (!o?.rings?.length) throw new Error('Pick a room or zone to split.');
+  if (o.geometry?.mode === 'boundaries') return splitBoundarySpace(project, o, pa, pb, wall);
   const len = distance(pa, pb);
   if (len < 1e-6) throw new Error('Draw a line across the room to split it.');
   const dir: Point = [(pb[0] - pa[0]) / len, (pb[1] - pa[1]) / len];
@@ -441,9 +502,11 @@ export function splitRoom(
   // Intersect the room (outer + holes) with a half-plane; keep the largest resulting polygon.
   const clip = (side: 1 | -1): Ring[] => {
     const pieces = polygonClipping.intersection(poly as Ring[], [halfPlane(side)]) as unknown as Ring[][];
-    const usable = pieces.filter(pg => ringArea(pg[0]) >= 0.5).sort((a, b) => ringArea(b[0]) - ringArea(a[0]));
-    if (!usable.length) throw new Error('The cut must cross the room from one wall to the opposite wall.');
-    if (usable.slice(1).reduce((s, pg) => s + ringArea(pg[0]), 0) > 0.5)
+    if (!pieces.length) throw new Error('The cut must cross the room from one wall to the opposite wall.');
+    const netArea = (pg: Ring[]) => ringArea(pg[0]) - pg.slice(1).reduce((sum, r) => sum + ringArea(r), 0);
+    const usable = pieces.filter(pg => netArea(pg) >= MIN_SPACE_AREA).sort((a, b) => netArea(b) - netArea(a));
+    if (!usable.length) throw new Error(`Each split space needs at least ${MIN_SPACE_AREA} m² of usable area.`);
+    if (usable.length > 1)
       throw new Error('That cut would leave disconnected pieces — draw a single straight line across the room.');
     return usable[0].map(closeRing);
   };
@@ -548,6 +611,8 @@ export function removeFloor(project: ProjectDocument, floorId: string): string[]
   project.floors = project.floors.filter(f => f.id !== floorId);
   project.junctions = project.junctions.filter(j => j.floorId !== floorId);
   project.barriers = project.barriers.filter(b => b.floorId !== floorId);
+  if (project.virtualBoundaries)
+    project.virtualBoundaries = project.virtualBoundaries.filter(b => b.floorId !== floorId);
   project.objects = project.objects.filter(o => o.floorId !== floorId);
   project.drawings = project.drawings.filter(d => d.floorId !== floorId);
 
@@ -631,6 +696,24 @@ export function duplicateFloor(project: ProjectDocument, floorId: string): strin
         parentId: o.parentId ? cloneId(o.parentId) : undefined,
         barrierId: o.barrierId ? cloneId(o.barrierId) : undefined,
         servedFloorIds: o.servedFloorIds?.map(id => (id === floorId ? newId : id)),
+        geometry:
+          o.geometry?.mode === 'boundaries'
+            ? {
+                mode: 'boundaries',
+                loops: o.geometry.loops.map(l => l.map(u => ({ ...u, edgeId: cloneId(u.edgeId) }))),
+              }
+            : o.geometry,
+      }),
+    );
+  project.virtualBoundaries
+    ?.filter(b => b.floorId === floorId)
+    .forEach(b =>
+      project.virtualBoundaries!.push({
+        ...b,
+        id: cloneId(b.id),
+        floorId: newId,
+        startId: cloneId(b.startId),
+        endId: cloneId(b.endId),
       }),
     );
   project.drawings

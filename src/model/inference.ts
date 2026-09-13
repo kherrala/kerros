@@ -3,6 +3,7 @@
 // exist at all. Nothing here decides anything — decisions (zones, hand-set passage) live in
 // ontology.ts; this module only reports what is drawn, which is why it may be re-run at any time.
 import polygonClipping from 'polygon-clipping';
+import { mergeBoundaryGeometry } from './boundaries';
 import {
   barrierEnds,
   closeRing,
@@ -216,6 +217,7 @@ export function spacesDividedBy(project: ProjectDocument, floorId: string | null
   const out: SiteObject[] = [];
   for (const space of project.objects) {
     if (space.floorId !== floorId || !isSpace(space.kind)) continue;
+    if (space.geometry?.mode === 'boundaries') continue; // the shared graph handles the subdivision
     // A containing area names the whole floor/department. Split its rooms, keeping their
     // parent intact; cutting the parent first strands children outside their parent polygon.
     if (project.objects.some(o => o.parentId === space.id)) continue;
@@ -289,9 +291,13 @@ export function mergeSpaces(project: ProjectDocument, keepId: string, absorbedId
   const keep = project.objects.find(o => o.id === keepId),
     absorbed = project.objects.find(o => o.id === absorbedId);
   if (!keep || !absorbed || keep.id === absorbed.id) return false;
-  const united = polygonClipping.union(footprint(keep).map(closeRing), footprint(absorbed).map(closeRing));
-  if (united.length !== 1) return false; // not actually adjacent; refuse rather than make a multipolygon
-  keep.rings = united[0].map(r => closeRing(r as Point[]));
+  if (keep.geometry?.mode === 'boundaries' || absorbed.geometry?.mode === 'boundaries') {
+    if (!mergeBoundaryGeometry(project, keep, absorbed)) return false;
+  } else {
+    const united = polygonClipping.union(footprint(keep).map(closeRing), footprint(absorbed).map(closeRing));
+    if (united.length !== 1) return false;
+    keep.rings = united[0].map(r => closeRing(r as Point[]));
+  }
   project.objects = project.objects.filter(o => o.id !== absorbedId);
   for (const o of project.objects) if (o.parentId === absorbedId) o.parentId = keepId;
   // Anything that pointed at the absorbed space now points at the survivor, then duplicates collapse.

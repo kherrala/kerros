@@ -5,6 +5,11 @@ import {
   aim,
   alongPath,
   eyeCamera,
+  DEFAULT_WALK_FOV,
+  MAX_WALK_FOV,
+  MIN_WALK_FOV,
+  verticalFieldOfView,
+  walkFieldOfView,
   BODY,
   easeHeading,
   EYE,
@@ -18,6 +23,7 @@ import {
   unstick,
   WALK_SPEED,
   WALK_ZOOM,
+  WalkController,
 } from './walk';
 import { createDemo } from '../../app/demo/demo';
 import { add, rotate } from '../model/geometry';
@@ -128,6 +134,33 @@ describe('standing at eye height', () => {
     expect(east.center[0]).toBeGreaterThan(helsinki[0]);
     expect(east.center[1]).toBeCloseTo(helsinki[1], 9);
   });
+
+  it('keeps the eye height and ground target as the field of view and viewport change', () => {
+    const original = eyeCamera(view, helsinki, EYE, 30, REST_PITCH);
+    for (const horizontal of [MIN_WALK_FOV, DEFAULT_WALK_FOV, MAX_WALK_FOV]) {
+      for (const [width, height] of [
+        [1440, 900],
+        [640, 900],
+        [3840, 2160],
+      ]) {
+        const vertical = verticalFieldOfView(horizontal, width / height);
+        const resized = { cameraToCenterDistance: height / (2 * Math.tan((vertical * Math.PI) / 360)), tileSize: 512 };
+        const cam = eyeCamera(resized, helsinki, EYE, 30, REST_PITCH);
+        const recoveredHorizontal = (2 * Math.atan(width / (2 * resized.cameraToCenterDistance)) * 180) / Math.PI;
+        expect(recoveredHorizontal).toBeCloseTo(horizontal, 9);
+        expect(altitudeOf(resized, cam, REST_PITCH)).toBeCloseTo(EYE, 6);
+        expect(cam.center).toEqual(original.center);
+      }
+    }
+  });
+
+  it('bounds stored FOV preferences and recovers from invalid values', () => {
+    expect(walkFieldOfView(105)).toBe(105);
+    expect(walkFieldOfView(10)).toBe(MIN_WALK_FOV);
+    expect(walkFieldOfView(170)).toBe(MAX_WALK_FOV);
+    expect(walkFieldOfView(NaN)).toBe(DEFAULT_WALK_FOV);
+    expect(walkFieldOfView(Infinity)).toBe(DEFAULT_WALK_FOV);
+  });
 });
 
 describe('aiming with the mouse', () => {
@@ -149,6 +182,32 @@ describe('aiming with the mouse', () => {
 
   it('is a no-op for a still mouse', () => {
     expect(aim(42, 77, 0, 0)).toEqual({ heading: 42, pitch: 77 });
+  });
+});
+
+describe('focusing an object in POV', () => {
+  it('turns toward the object without moving the walker or changing pitch', () => {
+    const walker = new WalkController({ onPose() {}, onExit() {}, onUse() {} });
+    walker.place([7, -3], 0);
+    walker.pitch = 75;
+    for (const [target, heading] of [
+      [[17, -3], 90],
+      [[7, -13], 180],
+      [[-3, -3], 270],
+    ] as [Point, number][]) {
+      walker.lookAt(target);
+      expect(walker.pose.position).toEqual([7, -3]);
+      expect(walker.pose.heading).toBe(heading);
+      expect(walker.pose.pitch).toBe(75);
+    }
+  });
+
+  it('keeps the current heading when the object is directly under the walker', () => {
+    const walker = new WalkController({ onPose() {}, onExit() {}, onUse() {} });
+    walker.place([2, 4], 123);
+    const before = walker.pose;
+    walker.lookAt([2, 4]);
+    expect(walker.pose).toEqual(before);
   });
 });
 

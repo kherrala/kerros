@@ -27,6 +27,7 @@ import { barrierEnds, distance, moveOrigin, objectArea, objectPosition } from '.
 import { entryInto, zoneSpaces } from '../model/ontology';
 import { coverageOf } from '../model/coverage';
 import { spaceAt } from '../model/spaces';
+import { connectSpace, disconnectSpace } from '../model/boundaries';
 import { statusLabel, statusTone } from '../adapters/status';
 import { EntityIcon } from './Icons';
 import { Choice, Field, Toggle } from './controls';
@@ -212,6 +213,7 @@ export function Inspector(props: Props) {
   const spaceName = (id: string) => project.objects.find(o => o.id === id)?.name ?? 'elsewhere';
   const object = project.objects.find(o => o.id === selected),
     barrier = project.barriers.find(b => b.id === selected),
+    boundary = project.virtualBoundaries?.find(b => b.id === selected),
     drawing = project.drawings.find(d => d.id === selected),
     floor = project.floors.find(f => f.id === floorId);
   const objects = project.objects.filter(o => o.floorId === floorId),
@@ -270,7 +272,7 @@ export function Inspector(props: Props) {
       onChange={v => update({ [key]: Number(v) })}
     />
   );
-  const title = object?.name ?? barrier?.name ?? drawing?.name;
+  const title = object?.name ?? barrier?.name ?? drawing?.name ?? (boundary ? 'Virtual boundary' : undefined);
   return (
     <aside className="inspector">
       <div className="inspector-top">
@@ -296,11 +298,14 @@ export function Inspector(props: Props) {
                   <Layers3 size={25} />
                 )}
               </div>
-              <span className="eyebrow">{object?.kind ?? barrier?.kind ?? 'REFERENCE DRAWING'}</span>
+              <span className="eyebrow">
+                {object?.kind ?? barrier?.kind ?? (boundary ? 'SPACE BOUNDARY' : 'REFERENCE DRAWING')}
+              </span>
               <h2>{title}</h2>
               <p>
-                {project.floors.find(f => f.id === (object?.floorId ?? barrier?.floorId ?? drawing?.floorId))?.name ??
-                  'Outdoor site'}
+                {project.floors.find(
+                  f => f.id === (object?.floorId ?? barrier?.floorId ?? boundary?.floorId ?? drawing?.floorId),
+                )?.name ?? 'Outdoor site'}
               </p>
             </div>
             {monitoring && object?.feedId && !isArea(object.kind) && (
@@ -374,6 +379,39 @@ export function Inspector(props: Props) {
               <section className="property-section">
                 <h3>Object details</h3>
                 <Field label="Name" value={object.name} onChange={name => update({ name })} />
+                {isArea(object.kind) && (
+                  <>
+                    <label className="field">
+                      <span>Space geometry</span>
+                      <select
+                        aria-label="Space geometry"
+                        value={object.geometry?.mode ?? 'independent'}
+                        onChange={e => {
+                          const mode = e.target.value;
+                          props.onEdit?.(p =>
+                            mode === 'boundaries' ? connectSpace(p, object.id) : disconnectSpace(p, object.id),
+                          );
+                        }}
+                      >
+                        <option value="boundaries">Shared boundaries</option>
+                        <option value="independent">Independent outline</option>
+                      </select>
+                    </label>
+                    <p className="helper">
+                      {object.geometry?.mode === 'boundaries'
+                        ? 'Move the boundary handles or walls. Adjacent spaces follow the same boundary.'
+                        : 'This outline stays where you draw it. Connect it to share edits with adjacent spaces.'}
+                    </p>
+                    {object.geometry?.mode !== 'boundaries' && (
+                      <button
+                        className="button secondary"
+                        onClick={() => props.onEdit?.(p => connectSpace(p, object.id, 'walls'))}
+                      >
+                        Use surrounding walls
+                      </button>
+                    )}
+                  </>
+                )}
                 {object.feedId !== undefined ||
                 ['door', 'gate', 'camera', 'reader', 'turnstile', 'elevator'].includes(object.kind) ? (
                   <Field
@@ -382,31 +420,33 @@ export function Inspector(props: Props) {
                     onChange={feedId => update({ feedId: feedId || undefined })}
                   />
                 ) : null}
-                <div className="field-grid">
-                  {object.barrierId ? (
-                    number('Along barrier', object.offset ?? 0, 'offset', 'm', 0)
-                  ) : (
-                    <Field
-                      label="East / X"
-                      value={object.position[0]}
-                      type="number"
-                      suffix="m"
-                      onChange={v => update({ position: [Number(v), object.position[1]] })}
-                    />
-                  )}
-                  {object.barrierId ? (
-                    number('Width', object.width, 'width')
-                  ) : (
-                    <Field
-                      label="North / Y"
-                      value={object.position[1]}
-                      type="number"
-                      suffix="m"
-                      onChange={v => update({ position: [object.position[0], Number(v)] })}
-                    />
-                  )}
-                </div>
-                {!object.barrierId && (
+                {object.geometry?.mode !== 'boundaries' && (
+                  <div className="field-grid">
+                    {object.barrierId ? (
+                      number('Along barrier', object.offset ?? 0, 'offset', 'm', 0)
+                    ) : (
+                      <Field
+                        label="East / X"
+                        value={object.position[0]}
+                        type="number"
+                        suffix="m"
+                        onChange={v => update({ position: [Number(v), object.position[1]] })}
+                      />
+                    )}
+                    {object.barrierId ? (
+                      number('Width', object.width, 'width')
+                    ) : (
+                      <Field
+                        label="North / Y"
+                        value={object.position[1]}
+                        type="number"
+                        suffix="m"
+                        onChange={v => update({ position: [object.position[0], Number(v)] })}
+                      />
+                    )}
+                  </div>
+                )}
+                {!object.barrierId && object.geometry?.mode !== 'boundaries' && (
                   <div className="field-grid">
                     {number('Width', object.width, 'width')}
                     {number('Depth', object.depth, 'depth')}
@@ -462,7 +502,9 @@ export function Inspector(props: Props) {
                 )}
                 <div className="field-grid">
                   {number('Height', object.height, 'height', 'm', 0)}
-                  {!object.barrierId && number('Rotation', object.rotation, 'rotation', '°', -360, 360)}
+                  {!object.barrierId &&
+                    object.geometry?.mode !== 'boundaries' &&
+                    number('Rotation', object.rotation, 'rotation', '°', -360, 360)}
                 </div>
                 {object.rings && (
                   <div className="measurement-row">
@@ -770,6 +812,19 @@ export function Inspector(props: Props) {
                       <ChevronRight size={14} />
                     </button>
                   ))}
+              </section>
+            )}
+            {editing && boundary && (
+              <section className="property-section">
+                <h3>Virtual boundary</h3>
+                <div className="measurement-row">
+                  <span>Length</span>
+                  <strong>{distance(...barrierEnds(project, boundary)).toFixed(2)} m</strong>
+                </div>
+                <p className="helper">
+                  Drag its handles to reshape the shared division. To remove a division between spaces, choose which
+                  space survives the merge.
+                </p>
               </section>
             )}
             {editing && drawing && (
@@ -1222,7 +1277,7 @@ export function Inspector(props: Props) {
           <button
             className="button secondary"
             onClick={props.onDuplicate}
-            disabled={!!drawing || !!barrier || !!object?.barrierId}
+            disabled={!!drawing || !!barrier || !!boundary || !!object?.barrierId}
           >
             <Copy size={15} />
             Duplicate

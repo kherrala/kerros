@@ -26,6 +26,7 @@ import {
 } from './ontology';
 import { divideSpaces, mergeSpaces, refreshPortals } from './inference';
 import { transact, type TransactResult } from './validate';
+import { addVirtualBoundary, connectSpace, disconnectSpace } from './boundaries';
 
 /** Every mutation the schema can execute, as data. `kind` names the operation; the rest are its
  *  arguments, exactly as the underlying authoring function takes them. */
@@ -56,6 +57,9 @@ export type Mutation =
   | { kind: 'refreshPortals' }
   | { kind: 'pruneOntology' }
   | { kind: 'addBarrier'; a: Point; b: Point; floorId: string | null; barrierKind: 'wall' | 'fence' }
+  | { kind: 'addBoundary'; a: Point; b: Point; floorId: string | null }
+  | { kind: 'connectSpace'; objectId: string; source?: 'outline' | 'walls' }
+  | { kind: 'disconnectSpace'; objectId: string }
   | { kind: 'splitRoom'; roomId: string; a: Point; b: Point; wall?: boolean }
   | { kind: 'divideSpaces'; floorId: string | null; a: Point; b: Point }
   | { kind: 'mergeSpaces'; keepId: string; absorbedId: string }
@@ -137,6 +141,14 @@ const run = (draft: ProjectDocument, m: Mutation): MutationOutcome => {
     case 'addBarrier':
       addBarrier(draft, m.a, m.b, m.floorId, m.barrierKind);
       return undefined;
+    case 'addBoundary':
+      return addVirtualBoundary(draft, m.floorId, m.a, m.b);
+    case 'connectSpace':
+      connectSpace(draft, m.objectId, m.source);
+      return m.objectId;
+    case 'disconnectSpace':
+      disconnectSpace(draft, m.objectId);
+      return m.objectId;
     case 'splitRoom':
       return splitRoom(draft, m.roomId, m.a, m.b, m.wall);
     case 'divideSpaces':

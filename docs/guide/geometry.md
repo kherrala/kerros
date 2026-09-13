@@ -1,103 +1,118 @@
 # Space geometry and walls
 
-Kerros stores a floor as **connected wall segments and separate space polygons**. Walls share junctions by ID. A space stores its own outline as coordinates; its corners do not reference those junctions. The editor keeps certain outlines aligned with the walls through drawing and refitting operations.
+Kerros uses a **shared network of wall and virtual boundary segments** to keep connected spaces consistent. A space follows an ordered loop of boundary IDs. Moving a shared boundary updates the spaces on both sides; their displayed polygons are calculated from that network.
 
-This is a floor-plan model with elevations and heights, often called **2.5D**. The 3D viewer generates meshes from it. There is no single stored mesh whose faces are all the spaces on a floor.
+Independent outlines remain available for imported plans, floor plates and areas that deliberately overlap. Existing documents keep their independent outlines until you explicitly connect them.
+
+This guide explains the editing model. The optional [Mathematical foundations](/guide/geometry-mathematics) page contains the formulas, theorems and proof sketches for academic interest.
 
 ## What is stored, and what is generated?
 
-| Part | Stored in the document | Calculated from it |
+| Part | Authoritative data | Calculated from it |
 | --- | --- | --- |
-| Wall junction | ID, floor and `[x, y]` position in local metres | Where every attached wall starts or ends |
-| Wall or fence | `startId`, `endId`, thickness and height | Centreline, wall faces and rendered surfaces |
-| Space | Object ID, floor, outer polygon and optional holes in `rings` | Containment, area, floor plate and labels |
-| Door or window on a wall | `barrierId`, centre `offset` in metres from the wall's start, width and height | Position and rotation along the wall, and the visible opening |
+| Junction | ID, floor and `[x, y]` position in metres | The endpoint shared by incident edges |
+| Wall or fence | ID, `startId`, `endId`, thickness, height and properties | Centreline, solid footprint and rendered surfaces |
+| Virtual boundary | ID, floor, `startId` and `endId` | A division between spaces with no physical wall |
+| Space with shared boundaries | Object identity and `geometry.loops`: ordered, directed edge references | Net `rings`, position, width, depth and area |
+| Independent space | Its own `rings`, or position, dimensions and rotation for a rectangle | Containment, area and rendered surfaces |
+| Door or window | `barrierId`, centre `offset` from the wall's start, width and height | Placement and the opening in the wall |
 | Floor | Elevation and height | Vertical placement of its geometry |
 
-An object without explicit `rings` uses the rectangle described by its position, width, depth and rotation. A space is an object with a footprint; a [semantic zone](/guide/ontology) is a collection of spaces and has no outline of its own.
+A physical edge is the existing `Barrier` record. There is no second copy of its coordinates in a separate topology table. Only unwalled edges need records in `virtualBoundaries`. Both kinds reference the same junction collection.
 
-## A wall junction is shared; a space corner is not
+A [semantic zone](/guide/ontology) is a collection of space IDs; it has no polygon of its own. This differs from the older drawn object kind named `zone`, which is an area.
 
-Suppose two rooms sit either side of a 20 cm partition. The partition's centreline is at `x = 3`. Spaces taken from its faces end at `x = 2.9` and start at `x = 3.1`.
+## Two spaces share one boundary
 
-![Two space polygons stop at the faces of a partition. Its centreline joins two shared wall junctions, while each space stores separate corner coordinates.](/diagrams/space-geometry.svg)
+Suppose a 20 cm partition has its centreline at `x = 3`. Space A and Space B reference that same partition ID in opposite directions. Their usable polygons end at `x = 2.9` and begin at `x = 3.1`.
 
-The partition stores `startId: "j1"` and `endId: "j2"`. The wall segments meeting it at the top also reference `j1`; those at the bottom reference `j2`. Moving either junction changes every incident wall because they all read the same position.
+![Two spaces reference opposite directions of one partition. Their generated usable polygons stop at its faces.](/diagrams/space-geometry.svg)
 
-The rooms' polygons contain coordinate pairs such as `[2.9, 0.1]`. They contain no wall IDs, junction IDs, or references to the room next door. Even when two space corners have identical coordinates, editing one does not inherently move the other.
+Moving the partition to `x = 4` updates both polygons. Increasing its thickness changes both inside faces. The spaces keep their identities and bindings because the relationship is explicit; ordinary wall movement does not guess which new polygon overlaps an old room.
 
-When a new wall **ends on an existing wall**, the drawing tools split the receiving segment and reuse one junction for the connection. A fourth wall snapped to that T uses the same junction. Merely drawing two lines across each other is not a general operation that subdivides every crossing into a shared graph vertex.
+The space stores an outer loop and optional hole loops. Each entry is `{ edgeId, reversed? }`. Consecutive edges share junction IDs. The traversal keeps the space on its left: counterclockwise around the outside, clockwise around holes.
 
-## How spaces follow walls
+The saved `rings` are a **generated cache** for rendering, spatial queries and existing consumers. Edit the referenced boundaries to change a connected space. Writing its cached width or polygon inside a transaction causes the cache to be recomputed. Loading a document with stale caches is rejected.
 
-### Taking a space from walls
+## Drawing and connecting spaces
 
-**Space from walls** computes the closed region under your click:
+### Space from walls
 
-1. Give each barrier centreline a solid footprint using its thickness, extending the ends enough to close corners.
-2. Subtract those footprints from a rectangle surrounding the floor's barriers.
-3. Discard regions that reach the outside of that rectangle, and very small regions.
-4. Take the smallest enclosed region containing the click and store its outline on a room object.
+**Space from walls** finds the closed boundary region under your click and connects a room to it. Closed regions may include physical walls, virtual boundaries or both. The usable footprint is the centreline region minus physical wall bodies, including wall thickness and corner closures.
 
-The resulting outline follows the **inside faces** of the surrounding barriers. A doorway does not break the enclosure: its opening is attached to a continuous wall segment. A gap in the barrier run can open the region to the outside and prevent enclosure detection.
+Courtyard loops become holes, and those holes follow their boundaries when moved. A dangling wall does not create an extra topological region; its solid footprint can make a notch in the usable area. A doorway remains an opening attached to a continuous wall, so it does not erase the room division.
 
-This stores a polygon, not a permanent list of bounding walls. Clicking inside an existing room with the tool can refit that room while preserving its identity.
+Clicking an already connected region reuses its room identity. A click inside a wall body does not create a room.
 
-### Moving or thickening walls
+### Drawing a room outline
 
-For supported wall edits, the editor compares enclosed regions before and after the change. A room whose outer outline closely matched an old region can adopt the corresponding new region. Its ID, name and bindings survive; its outline, position and dimensions change.
+The **Room** polygon tool creates shared virtual boundaries along the outline. This lets you draw a room before its walls. Draw a physical wall along a virtual edge later to build that edge; connected spaces then account for its thickness.
 
-Matching uses polygon overlap. It is an inference, not a stored constraint. Freehand spaces that did not match an enclosure stay where you drew them. If the enclosure disappears, or two rooms claim the same replacement region, refitting leaves their previous outlines in place instead of choosing a new meaning for them.
+Use **Virtual boundary** for an open-plan division. It has zero wall thickness and is shown as a dashed guide in the 2D editor. A line must close a region or cross an existing region to divide space; an unfinished spur alone does not create another room.
 
-Wall endpoint drags also keep attached openings fitted along the changed segments. If a target position would fail validation, the drag stops at a valid intermediate position.
+### Existing independent outlines
 
-### Dividing and joining spaces
+Select an area and use **Space geometry → Shared boundaries** to connect its drawn outline. This creates virtual boundaries where no matching edges exist. **Use surrounding walls** explicitly adopts the region with the greatest overlap with that outline; an ambiguous match is refused.
 
-A wall drawn across an eligible space tries to divide its polygon. A wall stopping inside it does not divide it, and fence drawing does not automatically split spaces. Containing spaces with explicit child objects are left intact by automatic division. Cuts that cannot produce suitable pieces leave the space whole.
+**Independent outline** keeps the current polygon and stops following boundary edits. This is useful for overlapping departments, incomplete imports and containing floor plates. It does not delete boundaries that other spaces may still use.
 
-**Split room** clips the polygon along the line you draw and can add a partition across the solid spans, skipping holes. The original keeps its ID; the other piece gets a new ID and no copied live-feed binding.
+## Crossings, splitting and merging
 
-These cut polygons meet along the **cut line**. They are not automatically inset by half the new wall thickness. Consequently, a split or manually drawn space can have different area conventions from a space taken from wall faces. `objectArea` measures the stored polygon; it is not an unconditional measurement of usable floor area.
+Every geometry transaction normalizes changed floors. It splits crossing edges, shares one junction at a T or four-way crossing, replaces overlapping collinear segments with one edge, and updates every affected space reference. A physical edge takes precedence over an overlapping virtual edge. Attached openings retain their position along the replacement wall segment.
 
-When removing a wall, the editor offers to keep both spaces or merge them if it detects that they become connected. It does not silently discard a space's identity. Merging unites the footprints and keeps the selected survivor's name and bindings.
+A new boundary across a connected space creates separate usable regions. The largest usable region keeps the original ID, name and live-feed binding. Other regions get new IDs and names, inherit semantic zone membership, and start without a copied live-feed binding.
+
+**Split room** extends the cut line across the selected space. A physical split places partition segments across its solid spans, skipping holes. A virtual split uses zero-thickness separators. Physical splits subtract the new wall area; virtual splits conserve the represented area when all resulting pieces meet the usable-area minimum.
+
+Removing a referenced wall replaces it with a virtual boundary. Both spaces keep their identities. **Merge** is a separate choice that removes the shared virtual division and keeps the chosen survivor's identity. It recovers the floor area previously occupied by the removed wall. Remove the physical dividing wall before merging connected spaces.
+
+Legacy independent spaces retain polygon-based split and merge operations. Their area follows the authored outline rather than automatically subtracting every wall. Connect them when you need wall-aware usable-area measurements.
+
+## Minimum space area
+
+A newly created or resized area needs **at least 1 m² of usable area**. For connected spaces this is measured after subtracting wall bodies and holes; independent outlines subtract their holes. Each newly created split space must meet the same minimum.
+
+The boundary network can contain smaller regions and holes. Automatic subdivision leaves regions below 1 m² unlabelled instead of creating sliver rooms. If an explicit split cannot create another usable space, it is refused. An existing connected space cannot silently disappear or shrink below the minimum; a constrained drag stops at a valid position.
+
+Small independent areas in older imported documents remain readable and can be renamed or have metadata edited. Creating or changing their area applies the current minimum.
+
+The space-area limit is separate from the **1 cm wall-segment minimum**. Short returns and jambs are still valid. A hole also need not be 1 m²: it is an exclusion from a space, not another labelled space.
 
 ## What validation guarantees
 
-Every editor commit runs through `transact`: clone the current document, apply the change, validate the result, and accept it only if the checks pass. A rejected transaction leaves the previous document untouched. Unfinished polygon strokes remain editor drafts until committed.
+Every editor commit goes through `transact`:
 
-The checks include non-degenerate wall segments, polygon self-intersections, valid holes, explicit parent containment, valid references, and attached openings that fit without overlapping. They protect the saved document from those errors.
+1. Clone the current document and apply the edit.
+2. Normalize changed boundary geometry and regenerate connected space footprints.
+3. Check structure, geometry, boundary references and caches, openings, parent containment, ontology and navigation.
+4. Return the complete, validated result, or leave the original document untouched and report the reason.
 
-**Passing validation does not prove that all spaces form a complete, gap-free floor partition.** It does not enforce a permanent relationship between every space edge and wall face, prohibit all overlaps between independent spaces, or verify that every wall crossing shares a junction. Intentional nested and open-plan spaces are also possible.
+The checks include closed ordered loops on the correct floor, loop orientation, valid polygons and holes, and at most one connected space on each directed side of an edge. Edges and attached openings are updated together when a crossing splits a wall. A junction cannot cut through an opening.
 
-A host changing the document programmatically must invoke the appropriate geometry operations as well as validation. `transact` alone does not discover rooms, refit outlines or refresh inferred portals. The schema exposes `enclosedRegions` and `refitEnclosedRooms` for before/after refitting; `refreshPortals` updates inferred connections separately.
+Unfinished strokes remain drafts. Invalid polygon clicks keep the last usable draft. Wall and junction drags try the requested position and otherwise stop at a valid intermediate position. Undo and redo restore boundary references together with the generated footprints.
 
 ### Current limits
 
-- Enclosure detection defaults to a minimum region area of **1 m²**. The split tool uses **0.5 m²** for its candidate pieces. These are tool thresholds, separate from the **1 cm wall segment** minimum.
-- Enclosure detection currently returns outer rings only. A walled island inside a larger space is detected separately, but its hole is not automatically subtracted from the surrounding room. Model the hole explicitly when it matters.
-- Refitting updates the outer ring and preserves existing holes. Moving courtyard walls does not automatically move those holes.
-- Refitting is currently for objects of kind `room`; other drawn area kinds remain independent.
+The model permits incomplete floors and independent overlapping areas. Passing validation does **not** certify that every square metre is assigned to exactly one space, or that an imported independent outline follows walls.
+
+A thick wall can close a narrow gap before its centreline reaches the other boundary. If that leaves one connected space with disconnected usable pieces, the edit is refused: extend the wall to the boundary to make the division explicit. Crossings that would produce a wall segment shorter than 1 cm must also be repositioned. These refusals preserve the previous valid plan and allow the next edit.
+
+Hosts must edit through `transact` or `applyMutations`; directly changing a saved document bypasses synchronization. `validateProject` checks a document without repairing it. Portal inference remains separate: call `refreshPortals` when the host needs to update inferred connections.
 
 ## Why not store a mesh?
 
-“Mesh” can mean two different things here.
+The floor model is a **shared planar subdivision**, represented with segments and directed boundary loops. It supplies the useful consistency property of a mesh: adjacent spaces reference the same boundary.
 
-A **rendering mesh** is a collection of vertices and triangles used to draw surfaces. Kerros already creates these for the 3D view. Storing those triangles as the editing model would not, by itself, say which surface is a wall, which opening belongs to it, or which space is a corridor. Those relationships would still need a model. Segments, dimensions and polygons express the edits directly and keep the JSON independent of rendering detail.
+It is not a stored triangle mesh. Triangles describe how to draw a surface; they do not by themselves express wall thickness, opening offsets, room identity or virtual divisions. Keeping those concepts explicit makes edits and serialized documents easier to maintain.
 
-A **shared planar subdivision** is more relevant to consistency: one network of vertices and edges, with spaces represented by its faces. Adjacent faces reference the same boundary, so moving that boundary updates both sides. That would offer stronger guarantees for a floor that must be completely partitioned into adjoining spaces.
-
-The current independent polygons make it straightforward to draw a lobby before its walls, outline an open department, nest a space inside a floor plate, or import an incomplete plan. They also avoid making every semantic boundary a physical wall. A subdivision could support these uses too, but it would need explicit rules for virtual boundaries, nesting, incomplete floors and wall thickness.
-
-The tradeoff is real: **simpler stored geometry requires explicit synchronization work**. Shared wall junctions solve wall-to-wall attachment; room refitting handles some wall-to-space updates; validation catches defined failures. These are useful mechanisms, but they do not amount to a shared space mesh.
-
-If every adjacent space must follow every boundary edit exactly, an explicit boundary-to-space topology would be a stronger future model. That can still generate the same 3D meshes; changing the drawing triangles alone would not provide that guarantee.
+The 3D viewer generates meshes from this 2D model plus elevations and heights: a **2.5D** representation. Rendering tessellation can change without changing space IDs or the editing model.
 
 ## Precision and snapping
 
-The drawing grid, angle snapping and numerical precision solve different problems. The editor offers a 0.5 m positioning grid and 15° directions relative to the floor's main axis. Geometry snapping reuses junctions and projects onto receiving walls. Turn snapping off for small details that the positioning grid would suppress.
+The editor offers a 0.5 m positioning grid and 15° directions relative to the floor's main axis, including 45° and 90° directions. Geometry snapping reuses junctions and projects onto receiving boundaries. Disable snapping or hold Shift during a drag for details that the grid would suppress.
 
-A **1 cm input grid** can be a useful drawing option, but coordinates are not globally rounded to centimetres. An intersection on a rotated wall often needs more decimal places to stay on that wall. Rounding each result separately can move a join off its wall, disturb an angle, or collapse a valid short diagonal segment.
+Coordinates are **not globally rounded to centimetres**. Rotated intersections often need extra decimal places to stay on their edges. The calculated intersection is shared by ID rather than rounded separately on each adjoining wall.
 
-Keep shared connections through their IDs and preserve the computed intersection. Limited numerical cleanup inside polygon operations is separate from the user's drawing grid; it is not a maximum precision for the saved document.
+Numerical tolerances are centralized in `model/precision.ts`. Junction normalization uses a 1 micrometre tolerance; authoring joins absorb sub-millimetre noise. Derived polygon clipping rounds its inputs to 0.1 mm and scales them before clipping. This cleanup does not change the stored junction coordinates and is distinct from the input grid.
 
-See [Core concepts](/guide/concepts), [Spaces, zones & portals](/guide/ontology) and the [schema reference](/reference/schema#geometry) for the surrounding model and APIs.
+See [Core concepts](/guide/concepts), [Spaces, zones & portals](/guide/ontology), the [schema reference](/reference/schema#geometry), and the optional [mathematical background](/guide/geometry-mathematics).
