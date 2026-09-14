@@ -209,7 +209,37 @@ it('rehydrates source references and identical transform IDs from cached recipes
     ],
   });
   const wrong = new SourceAnalysisTools({ ...src, analyse: async () => ({ ...a, sourceHash: 'b'.repeat(64) }) });
-  await expect(wrong.restore(tools.save())).rejects.toThrow('drawing or analysis version changed');
+  await expect(wrong.restore(tools.save())).rejects.toThrow('drawing changed');
+  const updatedSource = { ...src, analyse: async () => ({ ...a, id: 'analysis-2' }) };
+  const updated = new SourceAnalysisTools(updatedSource, { widthMetres: 20 });
+  expect(await updated.restore(tools.save())).toBe(true);
+  expect(updated.save()[0]).toMatchObject({ artifactId: 'analysis-2', calibration: undefined });
+  await expect(
+    updated.execute('query_candidates', { artifactId: 'analysis-2', transformId: transform.id }),
+  ).rejects.toThrow();
+  const first = await runAiPlanImport({ turn: async () => [call('set_import_notes', buildNotes)] }, src, {
+    brief: { widthMetres: 20 },
+    maxTurns: 1,
+    rasterize: async () => '',
+  });
+  const resumed = await runAiPlanImport(
+    {
+      turn: async ({ messages }) => {
+        expect(JSON.stringify(messages)).toContain('Source analysis updated');
+        return [];
+      },
+    },
+    updatedSource,
+    {
+      base: first.document,
+      checkpoint: { ...first.checkpoint, analysis: tools.save() },
+      brief: { widthMetres: 20 },
+      rasterize: async () => '',
+    },
+  );
+  expect(resumed.document).toEqual(first.document);
+  expect(resumed.checkpoint).toMatchObject({ phase: 'inspect', sourcePlan: '', calibration: undefined });
+  expect(resumed.checkpoint.analysis[0].artifactId).toBe('analysis-2');
 });
 
 it('receives human instructions between turns, deduplicates and preserves them across budget pauses', async () => {

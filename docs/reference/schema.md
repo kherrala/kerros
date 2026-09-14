@@ -2,6 +2,9 @@
 
 The framework-free core: the data model and pure operations. No React, no MapLibre, no browser storage — usable in a browser, a server, a CLI or a mobile backend. Full TypeScript types ship with the package; this page is the map.
 
+For third-party readers, writers and products, start with the [portable project format](./portable-format):
+the JSON structure, units, identity rules, shared geometry, assets and compatibility contract.
+
 ## Document & entity types
 
 | Type | Description |

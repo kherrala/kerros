@@ -102,12 +102,34 @@ export default defineConfig({
         timeout: 0,
         proxyTimeout: 0,
       },
+      '^/kerros(?:/|$)': {
+        target: process.env.KERROS_DOCS_PROXY_TARGET || 'http://127.0.0.1:5174',
+        ws: true,
+      },
     },
   },
   publicDir: 'docs/public',
   plugins: [react(), browserServerBoundary(), {
     name: 'kerros-landing',
     transformIndexHtml: { order: 'pre', handler: html => html.replace('<!-- kerros-landing -->', readFileSync(new URL('website/landing.html', import.meta.url), 'utf8')) },
+    configureServer(server) {
+      // Keep the manual's /kerros/ base for its assets, router and live reload. Homepage links
+      // are relative so the same markup also works on the published site.
+      server.middlewares.use((req, res, next) => {
+        const url = new URL(req.url || '/', 'http://localhost');
+        let destination: string | undefined;
+        if (/^\/(guide|reference)(?:\/|$)/.test(url.pathname)) {
+          const path = url.pathname.replace(/^\/guide\/?$/, '/guide/getting-started.html')
+            .replace(/^\/reference\/?$/, '/reference/schema.html');
+          destination = `/kerros${path}`;
+        } else if (/^\/kerros\/(app|viewer)\.html$/.test(url.pathname)) {
+          destination = url.pathname.slice('/kerros'.length);
+        }
+        if (!destination) return next();
+        res.writeHead(302, { Location: destination + url.search });
+        res.end();
+      });
+    },
   }],
   resolve: {
     alias: {

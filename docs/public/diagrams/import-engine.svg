@@ -1,0 +1,91 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 880 1120" role="img" aria-labelledby="title desc">
+  <title id="title">Kerros import engine</title>
+  <desc id="desc">The browser supplies a drawing, scale and live project. The server extracts vectors or runs OpenCV, OCR and symbol matching, then caches source evidence. Claude calls bounded analysis and model tools. Core validation accepts or refuses edits. Accepted documents, activity and previews stream to the editor and browser storage. Claude runs outside the local server.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto-start-reverse"><path d="M0 0 8 4 0 8Z" fill="#64748b"/></marker>
+    <style>
+      text{font-family:system-ui,-apple-system,sans-serif;fill:#263249;font-size:15px}
+      .title{font-size:26px;font-weight:750;letter-spacing:-.6px}
+      .label{font-size:12px;font-weight:750;letter-spacing:1.5px;fill:#64748b}
+      .heading{font-size:17px;font-weight:700}
+      .small{font-size:13px;fill:#59677f}
+      .node{fill:white;stroke:#c9d3e5;stroke-width:1.4}
+      .flow{fill:none;stroke:#64748b;stroke-width:2;marker-end:url(#arrow)}
+      .return{stroke-dasharray:5 5}
+    </style>
+  </defs>
+  <rect width="880" height="1120" rx="20" fill="#f8fafc"/>
+  <text x="32" y="43" class="title">From drawing to live building model</text>
+  <text x="32" y="68" class="small">Source evidence → interpretation → validated edits</text>
+
+  <rect x="32" y="92" width="816" height="100" rx="12" fill="#eef2ff" stroke="#c7d2fe"/>
+  <text x="52" y="116" class="label">BROWSER · START OR CONTINUE</text>
+  <text x="52" y="144" class="heading">Drawing + template + instructions + current project</text>
+  <text x="52" y="169">Image / PDF / DWG · known dimensions or footprint · saved checkpoint</text>
+
+  <rect x="32" y="219" width="548" height="674" rx="14" fill="#edf4f7" stroke="#cbdce4"/>
+  <path d="M302 192V256H172V263" class="flow"/>
+  <path d="M302 256H436V263" class="flow"/>
+  <text x="52" y="247" class="label">LOCAL SERVER · @KERROS/SERVER</text>
+  <rect x="52" y="265" width="240" height="116" rx="10" class="node"/>
+  <text x="68" y="292" class="heading">Native extraction</text>
+  <text x="68" y="318">PDF paths and embedded text</text>
+  <text x="68" y="340">DWG entities and layers</text>
+  <text x="68" y="363" class="small">PDF.js · LibreDWG</text>
+  <rect x="312" y="265" width="248" height="116" rx="10" class="node"/>
+  <text x="328" y="292" class="heading">Raster analysis</text>
+  <text x="328" y="318">OpenCV wall / outline detection</text>
+  <text x="328" y="340">Tesseract OCR · symbol matches</text>
+  <text x="328" y="363" class="small">Images + rasterized PDF regions</text>
+  <path d="M172 381V412" class="flow"/>
+  <path d="M436 381V412" class="flow"/>
+  <rect x="52" y="414" width="508" height="98" rx="10" class="node"/>
+  <text x="68" y="442" class="heading">Source evidence &amp; calibration</text>
+  <text x="68" y="467">Cached paths, labels, wall / symbol candidates · source units</text>
+  <text x="68" y="491" class="small">Confirmed references → uniform scale → bounded JSON / SVG</text>
+  <path d="M304 512V547" class="flow"/>
+
+  <rect x="52" y="549" width="508" height="138" rx="10" fill="#fff" stroke="#8796db" stroke-width="1.8"/>
+  <text x="68" y="578" class="heading">AI runner &amp; tool executor</text>
+  <text x="68" y="605">Query evidence · calibrate · inspect current document</text>
+  <text x="68" y="629">Preview candidates · select schemas · apply mutations</text>
+  <text x="68" y="657" class="small">Inspect / build / review · working notes · context &amp; usage limits</text>
+  <path d="M560 590H622" class="flow"/>
+  <path d="M624 647H562" class="flow"/>
+  <rect x="624" y="522" width="224" height="182" rx="12" fill="#f1edff" stroke="#b5a4e8"/>
+  <text x="642" y="550" class="label">EXTERNAL AI PROVIDER</text>
+  <text x="642" y="580" class="heading">Claude</text>
+  <text x="642" y="606">Interprets evidence</text>
+  <text x="642" y="630">and requests tool calls</text>
+  <text x="642" y="662" class="small">Bounded text + selected tools</text>
+  <text x="642" y="684" class="small">Focused images when needed</text>
+
+  <path d="M304 687V735" class="flow"/>
+  <text x="320" y="717" class="small">proposed edits</text>
+  <rect x="52" y="737" width="508" height="128" rx="10" fill="#effaf5" stroke="#89bea3" stroke-width="1.8"/>
+  <text x="68" y="766" class="heading">Geometry core · @kerros/schema</text>
+  <text x="68" y="793">Shared junctions → space footprints → full validation</text>
+  <text x="68" y="819">Accept atomically, or keep the preceding valid project</text>
+  <text x="68" y="846" class="small">Project / calibration revisions protect candidate previews</text>
+  <path d="M52 807H16V617H50" class="flow return"/>
+  <text x="636" y="772" class="label">TOOL FEEDBACK</text>
+  <text x="636" y="798">Results and generated IDs</text>
+  <text x="636" y="823">or refusal diagnostics</text>
+  <text x="636" y="848" class="small">feed the next model turn.</text>
+
+  <path d="M304 865V948" class="flow"/>
+  <text x="324" y="923" class="small">accepted documents · chat · usage · checkpoints</text>
+  <path d="M560 458H598V988H564" class="flow return"/>
+  <text x="616" y="424" class="small">Separate SVG / image</text>
+  <text x="616" y="446" class="small">preview for the user</text>
+  <rect x="32" y="950" width="532" height="138" rx="12" fill="#eef2ff" stroke="#c7d2fe"/>
+  <text x="52" y="978" class="label">BROWSER · LIVE EDITOR</text>
+  <text x="52" y="1006" class="heading">Map + import sidebar + source overlay</text>
+  <text x="52" y="1033">Save accepted project, source, chat and session locally</text>
+  <text x="52" y="1062" class="small">Reload restores paused work · Continue supplies the live project</text>
+  <rect x="624" y="950" width="224" height="138" rx="12" fill="#fff" stroke="#d5dce6"/>
+  <text x="642" y="979" class="heading">Human review</text>
+  <text x="642" y="1007">Check scale and connections</text>
+  <text x="642" y="1033">Send further instructions</text>
+  <text x="642" y="1062" class="small">Pause before manual edits</text>
+</svg>

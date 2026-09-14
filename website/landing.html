@@ -7,12 +7,12 @@
       ></a
     >
     <nav aria-label="Main navigation">
-      <a href="#showcases">Watch</a><a href="./guide/getting-started.html">Documentation</a
+      <a href="#showcases">Watch</a><a href="#ai-import">AI import</a><a href="./guide/getting-started.html">Documentation</a
       ><a href="https://github.com/kherrala/kerros">GitHub ↗</a>
     </nav>
     <div class="lp-nav-actions">
       <button class="lp-theme" type="button" aria-label="Switch color theme">◐</button
-      ><a class="lp-button lp-small" href="./app.html">Open editor <span aria-hidden="true">↗</span></a>
+      ><a class="lp-button lp-small" href="./app.html" target="_self">Open editor <span aria-hidden="true">↗</span></a>
     </div>
   </header>
   <main id="main">
@@ -21,10 +21,11 @@
       <h1 id="lp-title">A floor plan you<br>can <em>walk through.</em></h1>
       <div class="lp-hero-bottom">
         <p>
-          Draw connected spaces on a real map. Explore the building in 3D. Find your way from one floor to the next.
+          Draw connected spaces on a real map, or import a drawing with AI. Explore the building in 3D and find your way
+          from one floor to the next.
         </p>
         <div class="lp-actions">
-          <a class="lp-button" href="./app.html">Start building <span aria-hidden="true">↗</span></a
+          <a class="lp-button" href="./app.html" target="_self">Start building <span aria-hidden="true">↗</span></a
           ><a class="lp-text-link" href="#showcases">See it in motion <span aria-hidden="true">↓</span></a>
         </div>
       </div>
@@ -85,7 +86,7 @@
             <li>Underground floors and mezzanines</li>
             <li>Elevators, stairs and escalators in POV</li>
           </ul>
-          <a class="lp-text-link" href="./app.html">Explore the sample buildings <span aria-hidden="true">↗</span></a>
+          <a class="lp-text-link" href="./app.html" target="_self">Explore the sample buildings <span aria-hidden="true">↗</span></a>
         </div>
         <figure class="lp-film">
           <video
@@ -110,8 +111,8 @@
           <span class="lp-number">03 / NAVIGATE</span>
           <h3>Find a way through<br>the impossible.</h3>
           <p>
-            The Backrooms puts the same model to work across three office levels and two tiled bath levels. Walk the
-            corridors, descend to the pools and play a route to your destination.
+            Start beside a pool in the tiled bath levels. Find a route upstairs, ride the elevator and emerge into
+            the offices. Five connected levels, explored through the same indoor navigation model.
           </p>
           <ul>
             <li>First-person movement with adjustable FOV</li>
@@ -130,17 +131,47 @@
             preload="none"
             muted
             poster="/media/backrooms-route.jpg"
-            aria-label="Walking the Backrooms across levels and playing a wayfinding route"
+            aria-label="Walking from a Backrooms pool room to the offices using elevator route playback"
           >
             <source src="/media/backrooms-route.mp4" type="video/mp4">
             <track kind="captions" src="./media/backrooms-route.vtt" srclang="en" label="Demo annotations" default>
           </video>
-          <figcaption><span>POV & WAYFINDING</span><span>Offices · baths · a route between floors</span></figcaption>
+          <figcaption><span>POV & WAYFINDING</span><span>Pool rooms · elevator · offices</span></figcaption>
         </figure>
       </article>
       <p class="lp-recording-note">
         Silent recordings with on-screen annotations. Open a demo to hear its ambient sound and music.
       </p>
+    </section>
+    <section id="ai-import" class="lp-model lp-import" aria-labelledby="lp-import-title">
+      <div>
+        <p class="lp-eyebrow">FROM DRAWING TO EDITABLE PLAN</p>
+        <h2 id="lp-import-title">Bring a drawing.<br>Build it with AI.</h2>
+        <p>
+          Import an image, PDF or DWG with Claude. Watch accepted walls and rooms appear in your live project,
+          compare the detected vectors with the original drawing, and guide the work through chat.
+        </p>
+        <a class="lp-text-link" href="./guide/ai-import.html"
+          >Set up AI import <span aria-hidden="true">↗</span></a
+        >
+      </div>
+      <div class="lp-model-details">
+        <div>
+          <span>01</span>
+          <h3>Set the scale</h3>
+          <p>Supply a known width, depth or footprint area. Add the building type, floor count and instructions for the drawing.</p>
+        </div>
+        <div>
+          <span>02</span>
+          <h3>Follow every accepted edit</h3>
+          <p>Read activity and token usage in the sidebar. Inspect the SVG overlay in fullscreen while geometry checks validate each batch.</p>
+        </div>
+        <div>
+          <span>03</span>
+          <h3>Pause, review and continue</h3>
+          <p>Accepted changes save automatically. Return after a reload, make corrections and continue with the saved source and instructions.</p>
+        </div>
+      </div>
     </section>
     <section class="lp-model" aria-labelledby="lp-model-title">
       <div>
@@ -185,7 +216,14 @@
       <div>
         <p class="lp-eyebrow">FOR DEVELOPERS</p>
         <h2 id="lp-developer-title">Use the parts you need.</h2>
-        <p>Four packages, from a framework-free model to a complete React editor.</p>
+        <p>Five modules, from a framework-free model to a React editor and a Node.js import backend.</p>
+        <p class="lp-developer-setup">
+          Run the apps, documentation and import backend together with <code>make up</code>.
+          Claude imports use your own server-side API key.
+        </p>
+        <a class="lp-text-link" href="./guide/development.html"
+          >Docker developer setup <span aria-hidden="true">↗</span></a
+        >
       </div>
       <div class="lp-packages">
         <a href="./reference/schema.html"
@@ -193,9 +231,11 @@
         ><a href="./reference/viewer.html"
           ><code>@kerros/viewer</code><span>Embeddable 2D, 3D and POV viewing</span><b aria-hidden="true">↗</b></a
         ><a href="./reference/import.html"
-          ><code>@kerros/import</code><span>CAD and geospatial import tools</span><b aria-hidden="true">↗</b></a
+          ><code>@kerros/import</code><span>Browser-safe CAD entities and geospatial imports</span><b aria-hidden="true">↗</b></a
         ><a href="./reference/editor.html"
           ><code>@kerros/editor</code><span>The full authoring interface</span><b aria-hidden="true">↗</b></a
+        ><a href="./reference/server.html"
+          ><code>@kerros/server</code><span>PDF/DWG extraction, OpenCV analysis and AI import</span><b aria-hidden="true">↗</b></a
         >
       </div>
     </section>
@@ -203,7 +243,7 @@
       <p class="lp-eyebrow">YOUR NEXT FLOOR STARTS HERE</p>
       <h2>Make room for your ideas.</h2>
       <div class="lp-actions">
-        <a class="lp-button" href="./app.html">Open the editor <span aria-hidden="true">↗</span></a
+        <a class="lp-button" href="./app.html" target="_self">Open the editor <span aria-hidden="true">↗</span></a
         ><a class="lp-text-link" href="./guide/getting-started.html"
           >Integration guide <span aria-hidden="true">↗</span></a
         >

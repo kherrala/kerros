@@ -4,6 +4,9 @@ Node-only PDF/DWG extraction, source analysis and AI import execution. The packa
 
 The editor uses `PlannerAdapters.aiImport` for streamed project changes and `PlannerAdapters.pdfDrawing` for PDF reference pages. It receives JSON and PNG responses; PDF.js, its worker, native canvas, the Claude SDK, the AI tool schema and source-analysis implementations stay on the server. Browser builds fail if these dependencies enter any eager or lazy chunk. `@kerros/import` remains the browser-safe converter for already extracted entity JSON.
 
+See [AI import engine and integration](./ai-import) for the architecture diagram, Claude configuration,
+streaming lifecycle, CLI, context limits and checkpoints. End-user controls are in [Import features](../guide/ai-import).
+
 ## Build and package
 
 ```sh
@@ -90,7 +93,7 @@ Recalibration invalidates previous transform IDs and cursors. The source artifac
 
 `runAiPlanImport(provider, source, options)` owns the provider-neutral tool loop and applies every proposed mutation atomically through the core. `createClaudeProvider({ apiKey, model?, onText? })` supplies the reference Claude provider; custom providers implement `AiProvider.turn`. The API key belongs to the host backend. `AI_IMPORT_TOOLS` and `AI_IMPORT_SYSTEM` expose the complete schema and prompt.
 
-Options include `base`, `brief`, `instructions`, `rasterize`, `checkpoint`, token/turn limits, and `onDocument`, `onCheckpoint`, `onEvent`, `onUsage` and `onOperation` callbacks. Results include a serializable `checkpoint` and optional `pause` (`input-budget`, `output-budget`, `turn-limit` or `refusals`). Limits return the accepted document normally; provider failures still throw. `AiProvider.turn` receives `maxOutputTokens` so a provider can honor the remaining allowance. Keep accepted documents in the host's repository and forward progress to the browser. See [AI import](../guide/ai-import) for the live-project lifecycle, context compaction and continuation behavior.
+Options include `base`, `brief`, `instructions`, `rasterize`, `checkpoint`, token/turn limits, and `onDocument`, `onCheckpoint`, `onEvent`, `onUsage` and `onOperation` callbacks. Results include a serializable `checkpoint` and optional `pause` (`input-budget`, `output-budget`, `turn-limit`, `refusals` or `repeated-tools`). Limits return the accepted document normally; provider failures still throw. `AiProvider.turn` receives `maxOutputTokens` so a provider can honor the remaining allowance. Keep accepted documents in the host's repository and forward progress to the browser. See [AI import engine and integration](./ai-import) for the live-project lifecycle, context compaction and continuation behavior.
 
 `renderPdfDrawing(bytes, page)` converts a reference PDF page to PNG without a model. The reference endpoint is `POST /api/ai-import/preview` with multipart `file` and `page`, plus the same-origin `X-Kerros-Import: 1` header. It works without a Claude key and does not start the import worker.
 

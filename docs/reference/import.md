@@ -39,7 +39,7 @@ polygons and dimensions are regenerated from the junctions. Call `refreshBoundar
 
 ## Server extraction and AI import
 
-The AI APIs moved to [`@kerros/server`](./server). Use that entry point for `runAiPlanImport`, `AiProvider`, `PlanSource`, `AI_IMPORT_TOOLS` and `AI_IMPORT_SYSTEM`. The browser-safe `documentSvg(doc)` helper remains here. See [AI import with Claude](/guide/ai-import) for setup and the live-project workflow.
+The AI APIs moved to [`@kerros/server`](./server). Use that entry point for `runAiPlanImport`, `AiProvider`, `PlanSource`, `AI_IMPORT_TOOLS` and `AI_IMPORT_SYSTEM`. The browser-safe `documentSvg(doc)` helper remains here. See [Import features](/guide/ai-import) for setup and the live-project workflow.
 
 ## In the editor
 

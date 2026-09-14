@@ -52,7 +52,7 @@ boundaries, configuring a host and troubleshooting.
 Set `ANTHROPIC_API_KEY` in `.env.local` (without a `VITE_` prefix), then run `make up`.
 In the editor, **Import plan → AI import** accepts images, PDFs and DWGs, with validated edits saved to the live project
 and streamed Claude output. The key and tool execution stay on the local backend.
-See [AI import with Claude](docs/guide/ai-import.md) for Console setup, supported inputs,
+See [Import features](docs/guide/ai-import.md) for Console setup, supported inputs,
 architecture, review and CLI usage, and [development setup](docs/guide/development.md) for Docker.
 
 ## Feature overview

@@ -2,7 +2,7 @@
 
 Kerros separates source evidence from editable building geometry. Local extraction finds paths, labels and possible walls; calibrated text tools let the model interpret that evidence. Candidate edits then pass through the same geometry core as manual editing. An SVG visualizes the evidence, while rooms, shared boundaries and navigation belong to the project model.
 
-For the editor workflow, sidebar controls and API-key setup, see [AI import with Claude](./ai-import). For exported types, tool parameters and host integration, see [`@kerros/server`](../reference/server).
+For the editor workflow, sidebar controls and API-key setup, see [Import features](./ai-import). For exported types, tool parameters and host integration, see [`@kerros/server`](../reference/server).
 
 ## From drawing to live project
 
@@ -99,7 +99,7 @@ The editor's **Analysis** tab displays a restricted SVG with layer controls, zoo
 
 The model works through inspect, build and review phases. Build requests remove images and use calibrated evidence, a compact source plan, working notes and selected mutation schemas. A focused image can be requested after explicitly returning to review. Context compaction retains a semantic checkpoint; the full document remains accessible through bounded inspection tools.
 
-Checkpoints retain calibration, phase, source plan, notes, selected schemas, analysis-cache recipes, adoption mappings and recent human instructions. They contain neither source pixels nor a second project document. Continuation combines the checkpoint with the current live project, preserving manual corrections. Artifact restoration verifies source hash/version; pending edit previews must be regenerated. Turn/token limits pause normally and require an explicit continuation, while session token totals remain cumulative.
+Checkpoints retain calibration, phase, source plan, notes, selected schemas, analysis-cache recipes, adoption mappings and recent human instructions. They contain neither source pixels nor a second project document. Continuation combines the checkpoint with the current live project, preserving manual corrections. Artifact restoration verifies the source hash. A new extraction version refreshes evidence and requires calibration review while preserving accepted geometry; pending edit previews must be regenerated. Turn/token limits pause normally and require an explicit continuation, while session token totals remain cumulative.
 
 The sticky **Activity** composer sends instructions between model turns. Drafts and queued messages are saved before transmission; unacknowledged messages remain available for continuation if the run ends. Hiding the sidebar keeps the import running. Reloading disconnects it and restores the saved session as paused. See the [import guide](./ai-import) for controls and the [server reference](../reference/server#live-instructions-and-source-preview) for the streaming protocol.
 
@@ -110,3 +110,5 @@ Ordinary model-loop and protocol tests use scripted providers and consume no LLM
 Run `make test-raster` for the explicit native OpenCV/OCR fixtures in an isolated Docker container with networking disabled. Fixtures cover wall centreline/thickness accuracy, preserved gaps and close parallels, 15° geometry, L-shaped contours, page frames, OCR, cropped/resized transforms, cache reuse, mixed PDFs and rotated/mirrored exemplars with hard negatives.
 
 Core validity and source accuracy are different properties: a valid plan can still misinterpret the drawing. Detector counts from a user drawing do not measure accuracy. Paid provider benchmarks require an explicit run; the implementation does not claim a measured token- or cost-saving percentage.
+
+For the related proofs and error bounds, see [Image analysis and calibration](/academic/image-analysis) and [Geometry and topology validation](/academic/validation).

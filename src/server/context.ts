@@ -37,9 +37,11 @@ export function compactImportContext(
   messages: AiMessage[],
   checkpoint: AiMessage,
   limit: number,
+  target = limit,
 ): { messages: AiMessage[]; estimatedTokens: number; compacted: boolean } {
   let estimatedTokens = estimateContextTokens(system, tools, messages);
-  if (estimatedTokens <= limit && messages.length <= 13) return { messages, estimatedTokens, compacted: false };
+  if (estimatedTokens <= Math.min(target, limit) && messages.length <= 13)
+    return { messages, estimatedTokens, compacted: false };
   const groups: AiMessage[][] = [];
   for (const message of messages.slice(1)) {
     if (message.role === 'assistant') groups.push([message]);
@@ -49,14 +51,16 @@ export function compactImportContext(
   let recent = groups.slice(-3);
   let next = [checkpoint, ...recent.flat()];
   estimatedTokens = estimateContextTokens(system, tools, next);
-  while (recent.length && estimatedTokens > limit) {
+  // The routine history target is soft. Never erase the latest tool results to hit it:
+  // doing so sends the same checkpoint back and makes the model repeat its last queries.
+  while (recent.length > 1 && estimatedTokens > Math.min(target, limit)) {
     recent = recent.slice(1);
     next = [checkpoint, ...recent.flat()];
     estimatedTokens = estimateContextTokens(system, tools, next);
   }
   if (estimatedTokens > limit)
     throw new Error(
-      'Import paused: the source overview and tool definitions exceed the context budget. Use a smaller source image or raise the import context limit.',
+      'Import paused: the latest tool exchange and working checkpoint exceed the context budget. Narrow the candidate/document queries or raise the import context limit.',
     );
   return { messages: next, estimatedTokens, compacted: true };
 }

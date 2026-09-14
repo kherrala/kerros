@@ -13,6 +13,9 @@ services:
         - action: sync
           path: docs
           target: /app/docs
+        - action: sync
+          path: website
+          target: /app/website
         - action: rebuild
           path: package.json
         - action: rebuild
@@ -28,10 +31,13 @@ services:
       VITE_MML_API_KEY: ${VITE_MML_API_KEY:-}
       VITE_AI_IMPORT_URL: /api/ai-import
       KERROS_API_PROXY_TARGET: http://api:3001
+      KERROS_DOCS_PROXY_TARGET: http://docs:5174
     command: [npm, run, dev, --, --host, 0.0.0.0, --port, "5173", --strictPort]
     depends_on:
       api:
         condition: service_healthy
+      docs:
+        condition: service_started
     develop:
       watch:
         - action: sync

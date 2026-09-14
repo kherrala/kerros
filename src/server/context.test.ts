@@ -1,6 +1,32 @@
 import { expect, it } from 'vitest';
-import { compactImportContext, hasContextImage, withoutContextImages } from './context';
+import { compactImportContext, estimateContextTokens, hasContextImage, withoutContextImages } from './context';
 import type { AiMessage } from './aiImport';
+
+it('keeps every result in the latest parallel tool batch above the soft target', () => {
+  const checkpoint: AiMessage = { role: 'user', content: [{ type: 'text', text: 'Saved working plan' }] };
+  const latest: AiMessage[] = [
+    {
+      role: 'assistant',
+      content: ['document', 'walls', 'labels'].map(id => ({ type: 'tool_use', id, name: id, input: {} })),
+    },
+    {
+      role: 'user',
+      content: ['document', 'walls', 'labels'].map(id => ({
+        type: 'tool_result',
+        toolUseId: id,
+        content: [{ type: 'text', text: `${id}: ${'measured evidence '.repeat(500)}` }],
+      })),
+    },
+  ];
+  const bounded = compactImportContext('', [], [checkpoint, ...latest], checkpoint, 12000, 2000);
+  expect(bounded.compacted).toBe(true);
+  expect(bounded.messages).toEqual([checkpoint, ...latest]);
+  expect(bounded.estimatedTokens).toBeGreaterThan(2000);
+  expect(bounded.estimatedTokens).toBeLessThanOrEqual(12000);
+  // A hard ceiling is still enforced; it must never silently replace results with stale notes.
+  expect(() => compactImportContext('', [], [checkpoint, ...latest], checkpoint, 2000)).toThrow('latest tool exchange');
+  expect(estimateContextTokens('', [], bounded.messages)).toBe(bounded.estimatedTokens);
+});
 
 it('bounds history while retaining whole tool exchanges and original signed blocks', () => {
   const original: AiMessage = { role: 'user', content: [{ type: 'text', text: 'Exterior width 20 m' }] };

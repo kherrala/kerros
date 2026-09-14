@@ -332,44 +332,48 @@ async function backrooms(page, shot) {
   await page.goto(`${APP}/app.html`);
   await page.getByRole('button', { name: 'Open offices', exact: true }).click();
   await ready(page);
+  await floor(page, 'Deep bath chambers');
   // The map's initial ready signal precedes the lazy Three.js scene and shader compilation.
   await page.waitForFunction(() => {
     const layer = window.__kerrosMap?.getLayer('kerros-3d')?.implementation;
-    return layer?.walking && layer?.renderer?.info.render.calls > 0 && window.__kerrosWalk;
+    return layer?.walking && layer?.renderer?.info.render.calls > 0 &&
+      layer.activeFloor === 'backrooms-pool-1' && window.__kerrosWalk;
   });
   await page.waitForTimeout(6000);
   await page.evaluate(() => {
+    const l = window.__kerrosMap.getLayer('kerros-3d').implementation;
+    const pool = l.project.objects.find(o => o.floorId === 'backrooms-pool-1' && o.water);
     const w = window.__kerrosWalk;
-    w.pitch = 86;
-    w.place([2, 0], 90);
+    w.pitch = 82;
+    w.place([pool.position[0], Math.min(...pool.rings[0].map(p => p[1])) - 1.1], 0);
   });
   await page.waitForTimeout(1000);
+  await page.screenshot({ path: join(diagnostics, 'backrooms-route-start.png') });
   await shot(
-    'Walk the Backrooms at eye level. The field of view is adjustable.',
+    'Begin in the deep baths: tiled rooms, clear water and blue underwater light.',
     async () => {
-      await walk(page, ['KeyW'], 1600);
-      await walk(page, ['KeyD'], 480);
-      await walk(page, ['KeyW'], 1000);
-      await walk(page, ['KeyA'], 360);
+      await walk(page, ['KeyD'], 500);
+      await walk(page, ['KeyE'], 1000);
+      await walk(page, ['KeyA'], 450);
     },
     900,
   );
   await shot(
-    'Choose a destination on another level and inspect the route.',
+    'Choose the office landing upstairs and inspect the cross-floor route.',
     async () => {
       await page.getByRole('button', { name: 'Show navigation panel' }).click();
-      await page.getByRole('textbox', { name: 'To', exact: true }).fill('Tall pool chamber 1');
-      await page.locator('.place-option').filter({ hasText: 'The endless baths' }).first().click();
+      await page.getByRole('textbox', { name: 'To', exact: true }).fill('Stair landing');
+      await page.locator('.place-option').filter({ hasText: 'Yellow offices' }).first().click();
       await expect(page.locator('.nav-step').first()).toBeVisible();
     },
     1500,
   );
   await shot(
-    'Follow the route: call and ride the lift, then walk to the pool.',
+    'Follow the route from the pool: call the lift, wait, board and ride to the offices.',
     async () => {
       await page.getByRole('button', { name: /Play/ }).click();
-      await expect(page.getByRole('button', { name: 'Active floor' })).toContainText('The endless baths', {
-        timeout: 60000,
+      await expect(page.getByRole('button', { name: 'Active floor' })).toContainText('Yellow offices', {
+        timeout: 90000,
       });
       await expect(page.getByRole('button', { name: 'Play route', exact: true })).toBeVisible({ timeout: 60000 });
       await expect(page.locator('.walk-status')).toContainText('Arrived');
@@ -381,31 +385,22 @@ async function backrooms(page, shot) {
   if (await pause.count()) await pause.click();
   await page.getByRole('button', { name: 'Clear route', exact: true }).click();
   await page.getByRole('button', { name: 'Close navigation' }).click();
-  await page.evaluate(() => {
-    const l = window.__kerrosMap.getLayer('kerros-3d').implementation;
-    const pool = l.project.objects.find(o => o.floorId === 'backrooms-pool-0' && o.water);
-    const ys = pool.rings[0].map(p => p[1]);
-    const w = window.__kerrosWalk;
-    w.pitch = 82;
-    w.place([pool.position[0], Math.min(...ys) - 1.1], 0);
-  });
-  await page.waitForTimeout(800);
   await shot(
-    'Explore tiled bath rooms with clear water and blue underwater lighting.',
+    'Continue on foot through the yellow offices at eye level.',
     async () => {
-      await walk(page, ['KeyD'], 500);
-      await walk(page, ['KeyE'], 1400);
-      await walk(page, ['KeyA'], 450);
+      await walk(page, ['KeyW'], 1600);
+      await walk(page, ['KeyD'], 480);
+      await walk(page, ['KeyW'], 1000);
     },
     1600,
   );
   await shot(
-    'Continue down to the deep bath chambers.',
+    'Switch levels to explore another pool in the endless baths.',
     async () => {
-      await floor(page, 'Deep bath chambers');
+      await floor(page, 'The endless baths');
       await page.evaluate(() => {
         const l = window.__kerrosMap.getLayer('kerros-3d').implementation;
-        const pool = l.project.objects.find(o => o.floorId === 'backrooms-pool-1' && o.water);
+        const pool = l.project.objects.find(o => o.floorId === 'backrooms-pool-0' && o.water);
         const w = window.__kerrosWalk;
         w.pitch = 82;
         w.place([pool.position[0], Math.min(...pool.rings[0].map(p => p[1])) - 1.1], 0);

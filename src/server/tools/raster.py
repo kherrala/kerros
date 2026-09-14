@@ -111,22 +111,40 @@ def main():
             raise ValueError("Tesseract is unavailable. Use the API Docker image or request ocr:false for geometry only.")
         if len(process.stdout) > 4 * 1024 * 1024:
             raise ValueError("OCR output is too large; analyse a smaller region.")
-        for row in csv.DictReader(io.StringIO(process.stdout), delimiter='\t', quoting=csv.QUOTE_NONE):
+        words = list(csv.DictReader(io.StringIO(process.stdout), delimiter='\t', quoting=csv.QUOTE_NONE))
+        # Drawing strokes can be confidently misread as giant letters. Derive a page's
+        # typical word height from plausible high-confidence boxes, not from the sheet size.
+        heights = [int(row['height']) for row in words if row['level'] == '5' and float(row['conf']) >= 70
+                   and any(c.isalnum() for c in row.get('text', '')) and 4 <= int(row['height']) < h * .08
+                   and int(row['width']) < max(1, len(row.get('text', ''))) * int(row['height']) * 2]
+        typical_height = float(np.median(heights)) if heights else h * .025
+        rejected_words = 0
+        for row in words:
             text = row.get('text', '').strip()
             if row['level'] != '5' or not text or not any(c.isalnum() for c in text) or float(row['conf']) < 50:
                 continue
             x, y, tw, th = (int(row[k]) for k in ('left', 'top', 'width', 'height'))
-            if tw > w * .7 or th > h * .15 or th < 4:
+            if tw > w * .7 or th > min(h * .15, max(12, typical_height * 2.5)) or th < 4 or tw > len(text) * th * 2:
+                rejected_words += 1
+                continue
+            # Never erase an intact drawing rule merely because OCR called it a word.
+            # A normal glyph can fill a column; only reject rules longer than text height.
+            roi = mask[max(0, y - 1):min(h, y + th + 1), max(0, x - 1):min(w, x + tw + 1)]
+            if ((th > typical_height * 2 and (roi > 0).mean(axis=0).max() > .95)
+                    or (tw > typical_height * 2.5 and (roi > 0).mean(axis=1).max() > .95)):
+                rejected_words += 1
                 continue
             add('label', [['M', x, y], ['L', x + tw, y], ['L', x + tw, y + th], ['L', x, y + th], ['Z']],
                 'Tesseract word box; read labels/dimensions as evidence, never as automatic scale.',
                 text=text[:200], strokeWidth=th, score=round(float(row['conf']) / 100, 3), layer='labels',
                 uncertainty='OCR may misread letters, decimal separators or units.')
-            # Only confident word boxes are masked; unrecognized text stays uncertain line evidence.
+            # Only plausible confident word boxes are masked; unknown text remains uncertain.
             mask[max(0, y - 1):min(h, y + th + 1), max(0, x - 1):min(w, x + tw + 1)] = 0
             if len(candidates) >= 1000:
                 warnings.append('OCR labels limited to 1000; use a smaller region for the rest.')
                 break
+        if rejected_words:
+            warnings.append('%d implausible OCR boxes omitted; their drawing strokes were retained. Some genuine large labels may also be omitted.' % rejected_words)
     else:
         warnings.append('OCR disabled: text and dimension strokes may remain among line candidates.')
 
@@ -180,10 +198,11 @@ def main():
             samples = a + np.linspace(lo, hi, min(150, max(12, int(hi - lo))))[:, None] * u
             interior = np.mean([occupancy(samples + normal * separation * f) for f in (.2, .4, .6, .8)])
             outside = np.mean([occupancy(samples - normal * 2), occupancy(samples + normal * (separation + 2))])
-            solid = interior > .82 and outside < .25
+            # A majority-filled section includes rasterized hatching/grey infill.
+            solid = interior > .6 and outside < .25
             # Hollow pairing spans both thin boundary strokes; the outside must be clear.
             faces = min(np.mean(occupancy(samples + normal * 1.5)), np.mean(occupancy(samples + normal * (separation - 1.5))))
-            hollow = separation >= 8 and interior < .4 and faces > .65 and outside < .2
+            hollow = separation >= 8 and interior <= .6 and faces > .65 and outside < .2
             if not solid and not hollow:
                 continue
             p, q = a + lo * u + normal * separation / 2, a + hi * u + normal * separation / 2
@@ -191,9 +210,17 @@ def main():
             proposals.append((score, hi - lo, i, j, p, q, separation, solid))
     proposals.sort(key=lambda p: (-p[0], -p[1], p[2], p[3]))
     accepted = []
-    used = set()
+    used = {}
     for score, length, i, j, a, b, thickness, solid in proposals:
-        if i in used or j in used:
+        # One long face can support several disjoint segments, for example on the
+        # uninterrupted side of a T junction. Reusing its occupied part is forbidden.
+        spans = []
+        for index in (i, j):
+            origin, end, face_length = lines[index]
+            direction = (end - origin) / face_length
+            spans.append(tuple(sorted((float(np.dot(a - origin, direction)), float(np.dot(b - origin, direction))))))
+        if any(min(hi, old_hi) - max(lo, old_lo) > 3
+               for index, (lo, hi) in zip((i, j), spans) for old_lo, old_hi in used.get(index, [])):
             continue
         # Suppress overlapping alternative pairings, never join across empty gaps.
         duplicate = False
@@ -209,7 +236,8 @@ def main():
                 break
         if duplicate:
             continue
-        used.update((i, j))
+        for index, span in zip((i, j), spans):
+            used.setdefault(index, []).append(span)
         accepted.append((a, b, thickness))
         add('wall', [['M', *np.round(a, 3)], ['L', *np.round(b, 3)]],
             'Paired stroke faces with %s cross-sectional ink support.' % ('filled' if solid else 'double-line'),

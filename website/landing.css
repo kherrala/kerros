@@ -345,6 +345,10 @@ html.dark .landing {
 .lp-model h2 {
   font-size: 38px;
 }
+.lp-import {
+  background: var(--lp-tint);
+  scroll-margin-top: 30px;
+}
 .lp-model > div > p:not(.lp-eyebrow) {
   font-size: 15px;
   line-height: 1.8;
@@ -388,6 +392,9 @@ html.dark .landing {
 .lp-developers > div > p:not(.lp-eyebrow) {
   max-width: 330px;
   font-size: 16px;
+}
+.lp-developer-setup {
+  margin: 24px 0 !important;
 }
 .lp-packages a {
   display: grid;

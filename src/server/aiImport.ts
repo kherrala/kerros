@@ -30,6 +30,30 @@ import type { SourceAnalysisQuery } from './rasterAnalysis';
 import { addTokenUsage, emptyTokenUsage, readTokenUsage, type AiTokenUsage } from '../import/usage';
 import type { ImportAnalysisPreview } from '../import/analysisPreview';
 import { mergeImportInstructions, type ImportInstruction } from '../import/instructions';
+import { createHash } from 'node:crypto';
+
+const INSPECTION_TOOLS = new Set([
+  'list_layers',
+  'extract',
+  'render',
+  'inspect_document',
+  'render_document',
+  'analyse_source',
+  'query_candidates',
+  'inspect_candidate',
+  'render_analysis_overlay',
+]);
+// IDs and key/order differences do not make the same query/result batch new evidence.
+const stableJson = (value: unknown): string =>
+  JSON.stringify(value, (_key, item) =>
+    item && typeof item === 'object' && !Array.isArray(item)
+      ? Object.fromEntries(
+          Object.keys(item)
+            .sort()
+            .map(key => [key, item[key]]),
+        )
+      : item,
+  );
 
 // ——— The neutral conversation shapes a host maps to its SDK. Kept minimal on purpose.
 export type AiContent =
@@ -367,13 +391,22 @@ export async function runAiPlanImport(
     },
   );
   if (saved?.decisions) analysis.adoption!.decisions = structuredClone(saved.decisions);
-  await analysis.restore(saved?.analysis ?? [], sameBrief);
+  const analysisRefreshed = await analysis.restore(saved?.analysis ?? [], sameBrief);
+  const reusablePlan = sameBrief && !analysisRefreshed;
+  if (analysisRefreshed) {
+    calibration = undefined;
+    notes =
+      `Source analysis updated: candidate IDs and scale need review. Preserve existing project geometry; inspect current objects before further edits. Prior notes: ${notes}`.slice(
+        0,
+        3000,
+      );
+  }
   if (options.onAnalysis && saved?.analysis.length) {
     const preview = await analysis.preview();
     if (preview) await options.onAnalysis(preview);
   }
-  let sourcePlan = sameBrief ? (saved?.sourcePlan ?? '') : '';
-  let phase: 'inspect' | 'build' | 'review' = sameBrief ? (saved?.phase ?? 'inspect') : 'inspect';
+  let sourcePlan = reusablePlan ? (saved?.sourcePlan ?? '') : '';
+  let phase: 'inspect' | 'build' | 'review' = reusablePlan ? (saved?.phase ?? 'inspect') : 'inspect';
   if (!sameBrief) notes = `Template changed: recheck scale before editing. Prior notes: ${notes}`.slice(0, 3000);
   let mutationKinds = saved?.mutationKinds.length ? readMutationKinds(saved.mutationKinds) : DEFAULT_MUTATION_KINDS;
   const activeTools = () => AI_IMPORT_TOOLS.map(t => (t.name === 'apply_mutations' ? mutationTool(mutationKinds) : t));
@@ -700,8 +733,13 @@ export async function runAiPlanImport(
   let turn = 0;
   let providerTurns = 0;
   let usage = emptyTokenUsage();
+  let previousInspection = '';
+  let repeatedInspections = 0;
   for (; turn < maxTurns; turn++) {
-    collectInstructions();
+    if (collectInstructions()) {
+      previousInspection = '';
+      repeatedInspections = 0;
+    }
     viewsSentThisTurn.clear();
     const inputUsed = usage.inputTokens + usage.cacheReadTokens + usage.cacheWriteTokens;
     if (inputUsed >= limits.input || usage.outputTokens >= limits.output) {
@@ -726,7 +764,7 @@ export async function runAiPlanImport(
       limits.context,
       Math.max(12_000, estimateContextTokens(system, tools, [savedContext]) + 2000),
     );
-    const context = compactImportContext(system, tools, messages, savedContext, contextLimit);
+    const context = compactImportContext(system, tools, messages, savedContext, limits.context, contextLimit);
     messages = context.messages;
     await options.onCheckpoint?.(saveCheckpoint());
     options.onOperation?.({
@@ -842,6 +880,33 @@ export async function runAiPlanImport(
       await options.onCheckpoint?.(saveCheckpoint());
     }
     messages.push({ role: 'user', content: results });
+    if (toolUses.every(use => INSPECTION_TOOLS.has(use.name))) {
+      const batch = toolUses
+        .map((use, i) => {
+          const result = results[i] as Extract<AiContent, { type: 'tool_result' }>;
+          return stableJson({ name: use.name, input: use.input, content: result.content, isError: !!result.isError });
+        })
+        .sort();
+      const fingerprint = createHash('sha256').update(JSON.stringify(batch)).digest('hex');
+      repeatedInspections = fingerprint === previousInspection ? repeatedInspections + 1 : 1;
+      previousInspection = fingerprint;
+      if (repeatedInspections >= 3) {
+        pause = {
+          reason: 'repeated-tools',
+          message:
+            'Paused after three identical inspection batches returned unchanged results. Accepted edits and working notes are saved. Review the source or give a more specific instruction before continuing.',
+        };
+        break;
+      }
+      if (repeatedInspections === 2)
+        results.push({
+          type: 'text',
+          text: 'These exact inspection calls returned the same results twice. Use the results already above; advance the candidate cursor, narrow a specific unresolved query, save your source plan or make the next edit. Do not repeat this batch unchanged.',
+        });
+    } else {
+      previousInspection = '';
+      repeatedInspections = 0;
+    }
   }
   if (!pause && turn === maxTurns)
     pause = { reason: 'turn-limit', message: `Paused after ${maxTurns} turns. Continue resumes the saved work.` };

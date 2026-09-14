@@ -24,7 +24,7 @@ install: ## Install dependencies
 up: ## Start apps, documentation and AI importer in Docker, with live source updates
 	@test -f .env.local || cp .env.example .env.local
 	@echo "  editor  http://127.0.0.1:$(PORT)/app.html"
-	@echo "  docs    http://127.0.0.1:$(DOCS_PORT)/"
+	@echo "  docs    http://127.0.0.1:$(PORT)/guide/"
 	PORT=$(PORT) DOCS_PORT=$(DOCS_PORT) docker compose --env-file .env.local up --build --watch
 
 down: ## Stop the Docker development stack

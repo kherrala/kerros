@@ -12,7 +12,7 @@ For drawing behavior, read [Space geometry & walls](/guide/geometry): how **Spac
 
 ## Importing a drawing with AI
 
-The reference editor's **Import plan → AI import** sidebar accepts images, PDFs and DWGs. Supply known dimensions or a footprint area, then follow Claude's activity as validated edits appear and save in the live project. The sidebar includes a source SVG overlay, chat, token usage and saved continuation after a reload. See [AI import with Claude](./ai-import) for setup, controls and troubleshooting, and [source analysis and calibration](./ai-import-analysis) for the extraction tools and geometry checks.
+The reference editor's **Import plan → AI import** sidebar accepts images, PDFs and DWGs. Supply known dimensions or a footprint area, then follow Claude's activity as validated edits appear and save in the live project. The sidebar includes a source SVG overlay, chat, token usage and saved continuation after a reload. See [Import features](./ai-import) for setup, controls and troubleshooting, and [source analysis and calibration](./ai-import-analysis) for the extraction tools and geometry checks.
 
 ## Keyboard navigation
 

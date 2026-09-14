@@ -90,6 +90,20 @@ suite('local OpenCV source tools (no LLM)', () => {
     expect(walls(a).some(c => horizontal(c, 313, 100, 600))).toBe(false);
   }, 60_000);
 
+  it('retains a partially filled wall and both sides of a T junction', async () => {
+    const { canvas, c, line } = drawing();
+    line(80, 160, 700, 160, 16);
+    line(400, 160, 400, 280, 16);
+    line(80, 420, 700, 420, 16);
+    // Interrupted infill leaves both outer faces intact, as in a hatched partition.
+    c.fillStyle = 'white';
+    for (let x = 84; x < 698; x += 8) c.fillRect(x, 414, 2, 12);
+    const a = await analyse(canvas.toBuffer('image/png'));
+    expect(walls(a).some(c => horizontal(c, 160, 90, 380))).toBe(true);
+    expect(walls(a).some(c => horizontal(c, 160, 420, 690))).toBe(true);
+    expect(walls(a).some(c => horizontal(c, 420, 90, 690))).toBe(true);
+  }, 60_000);
+
   it('pairs thin double-line wall faces, while retaining the uncertainty', async () => {
     const { canvas, line } = drawing();
     line(80, 190, 700, 190, 2); line(80, 204, 700, 204, 2);

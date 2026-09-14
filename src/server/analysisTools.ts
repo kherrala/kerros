@@ -201,15 +201,21 @@ export class SourceAnalysisTools {
     return sourceAnalysisPreview(a, this.transforms.get(a.id), selectedIds, this.previewImages.get(key));
   }
   async restore(recipes: ImportCheckpoint['analysis'], recalibrate = true) {
+    let refreshed = false;
     for (const recipe of recipes) {
       if (!this.source.analyse) throw new Error('This host cannot restore source analysis.');
       const request = analysisRequest(recipe.request);
       const a = validateSourceAnalysis(await this.source.analyse(request));
-      if (a.id !== recipe.artifactId || a.sourceHash !== recipe.sourceHash)
-        throw new Error('The drawing or analysis version changed. Start a new source analysis.');
+      if (a.sourceHash !== recipe.sourceHash) throw new Error('The drawing changed. Start a new source analysis.');
+      const identical = a.id === recipe.artifactId;
+      refreshed ||= !identical;
       this.artifacts.set(a.id, a);
-      this.recipes.set(a.id, { ...recipe, ...(recalibrate ? {} : { calibration: undefined }) });
-      if (recalibrate && recipe.calibration) {
+      this.recipes.set(a.id, {
+        ...recipe,
+        artifactId: a.id,
+        ...(recalibrate && identical ? {} : { calibration: undefined }),
+      });
+      if (recalibrate && identical && recipe.calibration) {
         const { input, revision } = recipe.calibration;
         const transform = calibrateSource(
           a,
@@ -221,6 +227,7 @@ export class SourceAnalysisTools {
         this.revision = Math.max(this.revision, revision);
       }
     }
+    return refreshed;
   }
   async execute(name: string, input: Record<string, unknown>): Promise<string | undefined> {
     if (!ANALYSIS_TOOLS.some(t => t.name === name)) return;

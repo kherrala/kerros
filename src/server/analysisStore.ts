@@ -4,7 +4,7 @@ import { join } from 'node:path';
 import { analysisSvg, validateSourceAnalysis, ANALYSIS_MAX_BYTES, type SourceAnalysis } from './analysis';
 
 /** Change whenever extraction semantics change. Content-addressed files survive new runs/reloads. */
-export const ANALYSIS_VERSION = 'raster-2';
+export const ANALYSIS_VERSION = 'raster-3';
 export const sourceHash = (bytes: Uint8Array) => createHash('sha256').update(bytes).digest('hex');
 export class AnalysisStore {
   private pending = new Map<string, Promise<SourceAnalysis>>();

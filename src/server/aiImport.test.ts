@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { runAiPlanImport, AI_IMPORT_TOOLS, type AiContent, type AiProvider, type PlanSource } from './aiImport';
 import { validateProject } from '../schema';
+import { readImportPause } from '../import/checkpoint';
 import { documentSvg } from '../import/documentSvg';
 import { emptyTokenUsage, type AiTokenUsage } from '../import/usage';
 import { hasContextImage } from './context';
@@ -16,6 +17,62 @@ const call = (name: string, input: Record<string, unknown>): AiContent => ({
   id: crypto.randomUUID(),
   name,
   input,
+});
+
+it('pauses repeated unchanged inspection batches even if call order and IDs change', async () => {
+  let turns = 0;
+  const result = await runAiPlanImport(
+    {
+      turn: async ({ messages }) => {
+        if (turns === 2) expect(JSON.stringify(messages)).toContain('same results twice');
+        const uses = [call('inspect_document', {}), call('extract', { layers: 'walls' })];
+        return ++turns % 2 ? uses : uses.reverse();
+      },
+    },
+    source,
+    { rasterize: async () => '', maxTurns: 20 },
+  );
+  expect(turns).toBe(3);
+  expect(result.pause?.reason).toBe('repeated-tools');
+  expect(readImportPause(result.pause)).toEqual(result.pause);
+  expect(result.checkpoint.projectId).toBe(result.document.id);
+});
+
+it('does not treat advancing inspection pages as a loop', async () => {
+  let turns = 0;
+  const result = await runAiPlanImport(
+    {
+      turn: async () => (turns < 5 ? [call('inspect_document', { collection: 'objects', offset: turns++ * 10 })] : []),
+    },
+    source,
+    { rasterize: async () => '' },
+  );
+  expect(turns).toBe(5);
+  expect(result.pause).toBeUndefined();
+});
+
+it('delivers the full latest wall and label results instead of replaying a stale checkpoint', async () => {
+  let turns = 0;
+  await runAiPlanImport(
+    {
+      turn: async ({ messages }) => {
+        if (!turns++)
+          return [
+            call('inspect_document', {}),
+            call('extract', { layers: 'walls' }),
+            call('extract', { layers: 'labels' }),
+          ];
+        const results = messages.at(-1)!.content.filter(c => c.type === 'tool_result');
+        expect(results).toHaveLength(3);
+        expect(JSON.stringify(results[1])).toContain('FIRST walls');
+        expect(JSON.stringify(results[2])).toContain('FIRST labels');
+        return [];
+      },
+    },
+    { ...source, extract: async query => `FIRST ${query.layers}\n${'source measurement; '.repeat(520)}` },
+    { rasterize: async () => '' },
+  );
+  expect(turns).toBe(2);
 });
 
 it('replaces cumulative streamed usage, counts each turn once and reports mutation refusals', async () => {

@@ -123,7 +123,7 @@ export function readImportBudget(value: unknown): ImportBudget {
   return { inputTokens: b.inputTokens, outputTokens: b.outputTokens, maxTurns };
 }
 export interface ImportPause {
-  reason: 'input-budget' | 'output-budget' | 'turn-limit' | 'refusals';
+  reason: 'input-budget' | 'output-budget' | 'turn-limit' | 'refusals' | 'repeated-tools';
   message: string;
 }
 export function readImportPause(value: unknown): ImportPause | undefined {
@@ -131,7 +131,7 @@ export function readImportPause(value: unknown): ImportPause | undefined {
   const p = value as ImportPause;
   if (
     !p ||
-    !['input-budget', 'output-budget', 'turn-limit', 'refusals'].includes(p.reason) ||
+    !['input-budget', 'output-budget', 'turn-limit', 'refusals', 'repeated-tools'].includes(p.reason) ||
     typeof p.message !== 'string' ||
     p.message.length > 2000
   )
