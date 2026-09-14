@@ -13,3 +13,7 @@ probe*.png
 probe*.mjs
 packages/*/dist/
 docs/.vitepress/cache/
+# Keep only showcase posters and captions in Git.
+docs/public/media/*.mp4
+docs/public/media/*.webm
+docs/public/media/*.mov

@@ -60,6 +60,7 @@ budget: ## What a consumer pays to import each part of Kerros, measured against 
 test: ## Run the unit tests once
 	$(NPM) test
 	$(NPM) run test:server
+	$(NPM) run test:media
 	$(NPM) run check:ai-tools
 
 test-raster: ## Test OpenCV/OCR in an isolated Docker container, with no LLM/network calls

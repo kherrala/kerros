@@ -25,6 +25,18 @@ export function mountLanding() {
   };
   theme?.addEventListener('click', toggle);
   const videos = [...root.querySelectorAll('video')];
+  const mediaBase = import.meta.env.VITE_MEDIA_BASE_URL?.trim().replace(/\/+$/, '');
+  for (const video of videos) {
+    const source = video.querySelector('source[data-media-file]');
+    if (mediaBase && source) {
+      source.src = `${mediaBase}/${source.dataset.mediaFile}`;
+      video.load();
+    } else {
+      // Source-only installations still show the posters and links to interactive demos.
+      video.controls = false;
+    }
+  }
+  if (!mediaBase) root.querySelector('.lp-recording-note')?.setAttribute('hidden', '');
   const playing = e => {
     for (const video of videos) if (video !== e.target) video.pause();
   };

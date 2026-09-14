@@ -6,11 +6,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium, expect } from '@playwright/test';
+import { captureFrames, encodeFrames, sampleChapters } from './media-capture.mjs';
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url));
 const MEDIA = join(ROOT, 'docs/public/media');
+const VIDEO = join(ROOT, '.cache/media');
 const APP = 'http://127.0.0.1:5183';
-const SIZE = { width: 1600, height: 1000 };
+const SIZE = { width: 1920, height: 1080 };
 const requested = process.argv.slice(2);
 const want = name => !requested.length || requested.includes(name);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
@@ -92,7 +94,6 @@ async function record(name, action) {
   const dir = await mkdtemp(join(tmpdir(), `kerros-${name}-`));
   const context = await browser.newContext({
     viewport: SIZE,
-    recordVideo: { dir, size: SIZE },
     reducedMotion: 'no-preference',
   });
   // A cursor recorded inside the page makes the actual mouse gestures legible in headless capture.
@@ -125,27 +126,27 @@ async function record(name, action) {
       });
     });
   });
-  const started = Date.now(),
-    page = await context.newPage();
+  const page = await context.newPage();
+  const capture = await captureFrames(page, join(dir, 'frames'), SIZE);
   page.setDefaultTimeout(60000);
   const failures = [];
   page.on('pageerror', error => failures.push(error.message));
   const phases = [];
   const shot = async (label, fn, hold = 700, speed = 1) => {
     console.log(`${name}: ${label}`);
-    const start = (Date.now() - started) / 1000;
+    const start = capture.elapsed();
     await page.waitForTimeout(350);
     await fn();
     await page.waitForTimeout(hold);
-    phases.push({ start, end: (Date.now() - started) / 1000, speed, label });
+    phases.push({ start, end: capture.elapsed(), speed, label });
   };
   try {
     await action(page, shot);
     if (failures.length) throw new Error(`Runtime error during capture: ${failures.join('; ')}`);
     await page.screenshot({ path: join(diagnostics, `${name}-final.png`) });
-    const source = await page.video().path();
+    const frames = await capture.stop();
     await context.close();
-    await encode(source, name, phases, dir);
+    await encode(frames, name, phases);
     await rm(dir, { recursive: true, force: true });
   } catch (error) {
     await page.screenshot({ path: join(diagnostics, `${name}-failure.png`) }).catch(() => {});
@@ -425,45 +426,12 @@ const timestamp = seconds => {
   const ms = Math.round(seconds * 1000);
   return `${String(Math.floor(ms / 3600000)).padStart(2, '0')}:${String(Math.floor(ms / 60000) % 60).padStart(2, '0')}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}.${String(ms % 1000).padStart(3, '0')}`;
 };
-async function encode(source, name, phases, dir) {
-  const files = [],
-    captions = ['WEBVTT\n'];
-  let duration = 0;
-  for (const [i, p] of phases.entries()) {
-    const file = join(dir, `part-${i}.mp4`);
-    files.push(file);
-    await ffmpeg([
-      '-ss',
-      String(p.start),
-      '-t',
-      String(p.end - p.start),
-      '-i',
-      source,
-      '-vf',
-      `setpts=(PTS-STARTPTS)/${p.speed},fps=20,scale=1280:800:flags=lanczos`,
-      '-c:v',
-      'libx264',
-      '-pix_fmt',
-      'yuv420p',
-      '-crf',
-      '31',
-      '-maxrate',
-      '600k',
-      '-bufsize',
-      '1200k',
-      '-preset',
-      'medium',
-      '-an',
-      file,
-    ]);
-    const length = (p.end - p.start) / p.speed;
-    captions.push(`${i + 1}\n${timestamp(duration)} --> ${timestamp(duration + length)}\n${p.label}\n`);
-    duration += length;
-  }
-  const list = join(dir, 'parts.txt');
-  await writeFile(list, files.map(f => `file '${f}'`).join('\n'));
-  const output = join(MEDIA, `${name}.mp4`);
-  await ffmpeg(['-f', 'concat', '-safe', '0', '-i', list, '-c', 'copy', '-movflags', '+faststart', output]);
+async function encode(frames, name, phases) {
+  const { selected, chapters, duration } = sampleChapters(frames, phases);
+  const captions = ['WEBVTT\n', ...chapters.map((p, i) => `${i + 1}\n${timestamp(p.start)} --> ${timestamp(p.end)}\n${p.label}\n`)];
+  const output = join(VIDEO, `${name}.mp4`);
+  console.log(`${name}: encoding ${selected.length} frames at 30 fps from ${frames.length} original PNG frames`);
+  await encodeFrames(selected, output);
   await ffmpeg([
     '-ss',
     String(name === 'manual-editor' ? duration * 0.7 : 1),
@@ -476,11 +444,12 @@ async function encode(source, name, phases, dir) {
     join(MEDIA, `${name}.jpg`),
   ]);
   await writeFile(join(MEDIA, `${name}.vtt`), captions.join('\n'));
-  await writeFile(join(diagnostics, `${name}-chapters.json`), JSON.stringify({ duration, phases }, null, 2));
-  console.log(`✓ ${name}.mp4 — ${duration.toFixed(1)} seconds`);
+  await writeFile(join(diagnostics, `${name}-chapters.json`), JSON.stringify({ duration, phases, chapters, sourceFrames: frames.length, outputFrames: selected.length }, null, 2));
+  console.log(`✓ ${output} — ${duration.toFixed(1)} seconds, 1920 × 1080, 30 fps`);
 }
 try {
   await mkdir(MEDIA, { recursive: true });
+  await mkdir(VIDEO, { recursive: true });
   await waitForServer();
   browser = await chromium.launch({
     args: process.platform === 'darwin' ? ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist'] : [],

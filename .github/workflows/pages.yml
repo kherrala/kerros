@@ -42,6 +42,7 @@ jobs:
           # Optional public browser credential. Claude credentials stay on a separate backend.
           VITE_MML_API_KEY: ${{ vars.VITE_MML_API_KEY }}
           VITE_AI_IMPORT_URL: ''
+          VITE_MEDIA_BASE_URL: ${{ secrets.VITE_MEDIA_BASE_URL }}
       - name: Upload static site
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4
         with:

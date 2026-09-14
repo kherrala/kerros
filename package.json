@@ -19,6 +19,7 @@
     "format": "biome format --write .",
     "format:check": "biome format .",
     "capture:media": "node scripts/capture-media.mjs",
+    "test:media": "node --test scripts/media-capture.test.mjs",
     "docs:dev": "vitepress dev docs",
     "docs:build": "vitepress build docs",
     "build:site": "vite build --base=./ && vitepress build docs && cp -R docs/.vitepress/dist/. dist/",
