@@ -5,7 +5,7 @@ test.use({
     process.platform === 'darwin' ? { args: ['--use-angle=metal', '--enable-gpu', '--ignore-gpu-blocklist'] } : {},
 });
 
-test('underground and entresol rendering review', async ({ page }, testInfo) => {
+test('underground and entresol floors render in cutaway and Walk', async ({ page }, testInfo) => {
   test.setTimeout(180_000);
   const errors: string[] = [];
   page.on('pageerror', e => errors.push(e.message));
@@ -49,7 +49,7 @@ test('underground and entresol rendering review', async ({ page }, testInfo) => 
     await page.screenshot({ path: testInfo.outputPath(`${label}-cutaway.png`) });
     if (['entresol', 'herkku', 'p1'].includes(label)) {
       await page.getByRole('button', { name: 'Walk', exact: true }).click();
-      await expect(page.getByRole('slider', { name: 'POV field of view' })).toHaveValue('90');
+      await expect(page.getByRole('slider', { name: 'POV field of view' })).toHaveValue('100');
       await page.waitForTimeout(800);
       await page.screenshot({ path: testInfo.outputPath(`${label}-walk.png`) });
       await page.getByRole('button', { name: '3D', exact: true }).click();

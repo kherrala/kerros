@@ -1,4 +1,4 @@
-// The sound of a building, heard from inside it. Nothing is recorded or fetched: every preset is a
+// The sound of a building, heard from inside it. No audio recordings are fetched: every preset is a
 // small Web Audio graph — oscillators for the ballasts and the compressor, filtered noise for the air
 // handling — because a hum is a hum and a file of one would be a hundred kilobytes of the same second.
 //
@@ -6,7 +6,6 @@
 // testable; AmbienceEngine plays it, cross-fading as the walker crosses from one space into the next.
 import type { Ambience, AmbiencePreset, Point, ProjectDocument } from '../model/types';
 import { spaceAt } from '../model/spaces';
-import { bathMusic, elevatorMusic } from './bathMusic';
 
 export const AMBIENCES: { id: AmbiencePreset; label: string; description: string }[] = [
   { id: 'silent', label: 'Silent', description: 'Nothing but the walk' },
@@ -190,9 +189,34 @@ function compressor(ctx: AudioContext, out: AudioNode, level: number): Layer {
   };
 }
 
+/** Load the score only on entering a musical space. A plan-only viewer never needs its synthesis
+ * code. The stop flag also covers leaving Walk before the import has completed. */
+function music(ctx: AudioContext, out: AudioNode, preset: 'bathMusic' | 'elevatorMusic'): Layer {
+  let stopped = false;
+  const layer: Layer = {
+    nodes: [],
+    sources: [
+      {
+        stop: () => {
+          stopped = true;
+        },
+      },
+    ],
+  };
+  void import('./bathMusic')
+    .then(score => {
+      if (stopped || ctx.state === 'closed') return;
+      const playing = score[preset](ctx, out);
+      layer.nodes.push(...playing.nodes);
+      layer.sources.push(...playing.sources);
+    })
+    .catch(error => console.warn('Room music could not load.', error));
+  return layer;
+}
+
 const RECIPES: Record<Exclude<AmbiencePreset, 'silent'>, (ctx: AudioContext, out: AudioNode) => Layer[]> = {
-  baths: (ctx, out) => [bathMusic(ctx, out)],
-  elevator: (ctx, out) => [elevatorMusic(ctx, out)],
+  baths: (ctx, out) => [music(ctx, out, 'bathMusic')],
+  elevator: (ctx, out) => [music(ctx, out, 'elevatorMusic')],
   office: (ctx, out) => [airHandling(ctx, out, 0.24, 0.04), ballast(ctx, out, 0.07)],
   backrooms: (ctx, out) => [airHandling(ctx, out, 0.34, 0.06), ballast(ctx, out, 0.2), compressor(ctx, out, 0.22)],
   plant: (ctx, out) => [

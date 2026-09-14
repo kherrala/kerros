@@ -15,6 +15,21 @@ different questions.
 That missing layer is what this page is about. Kerros calls it the **ontology**: a small vocabulary
 for what the building *means*, sitting on top of the geometry you already drew.
 
+## Browsing the structure
+
+Open **Structure** in the editor or viewer. Its tabs read the same document as the plan:
+
+- **Spaces** lists buildings, floors and all spaces, including rooms that belong to no semantic zone. Expand a space to see parent/contained objects, zone memberships, served floors and direct portals. The location icon (**Find on map**) selects it and changes floors.
+- **Zones** groups named zones by purpose, with nested-zone relationships, expanded membership and perimeter crossings. Edit mode also supports creating, naming and changing zones through the normal undo history.
+- **Portals** lists every portal, including open boundaries outside named zones. Optionally enable **Filter by portal group** and inspect endpoints, physical openings, passage direction and crossing evidence. A sealed portal remains visible here.
+- **Topology** shows the same nodes and edges used by routing, including authored graph overrides when present. Expand a node for incoming/outgoing connections and transport kinds; filter to isolated nodes to find places with no graph connection. Sealed portals produce no routing edge.
+
+Use the location icon on rows to find buildings, floors, spaces, zones, portals or graph connections on the map. Multi-space groups frame their members on the current relevant floor.
+
+From **Topology**, choose **Open graph view** to replace the map with an interactive navigation graph. It reads the same authored or derived graph as routing. **Auto balance** uses a force layout; drag individual nodes, pan the background and scroll to zoom. **Fit graph** reframes the graph; **Rebalance** restarts the layout. Edge colors distinguish walking, doors, stairs/escalators and elevators; arrows indicate one-way travel. Filter by floor, search for a node, and use its location icon to return to the map. Layout changes are view-only and do not move floor-plan coordinates or modify routes.
+
+Search and floor filters apply independently of the displayed map floor. Large lists load more entries as you scroll; collapsed details render only when opened. Stockmann and Silo derive circulation zones using the same shaft identity as rendering and routing (kind, name and position). Backrooms has an explicit circulation zone and one landing portal on each of the elevator’s five served floors. A single shaft object can therefore mean one zone member serving many floors. Circulation zones describe only lift/stair/escalator groupings; their count is not the number of spaces or connections in the building.
+
 ## Three words
 
 **Space** — a place you can stand. A room, a corridor, a lobby, the inside of a lift car. You have
@@ -307,8 +322,14 @@ a door object to find:
 project.portals = [...inferPortals(project), ...inferOpenBoundaries(project)];
 ```
 
-`inferOpenBoundaries` walks each space's outline and, wherever it can step across into a neighbour
-without crossing a wall, records that run. Runs long enough to walk through become portals; two rooms
+`inferOpenBoundaries` reads shared virtual edges directly for connected spaces. This also finds
+narrow openings that outline sampling can miss near adjoining wall ends. `effectivePortals(project)`
+combines these connections with stored portals, respecting sealed and one-way passage; routing,
+zone boundaries and the structure panel use this view even when an older import omitted a portal.
+Re-reading portals persists the same derived connections.
+
+For independent outlines, inference walks each outline and records unwalled shared runs.
+Runs long enough to walk through become portals; two rooms
 brushing at a corner do not. They are marked `attests: 'none'` — nothing watches an open edge, so a
 crossing there can never be observed.
 

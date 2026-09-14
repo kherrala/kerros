@@ -4,9 +4,7 @@ CAD drawings into Kerros documents. Pure functions over [`@kerros/schema`](./sch
 rendering, no AI SDK — so the module runs anywhere the schema runs. The editor depends on it and
 re-exports its surface; hosts can also install it alone.
 
-The split of responsibilities is deliberate: **the module owns the conversion, hosts own the
-host-shaped parts** — DWG parsing (native tooling; see `scripts/plan-import/extract.mjs`),
-rasterization (a browser), and for the AI path the provider and its credentials.
+PDF/DWG parsing, source analysis and the AI tool loop belong to the Node-only [`@kerros/server`](./server) package. This package accepts already extracted entity JSON and contains no PDF parser, worker, native canvas or LLM SDK.
 
 ## Deterministic import
 
@@ -39,22 +37,9 @@ plan afterwards, translate its junctions and independent objects in a transactio
 polygons and dimensions are regenerated from the junctions. Call `refreshBoundarySpaces` before
 `refreshPortals` if portal inference runs inside that same transaction.
 
-## AI-assisted import
+## Server extraction and AI import
 
-- `runAiPlanImport(provider, source, options)` — drive an AI provider through the import tool loop
-  (inspect layers → see renders → extract → propose `Mutation[]` → verify visually) until it stops.
-  Every proposed change passes through `applyMutations`, so an invalid script is refused with the
-  reason and the returned document is valid at every point of the run — no provider can break that.
-- `AiProvider` — what the host implements: one model turn (`{system, tools, messages} → content`).
-  Neutral content blocks (`text`, `image_png`, `tool_use`, `tool_result`, `opaque` for
-  provider-private blocks that must round-trip untouched) map 1:1 onto any tool-use API.
-- `PlanSource` — drawing access: `stats()`, `extract(query)`, `render(query)`.
-- `AI_IMPORT_TOOLS` / `AI_IMPORT_SYSTEM` — the tool catalog and briefing, exported for hosts that
-  want to present or extend them.
-- `documentSvg(doc)` — the plan-view SVG both sides of the visual diff use.
-
-`scripts/plan-import/agent.ts` is a complete host: Anthropic SDK provider (credentials from
-`.env.local`), LibreDWG `PlanSource`, Playwright rasterizer.
+The AI APIs moved to [`@kerros/server`](./server). Use that entry point for `runAiPlanImport`, `AiProvider`, `PlanSource`, `AI_IMPORT_TOOLS` and `AI_IMPORT_SYSTEM`. The browser-safe `documentSvg(doc)` helper remains here. See [AI import with Claude](/guide/ai-import) for setup and the live-project workflow.
 
 ## In the editor
 

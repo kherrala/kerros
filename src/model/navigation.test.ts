@@ -125,6 +125,25 @@ describe('authoring helpers', () => {
     expect(nodes.map(n => n.objectId)).toEqual(twins.map(t => t.id));
     expect(validateNavigation(p)).toBeNull();
   });
+  it('keeps identically named shafts at different positions separate', () => {
+    const p = tower(2);
+    const served = ['floor-ground', 'floor-1', 'floor-2'];
+    const south = lift(p, 'Lift', [3, 3], served);
+    const north = lift(p, 'Lift', [3, 20], served);
+    chainVertical(p, south[0]);
+    const nodes = chainVertical(p, north[0]);
+    expect(nodes.map(n => n.objectId)).toEqual(north.map(t => t.id));
+    expect(nodes.every(n => n.position[1] === 20)).toBe(true);
+    expect(p.navEdges).toHaveLength(6);
+  });
+  it('unions served floors across per-sheet twins when threading a shaft', () => {
+    const p = tower(2);
+    const served = ['floor-ground', 'floor-1', 'floor-2'];
+    const twins = lift(p, 'Lift', [3, 3], served);
+    for (const twin of twins) twin.servedFloorIds = [twin.floorId!];
+    expect(chainVertical(p, twins[0]).map(n => n.floorId)).toEqual(served);
+    expect(p.navEdges).toHaveLength(3);
+  });
 });
 
 describe('routing', () => {

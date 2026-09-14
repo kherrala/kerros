@@ -34,6 +34,7 @@ import { useLiftController } from './LiftPanel';
 // needs, so it keeps its own tiny module.
 import { newProject } from './demo/blank';
 import { mmlBasemap } from './mmlBasemap';
+import { createAiImportAdapter, createPdfDrawingAdapter } from './aiImport';
 import type { ImportProjection } from '@kerros/editor/host';
 import { clearViewLink, parseViewLink, writeViewLink, type ViewLink } from './viewLink';
 import { en } from './strings';
@@ -122,6 +123,12 @@ function Home() {
       projects: new IndexedProjectRepository(new LocalProjectRepository()),
       assets: new IndexedAssetRepository(),
       basemap: import.meta.env.VITE_MML_API_KEY ? mmlBasemap(import.meta.env.VITE_MML_API_KEY) : undefined,
+      aiImport: import.meta.env.VITE_AI_IMPORT_URL
+        ? createAiImportAdapter(import.meta.env.VITE_AI_IMPORT_URL)
+        : undefined,
+      pdfDrawing: import.meta.env.VITE_AI_IMPORT_URL
+        ? createPdfDrawingAdapter(import.meta.env.VITE_AI_IMPORT_URL)
+        : undefined,
     }),
     [],
   );

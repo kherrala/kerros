@@ -50,7 +50,7 @@ async function clickAt(page: Page, point: { x: number; y: number }) {
 }
 
 async function importFile(page: Page, name: string, mimeType: string, buffer: Buffer, tab?: string) {
-  await page.getByRole('button', { name: 'Import', exact: true }).click();
+  await page.getByRole('button', { name: 'Import reference drawing', exact: true }).click();
   const dialog = page.getByRole('dialog');
   if (tab) await dialog.getByRole('button', { name: tab, exact: true }).click();
   await dialog.locator('input[type=file]').setInputFiles({ name, mimeType, buffer });
@@ -585,14 +585,15 @@ test('the structure panel browses zones, their spaces and the doors that bound t
   await ready(page);
   await page.getByRole('button', { name: /structure panel/ }).click();
   const panel = page.locator('.structure-panel');
+  await panel.getByRole('tab', { name: 'Zones', exact: true }).click();
   await expect(panel).toBeVisible();
   // The demo's zones are derived, not authored: every lift and stair core becomes one circulation
   // zone over the landings that share a shaft.
   await expect(panel.locator('.structure-group h3').first()).toHaveText(/circulation/i);
-  await expect(panel.getByRole('button', { name: /Lift A/ })).toBeVisible();
+  await expect(panel.getByRole('button', { name: /^Lift A/ })).toBeVisible();
 
   await panel
-    .getByRole('button', { name: /Lift A/ })
+    .getByRole('button', { name: /^Lift A/ })
     .first()
     .click();
   const detail = panel.locator('.structure-detail');
@@ -603,10 +604,7 @@ test('the structure panel browses zones, their spaces and the doors that bound t
   expect(ways, 'the lift is entered from a lobby on each floor it serves').toBeGreaterThan(5);
 
   // Picking a space follows the plan to the floor it is on.
-  await detail
-    .getByRole('button', { name: /Lift A/ })
-    .first()
-    .click();
+  await detail.getByRole('button', { name: 'Find Lift A on map', exact: true }).first().click();
   await expect(page.locator('.floor-item.active:not(.outdoor)')).toBeVisible();
 });
 
@@ -630,6 +628,7 @@ test('zones can be authored from the structure panel, and undone', async ({ page
 
   await page.getByRole('button', { name: /structure panel/ }).click();
   const panel = page.locator('.structure-panel');
+  await panel.getByRole('tab', { name: 'Zones', exact: true }).click();
   await expect(panel.locator('.structure-empty'), 'a fresh plan has no ontology yet').toBeVisible();
 
   // The selected area becomes a zone.
@@ -639,7 +638,7 @@ test('zones can be authored from the structure panel, and undone', async ({ page
   expect(saved.zones?.[0]?.spaceIds).toEqual([saved.objects[0].id]);
 
   // Renaming writes through, and `connects` is a real schema value rather than a label.
-  await panel.getByRole('button', { name: /Server room zone/ }).click();
+  await panel.getByRole('button', { name: /^Server room zone/ }).click();
   await panel.getByLabel('Zone name').fill('Finance');
   await panel.getByLabel('Connects').selectOption('adjacent');
   const edited = await savedProject(page);
@@ -907,6 +906,11 @@ test('a shared room follows virtual boundaries through splitting, dragging and r
   expect(initial.objects[0].geometry?.mode).toBe('boundaries');
   expect(initial.virtualBoundaries).toHaveLength(4);
   await expect(page.getByRole('combobox', { name: 'Space geometry' })).toHaveValue('boundaries');
+  // These authoring callbacks belong to the editor; the shared read-only inspector does not load them.
+  await page.getByRole('combobox', { name: 'Space geometry' }).selectOption('independent');
+  expect((await savedProject(page)).objects[0].geometry?.mode).toBe('independent');
+  await page.getByRole('combobox', { name: 'Space geometry' }).selectOption('boundaries');
+  expect((await savedProject(page)).objects[0].geometry?.mode).toBe('boundaries');
   const handle = page.getByRole('button', { name: 'Move space boundary 2', exact: true });
   await expect(handle).toBeVisible();
   const box = (await handle.boundingBox())!;

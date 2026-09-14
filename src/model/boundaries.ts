@@ -438,7 +438,10 @@ function netRings(rings: Ring[], solids: Ring[][], allowEmpty = false): Ring[] {
   const pieces = solids.length ? difference(rings, ...solids) : [quantize(rings)];
   const usable = pieces.filter(pg => area(pg) >= MIN_SPACE_AREA);
   if (!usable.length && allowEmpty) return [];
-  if (!usable.length) throw new Error(`A space needs at least ${MIN_SPACE_AREA} m² of usable area.`);
+  if (!usable.length)
+    throw new Error(
+      `A space needs at least ${MIN_SPACE_AREA} m² of usable area. Largest region after subtracting walls: ${Math.max(0, ...pieces.map(pg => area(pg))).toFixed(3)} m².`,
+    );
   if (usable.length !== 1)
     throw new Error(
       `The wall would leave ${usable.length} disconnected usable regions (${usable.map(pg => area(pg).toFixed(2)).join(', ')} m²). Extend it to a boundary to divide the space.`,

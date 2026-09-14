@@ -16,7 +16,7 @@ import {
   KEYS,
   MAX_PITCH,
   MIN_PITCH,
-  MOUSE_LOOK,
+  DRAG_LOOK,
   REST_PITCH,
   stride,
   TURN_SPEED,
@@ -167,14 +167,14 @@ describe('aiming with the mouse', () => {
   it('turns the way the hand moves', () => {
     // Mouse right, look right; mouse up, look up. In MapLibre's terms up is a LARGER pitch — 90 is
     // level and 0 the floor — so the vertical sign is the one that is easy to get backwards.
-    const out = aim(10, 80, 100, -50);
-    expect(out.heading).toBeCloseTo(10 + 100 * MOUSE_LOOK, 6);
-    expect(out.pitch).toBeCloseTo(80 + 50 * MOUSE_LOOK, 6);
+    const out = aim(10, 80, 100, -20);
+    expect(out.heading).toBeCloseTo(10 + 100 * DRAG_LOOK, 6);
+    expect(out.pitch).toBeCloseTo(80 + 20 * DRAG_LOOK, 6);
   });
 
   it('wraps the heading and stops the pitch', () => {
-    expect(aim(355, 80, 100, 0).heading).toBeCloseTo(7, 6);
-    expect(aim(5, 80, -100, 0).heading).toBeCloseTo(353, 6);
+    expect(aim(355, 80, 100, 0).heading).toBeCloseTo(17, 6);
+    expect(aim(5, 80, -100, 0).heading).toBeCloseTo(343, 6);
     // Nobody looks at the ceiling by looking too far at their feet.
     expect(aim(0, 80, 0, 10_000).pitch).toBe(MIN_PITCH);
     expect(aim(0, 80, 0, -10_000).pitch).toBe(MAX_PITCH);

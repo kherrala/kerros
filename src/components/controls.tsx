@@ -6,12 +6,14 @@ export function Modal({
   onClose,
   children,
   wide = false,
+  fullscreen = false,
 }: {
   title: string;
   subtitle?: string;
   onClose: () => void;
   children: ReactNode;
   wide?: boolean;
+  fullscreen?: boolean;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   useEffect(() => {
@@ -33,7 +35,8 @@ export function Modal({
   }, []);
   return (
     <dialog
-      className={`modal ${wide ? 'wide' : ''}`}
+      className={`modal ${wide ? 'wide' : ''} ${fullscreen ? 'fullscreen' : ''}`}
+      aria-label={title}
       ref={dialog}
       onCancel={onClose}
       onClick={e => {

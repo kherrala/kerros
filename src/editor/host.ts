@@ -14,6 +14,8 @@ export type {
   SitePlannerProps,
   ElevatorControls,
   PlannerAdapters,
+  AiImportAdapter,
+  PdfDrawingAdapter,
   BasemapConfig,
   BasemapVectorSchema,
   PlannerMode,
@@ -36,4 +38,4 @@ export {
 export * from '../schema';
 // The ontology browsed as a structure rather than a plan — zones, their spaces, and the portals
 // that bound them. Reads the same document as the map; needs no map.
-export { StructureView, type StructureViewProps } from '../components/StructureView';
+export { StructureView, type StructureViewProps, type StructureTarget } from '../components/StructureView';

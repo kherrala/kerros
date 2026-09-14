@@ -1,5 +1,5 @@
 import { defineConfig, devices } from '@playwright/test';
-const port = process.env.KERROS_E2E_PRODUCTION ? 5182 : 5181;
+const port = process.env.KERROS_E2E_PORT ?? (process.env.KERROS_E2E_PRODUCTION ? 5182 : 5181);
 
 export default defineConfig({
   testDir: './tests',
@@ -26,6 +26,12 @@ export default defineConfig({
     // Health-check app.html, not / — the reference editor moved off the root (which is now the docs home).
     url: `http://127.0.0.1:${port}/app.html`,
     reuseExistingServer: !process.env.CI && !process.env.KERROS_E2E_PRODUCTION,
-    env: { VITE_MML_API_KEY: 'playwright-test-key' },
+    env: {
+      VITE_MML_API_KEY: 'playwright-test-key',
+      VITE_AI_IMPORT_URL: '/api/ai-import',
+      ANTHROPIC_API_KEY: '',
+      // AI browser tests supply their own streams. Never fall through to a paid local backend.
+      KERROS_API_PROXY_TARGET: 'http://127.0.0.1:9',
+    },
   },
 });

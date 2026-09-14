@@ -6,7 +6,7 @@ PORT     ?= 5173
 DOCS_PORT ?= 5174
 
 .DEFAULT_GOAL := help
-.PHONY: help install dev docs test watch e2e check budget format format-check types build preview serve site lib media clean clean-all plan-stats plan-extract plan-apply plan-agent
+.PHONY: help install up down logs dev docs test test-raster watch e2e check budget format format-check types build preview serve site lib media clean clean-all plan-stats plan-extract plan-apply plan-agent
 
 help: ## List the available tasks
 	@echo "Kerros — make <task>"
@@ -20,6 +20,18 @@ install: ## Install dependencies
 	$(NPM) install
 
 # ——— Running things
+
+up: ## Start apps, documentation and AI importer in Docker, with live source updates
+	@test -f .env.local || cp .env.example .env.local
+	@echo "  editor  http://127.0.0.1:$(PORT)/app.html"
+	@echo "  docs    http://127.0.0.1:$(DOCS_PORT)/"
+	PORT=$(PORT) DOCS_PORT=$(DOCS_PORT) docker compose --env-file .env.local up --build --watch
+
+down: ## Stop the Docker development stack
+	docker compose --env-file .env.local down
+
+logs: ## Follow editor and importer logs
+	docker compose --env-file .env.local logs -f
 
 dev: ## Run the reference apps — hub, editor and viewer (prints the URLs)
 	@echo "  hub     http://127.0.0.1:$(PORT)/"
@@ -47,6 +59,11 @@ budget: ## What a consumer pays to import each part of Kerros, measured against 
 
 test: ## Run the unit tests once
 	$(NPM) test
+	$(NPM) run test:server
+	$(NPM) run check:ai-tools
+
+test-raster: ## Test OpenCV/OCR in an isolated Docker container, with no LLM/network calls
+	$(NPM) run test:raster:docker
 
 watch: ## Run the unit tests in watch mode
 	npx vitest
@@ -56,6 +73,7 @@ e2e: ## Run the Playwright end-to-end tests (starts its own server)
 
 types: ## Type-check without emitting
 	npx tsc -b
+	npx tsc --noEmit -p server/tsconfig.json
 
 format: ## Format the source in place
 	$(NPM) run format

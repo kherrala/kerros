@@ -19,7 +19,7 @@ import {
 } from 'lucide-react';
 import type { Point, ProjectDocument, SiteObject } from '../model/types';
 import type { Route, RouteStep } from '../model/navigation';
-import { floorPhrase, HERE } from '../model/navigation';
+import { floorPhrase, HERE, navNodes } from '../model/navigation';
 import { EntityIcon } from './Icons';
 import { useStrings } from '../theme';
 
@@ -34,7 +34,7 @@ const STEP_ICONS: Record<RouteStep['kind'], typeof MapPin> = {
   arrive: Flag,
 };
 
-interface Props {
+export interface NavigatePanelProps {
   project: ProjectDocument;
   /** Where the person is — the walk's avatar — offered as "Where you are" and proposed as the
    *  start whenever nothing else has been chosen. Null when nobody has walked yet. */
@@ -73,7 +73,7 @@ export function NavigatePanel({
   onStep,
   onSeek,
   onClose,
-}: Props) {
+}: NavigatePanelProps) {
   const en = useStrings();
   const t = en.navigate;
   // Every place a route can start or end, in level order and alphabetical within a level, each
@@ -118,7 +118,7 @@ export function NavigatePanel({
       onFrom(HERE);
     }
   }, [here, from, to, onFrom]);
-  const hasGraph = (project.navNodes?.length ?? 0) > 0;
+  const hasGraph = useMemo(() => navNodes(project).length > 0, [project]);
   const floorsCrossed = route ? new Set(route.steps.map(s => s.floorId)).size : 0;
   const picker = (
     label: string,

@@ -1,6 +1,8 @@
 import { doorSymbol, draggedDoorSwing } from '../model/doors';
 import {
   Fragment,
+  lazy,
+  Suspense,
   useEffect,
   useMemo,
   useRef,
@@ -49,7 +51,7 @@ import { useKerrosTheme, useStrings, type MapStyleOptions } from '../theme';
 import { neutralBasemap } from '../adapters/basemap';
 import { ambient, mixColor, type Sun, sunlight } from './lighting';
 import { EntityIcon } from '../components/Icons';
-import { draftFeatures, makeFeatures, navGraphFeatures, onFloor, visibleOnFloor, wallPieces } from './features';
+import { draftFeatures, makeFeatures, navGraphFeatures, onFloor, visibleOnFloor } from './features';
 import { boundaryEdges } from '../model/boundaries';
 import { ROUTE_COLOR, ROUTE_EDGE, ROUTE_SOFT, routeArrowImage, routeFeatures, routeFlowGradient } from './route';
 import { aimCenter, floorAim } from './cameraAim';
@@ -57,13 +59,12 @@ import type { JourneyPlayer } from './journey';
 import type { WalkJourney, WalkJourneyHost } from './walkJourney';
 import type { Route } from '../model/navigation';
 import { LIFT, SLAB } from './levels';
-import { floorArrival, floorDropAt } from './walkSurfaces';
+import { floorArrival, floorSupport, walkingWallRings } from './walkSurfaces';
 import type { SceneLayer } from './SceneLayer';
 import { stairSurfaces } from './stairSurfaces';
 import {
   DEFAULT_WALK_FOV,
   EYE,
-  HEAD_ROOM,
   MAX_MAP_ZOOM,
   MAX_WALK_FOV,
   MIN_WALK_FOV,
@@ -78,7 +79,8 @@ import { inSpace, spaceAt, spacePoint } from '../model/spaces';
 import { servedFloors } from '../model/vertical';
 import { floorIndex, undergroundView } from './underground';
 import { loadBasemap } from './loadBasemap';
-import { ElevatorPanel } from '../components/ElevatorPanel';
+// Passenger controls are needed only while walking with a host lift controller.
+const ElevatorPanel = lazy(() => import('../components/ElevatorPanel').then(m => ({ default: m.ElevatorPanel })));
 import { elevatorWalls } from './elevators';
 
 // Cadastral parcels come from a host-declared vector tilejson (see BasemapVectorSchema.cadastre):
@@ -114,7 +116,7 @@ export interface MapCanvasProps {
   /** First-person walk mode: the camera becomes a person standing on `floorId`. Requires threeD.
    *  While it is on the map's own gestures are off and the floor is drawn at ground level. */
   walk?: boolean;
-  /** Walk mode wants out (Escape with nothing else to release). */
+  /** Walk mode wants out (Escape). */
   onWalkExit?: () => void;
   /** Where the walker last stood, or was dropped — the person, kept apart from the camera. Drawn on
    *  its floor in the other modes, and a walk resumes from it when it is in view. */
@@ -225,15 +227,13 @@ interface WalkHint {
   looking: boolean;
   /** The building's sound is playing (M turns it off). */
   sound: boolean;
-  /** The browser has handed the pointer to the walk; Esc gives it back. */
-  locked: boolean;
   up: string | null;
   down: string | null;
   where: string;
   /** The next thing the active route asks you to do, and how far off it is. */
   next: string;
 }
-const NO_HINT: WalkHint = { looking: false, sound: true, locked: false, up: null, down: null, where: '', next: '' };
+const NO_HINT: WalkHint = { looking: false, sound: true, up: null, down: null, where: '', next: '' };
 /** Where the walker's choice to mute lives between walks. A person who turned the hum off does not
  *  want it back on at the next door. */
 const MUTED_KEY = 'kerros:walk-muted';
@@ -1345,7 +1345,7 @@ export function MapCanvas(props: MapCanvasProps) {
     });
     m.on('load', () => {
       props.onReady?.(m);
-      if (!props.initialCamera) fit();
+      if (!props.initialCamera && !latest.current.playing && !latest.current.walk) fit();
     });
     // Continuous 'render' events caused a React re-render (marker LOD + collision culling over
     // every object) each painted frame. Positions follow imperatively via reposition(); the React
@@ -1571,7 +1571,7 @@ export function MapCanvas(props: MapCanvasProps) {
   useEffect(() => {
     // A walker who climbs a stair stays where they are standing; re-fitting would throw them across
     // the floor plate the moment they arrived.
-    if (ready && !journey.current?.playing && !props.walk) fit(props.floorId);
+    if (ready && !props.playing && !props.walk) fit(props.floorId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.floorId, props.stack]);
   // The highlight travelling along the route. A timer rather than a rAF loop: the band moves at
@@ -1720,6 +1720,11 @@ export function MapCanvas(props: MapCanvasProps) {
   /** Wall bodies the walker's shoulders meet. wallPieces() already splits a wall at its openings, so
    *  a doorway is a gap in this list and nothing has to know what a door is; the strip left over a
    *  door is a piece lifted clear of head height, which you walk under. */
+  const supportedFloors = useMemo(() => (props.walk ? floorSupport(props.project) : null), [props.walk, props.project]);
+  const staticWalkWalls = useMemo(
+    () => (props.walk ? walkingWallRings(props.project, props.floorId) : []),
+    [props.walk, props.project, props.floorId],
+  );
   const walkWalls = useMemo(
     () =>
       props.walk
@@ -1738,9 +1743,7 @@ export function MapCanvas(props: MapCanvasProps) {
                   !!status?.open && !status.moving && !status.targetFloorId && status.carFloorId === props.floorId,
                 );
               }),
-            ...wallPieces(props.project, props.floorId, false)
-              .filter(piece => piece.base < HEAD_ROOM)
-              .map(piece => piece.ring),
+            ...staticWalkWalls,
             // What stands on the floor is as solid as what encloses it: a parked car, a column,
             // a desk. Anything lower than a step is walked over; a rug is a fixture too.
             ...props.project.objects
@@ -1756,7 +1759,7 @@ export function MapCanvas(props: MapCanvasProps) {
               .map(o => rectangle(o.position, o.width, o.depth, o.rotation)),
           ]
         : [],
-    [props.walk, props.project, props.floorId, props.statuses],
+    [props.walk, props.project, props.floorId, props.statuses, staticWalkWalls],
   );
   /** Where to stand when walk mode opens. Under the camera if that is somewhere on this floor —
    *  entering walk mode should feel like stepping into the view you already had — and otherwise in
@@ -1894,7 +1897,7 @@ export function MapCanvas(props: MapCanvasProps) {
           });
         }
         const fresh = now - hintAt.current >= 150;
-        if (!fresh && pose.looking === hintRef.current.looking && pose.locked === hintRef.current.locked) return;
+        if (!fresh && pose.looking === hintRef.current.looking) return;
         const transfer = fresh ? climb(pose.position) : null;
         const { up, down } = transfer?.shaft?.kind === 'stairs' ? transfer : { up: null, down: null };
         const room = fresh ? spaceAt(latest.current.project, latest.current.floorId, pose.position) : null;
@@ -1910,16 +1913,14 @@ export function MapCanvas(props: MapCanvasProps) {
           ? {
               looking: pose.looking,
               sound: !sound.isMuted,
-              locked: pose.locked,
               up: up?.name ?? null,
               down: down?.name ?? null,
               where: room?.name ?? '',
               next: guide(pose.position),
             }
-          : { ...hintRef.current, looking: pose.looking, locked: pose.locked };
+          : { ...hintRef.current, looking: pose.looking };
         if (
           next.looking !== hintRef.current.looking ||
-          next.locked !== hintRef.current.locked ||
           next.up !== hintRef.current.up ||
           next.down !== hintRef.current.down ||
           next.where !== hintRef.current.where ||
@@ -1933,7 +1934,6 @@ export function MapCanvas(props: MapCanvasProps) {
         const target = climb(walker.current?.position ?? [0, 0]);
         if (target.shaft?.kind === 'elevator') {
           if (latest.current.elevators) {
-            document.exitPointerLock?.();
             setElevatorRequest(n => n + 1);
           }
           return;
@@ -1997,7 +1997,8 @@ export function MapCanvas(props: MapCanvasProps) {
       floorId: props.floorId,
       elevation: props.project.floors.find(f => f.id === props.floorId)?.elevation ?? 0,
       stairs: walkStairs,
-      dropAt: at => floorDropAt(props.project, props.floorId, at),
+      supports: supportedFloors?.supports,
+      dropAt: at => supportedFloors?.dropAt(at, props.floorId),
     });
     if (walkedFloor.current !== props.floorId && walker.current && !walker.current.onStairs) {
       const at = walker.current.position;
@@ -2005,7 +2006,7 @@ export function MapCanvas(props: MapCanvasProps) {
       if (arrival !== at) walker.current.place(unstick(arrival, walkWalls));
     }
     walkedFloor.current = props.floorId;
-  }, [walkWalls, walkStairs]);
+  }, [walkWalls, walkStairs, supportedFloors]);
   // Journey floor barrier: resolves once the app shows the target floor AND the view has rebuilt —
   // in 3D when the SceneLayer revision advances past the value captured HERE, before React flushes
   // the floor change (do not insert an await between requestFloor and this call), in 2D after two
@@ -2043,7 +2044,9 @@ export function MapCanvas(props: MapCanvasProps) {
       journey.current?.stop();
       return;
     }
-    if (!m || journey.current) return;
+    // A host may start playback while remounting the map after graph view. Wait for its style
+    // before driving the camera so initial fitting cannot interrupt every route ease.
+    if (!m || !ready || journey.current) return;
     const route = latest.current.route;
     if (!route) {
       latest.current.onJourneyEnd?.();
@@ -2081,7 +2084,7 @@ export function MapCanvas(props: MapCanvasProps) {
       journey.current?.stop();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [props.playing, props.walk]);
+  }, [props.playing, props.walk, ready]);
   // The passenger journey retains vertical legs and waits for the same controls used by the sidebar.
   useEffect(() => {
     if (!props.playing || !props.walk || !walker.current) return;
@@ -2250,7 +2253,7 @@ export function MapCanvas(props: MapCanvasProps) {
     if (!m) return;
     const was = prevView.current;
     prevView.current = { threeD: props.threeD, walk: props.walk };
-    const skipEase = (firstTilt.current && !!props.initialCamera) || props.walk;
+    const skipEase = (firstTilt.current && !!props.initialCamera) || props.walk || props.playing;
     firstTilt.current = false;
     const pitch = props.threeD ? 35 : 0;
     const bearing = siteBearing(props.project) + (props.threeD ? -12 : 0);
@@ -2295,12 +2298,12 @@ export function MapCanvas(props: MapCanvasProps) {
   }, [props.threeD, props.walk]);
   useEffect(() => {
     const m = map.current;
-    if (!m) return;
+    if (!m || props.walk) return;
     m.getCanvas().style.cursor = props.tool === 'pan' ? 'grab' : props.tool === 'select' ? '' : 'crosshair';
-  }, [props.tool]);
+  }, [props.tool, props.walk]);
   useEffect(() => {
     const m = map.current;
-    if (journey.current?.playing) return;
+    if (props.playing) return;
     const o = props.project.objects.find(o => o.id === props.focusId);
     if (props.walk) {
       if (o) walker.current?.lookAt(objectPosition(props.project, o));
@@ -3160,19 +3163,21 @@ export function MapCanvas(props: MapCanvasProps) {
         </div>
       )}
       {props.walk && props.elevators && (
-        <ElevatorPanel
-          project={props.project}
-          floorId={props.floorId}
-          controls={props.elevators}
-          walker={walker}
-          riding={riding}
-          onRide={ride}
-          onFloor={props.onRequestFloor}
-          requested={elevatorRequest}
-          onWave={() => scene.current?.wave()}
-          soundOn={walkHint.sound}
-          onSound={toggleWalkSound}
-        />
+        <Suspense fallback={null}>
+          <ElevatorPanel
+            project={props.project}
+            floorId={props.floorId}
+            controls={props.elevators}
+            walker={walker}
+            riding={riding}
+            onRide={ride}
+            onFloor={props.onRequestFloor}
+            requested={elevatorRequest}
+            onWave={() => scene.current?.wave()}
+            soundOn={walkHint.sound}
+            onSound={toggleWalkSound}
+          />
+        </Suspense>
       )}
       {props.walk && (
         <label className="walk-fov" title="Horizontal field of view">
@@ -3215,8 +3220,8 @@ export function MapCanvas(props: MapCanvasProps) {
               </span>
             )}
           </div>
-          <div className={`walk-keys ${walkHint.looking && !walkHint.locked ? 'busy' : ''}`}>
-            <span>{walkHint.locked ? 'Mouse to look around' : 'Click to look around'}</span>
+          <div className={`walk-keys ${walkHint.looking ? 'busy' : ''}`}>
+            <span>Drag to look around</span>
             <span>
               <kbd>W</kbd>
               <kbd>S</kbd> walk
@@ -3236,7 +3241,7 @@ export function MapCanvas(props: MapCanvasProps) {
               <kbd>M</kbd> {walkHint.sound ? 'mute' : 'sound'}
             </span>
             <span>
-              <kbd>Esc</kbd> {walkHint.locked ? 'free the mouse' : 'leave'}
+              <kbd>Esc</kbd> leave
             </span>
           </div>
         </div>

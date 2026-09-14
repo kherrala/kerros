@@ -1,6 +1,6 @@
 # The editor
 
-`FloorEditor` (from `@kerros/editor`) is the full authoring product: draw walls and zones, place doors/cameras/devices, import footprints and reference drawings, trace buildings, author routes, switch to 3D, and monitor live status. The sidebar's **structure panel** browses the [ontology](/guide/ontology) — zones, their spaces, and each zone's derived ways in — and authors zones in edit mode. `SiteViewer` is the same component in read-only mode.
+`FloorEditor` (from `@kerros/editor`) is the full authoring product: draw walls and zones, place doors/cameras/devices, import footprints and reference drawings, trace buildings, author routes, switch to 3D, and monitor live status. The sidebar's **structure panel** browses the [ontology](/guide/ontology) — spaces by building and floor, semantic zones, portals and portal groups, and the navigation topology — and authors zones in edit mode. `SiteViewer` is the same component in read-only mode.
 
 ![Reference editor in 3D](/media/editor-3d.png)
 
@@ -10,6 +10,10 @@ across the wall flips its opening side. The drag preview, plan symbol and 3D lea
 
 For drawing behavior, read [Space geometry & walls](/guide/geometry): how **Space from walls** builds an outline, what follows a moved wall, how splitting and merging work, and how snapping differs from coordinate precision.
 
+## Importing a drawing with AI
+
+The reference editor's **Import plan → AI import** sidebar accepts images, PDFs and DWGs. Supply known dimensions or a footprint area, then follow Claude's activity as validated edits appear and save in the live project. The sidebar includes a source SVG overlay, chat, token usage and saved continuation after a reload. See [AI import with Claude](./ai-import) for setup, controls and troubleshooting, and [source analysis and calibration](./ai-import-analysis) for the extraction tools and geometry checks.
+
 ## Keyboard navigation
 
 In **2D**, W/A/S/D pans up/left/down/right, like the arrow keys. This also works with the editor's
@@ -18,7 +22,7 @@ while drawing, the arrow keys still pan. Keyboard navigation ignores text fields
 
 ## Walking through a floor
 
-Choose **Walk** to view the active floor at eye height. Use W/S or the up/down arrows to move, A/D or the left/right arrows to turn, and click the view to look around with the mouse. Escape releases the mouse; press it again to leave Walk.
+Choose **Walk** to view the active floor at eye height. Use W/S or the up/down arrows to move, A/D or the left/right arrows to turn, and drag the view with the left mouse button to look around. The cursor stays visible; releasing the button lets you use the panels immediately. Press Escape once to leave Walk.
 
 Pool water uses a simple static translucent surface in the normal **3D** overview. Waves, refraction,
 underwater fixture lighting and animated caustics run only in **Walk**, where those details are visible.
@@ -27,6 +31,12 @@ The **Field of view** slider in the upper right adjusts the horizontal viewing a
 
 Selecting an object from the list turns you toward it from your current position. Changing to a floor
 with a smaller footprint moves an unsupported walking position to a dry navigation point on that floor.
+
+Mezzanine collision includes walls rising from the storey below, using their actual height and
+door openings. Exposed edges of elevated and basement floors stop movement at the slab edge.
+Authored gallery holes allow a drop when there is a supporting floor below; holes without a landing
+stop movement. Stairs and escalators provide their own support through these openings, and
+ground-level exits remain walkable.
 
 ### Stairs and escalators
 

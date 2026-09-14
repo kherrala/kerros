@@ -256,10 +256,24 @@ export function addPoolrooms(p: ProjectDocument, seed: string, span: number) {
   };
   p.objects = p.objects.filter(o => !oldIds.has(o.id));
   p.objects.push(elevator);
+  p.zones!.push({
+    id: 'backrooms-elevator-zone',
+    name: elevator.name,
+    spaceIds: [elevator.id],
+    purpose: 'circulation',
+    connects: 'all',
+  });
   const landings = p.navNodes!.filter(n => n.objectId && oldIds.has(n.objectId));
   for (const node of landings) {
     node.objectId = elevator.id;
     node.position = [-3, 2.2];
+    p.portals!.push({
+      id: `${node.floorId}-elevator-portal`,
+      a: `${node.floorId}-room-0`,
+      b: elevator.id,
+      name: 'Elevator landing',
+      attests: 'none',
+    });
   }
   p.navEdges = p.navEdges!.filter(e => e.kind !== 'stairs');
   for (let i = 0; i < landings.length; i++)

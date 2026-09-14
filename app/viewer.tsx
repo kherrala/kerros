@@ -6,34 +6,19 @@
 // means is the host's business, not the toolkit's.
 import { lazy, Suspense, useEffect, useMemo, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { LiftPanel, useLiftController } from './LiftPanel';
-import {
-  ArrowLeft,
-  ArrowRight,
-  Box,
-  Building2,
-  CircleAlert,
-  Footprints,
-  Layers3,
-  Leaf,
-  Moon,
-  Sun,
-  UploadCloud,
-  X,
-} from 'lucide-react';
+import { useLiftController } from './LiftPanel';
+import { ArrowLeft, ArrowRight, Building2, CircleAlert, Layers3, Leaf, Moon, Sun, UploadCloud, X } from 'lucide-react';
 import {
   parseExport,
+  openingFloorId,
   KerrosThemeProvider,
   useDarkMode,
   IndexedAssetRepository,
   LocalProjectRepository,
   IndexedProjectRepository,
   type AssetRepository,
-  type Barrier,
   type ProjectDocument,
   type ProjectSummary,
-  type SiteObject,
-  StructureView,
 } from '@kerros/viewer/host';
 // FloorViewer is the only thing here that draws a plan, and drawing a plan means maplibre and three
 // — 1.7 MB that the picker screen has no use for. The `/host` subpath above is the same facade
@@ -63,10 +48,9 @@ function ViewerShell({
   const [floorId, setFloorId] = useState<string | null>(
       view?.floor !== undefined && (view.floor === null || project.floors.some(f => f.id === view.floor))
         ? view.floor
-        : (project.floors.find(f => f.elevation === 0)?.id ?? project.floors[0]?.id ?? null),
+        : openingFloorId(project),
     ),
-    [selected, setSelected] = useState<string | null>(null),
-    [tab, setTab] = useState<'floors' | 'structure'>('floors');
+    [selected, setSelected] = useState<string | null>(null);
   // A host's own simulated feed. Real hosts subscribe to a StatusFeed; this one lets you drive the
   // lifts by hand, which is the same data arriving by a different road.
   const liftController = useLiftController(project);
@@ -111,8 +95,6 @@ function ViewerShell({
     setFloorId(id);
     setSelected(null);
   };
-  const entity: SiteObject | Barrier | undefined =
-    project.objects.find(o => o.id === selected) ?? project.barriers.find(b => b.id === selected);
   return (
     <div className="app-shell">
       <header className="app-header">
@@ -160,82 +142,68 @@ function ViewerShell({
               <span>Read-only</span>
             </div>
           </div>
-          {(project.zones?.length || project.portals?.length) && (
-            <div className="viewer-tabs">
-              <button className={tab === 'floors' ? 'active' : ''} onClick={() => setTab('floors')}>
-                Levels
-              </button>
-              <button className={tab === 'structure' ? 'active' : ''} onClick={() => setTab('structure')}>
-                Structure
-              </button>
-            </div>
-          )}
-          {tab === 'structure' ? (
-            <StructureView project={project} selected={selected} onSelect={setSelected} onFloorChange={changeFloor} />
-          ) : (
-            <div className="sidebar-scroll">
-              <div className="section-label">Floors &amp; levels</div>
-              <button
-                className={`floor-item outdoor ${floorId === null ? 'active' : ''}`}
-                onClick={() => changeFloor(null)}
-              >
-                <Leaf size={17} />
-                <span>
-                  Outdoor site<small>Perimeters &amp; surroundings</small>
-                </span>
-              </button>
-              {project.buildings.map(building => (
-                <div className="building-group" key={building.id}>
-                  <div className="building-label">
-                    <Building2 size={13} />
-                    {building.name}
-                    <span className="building-count">
-                      {project.floors.filter(f => f.buildingId === building.id).length}
-                    </span>
-                  </div>
-                  {project.floors
-                    .filter(f => f.buildingId === building.id)
-                    .sort((a, b) => b.elevation - a.elevation)
-                    .map(f => (
-                      <button
-                        key={f.id}
-                        className={`floor-item ${floorId === f.id ? 'active' : ''}`}
-                        onClick={() => changeFloor(f.id)}
-                      >
-                        <span className="floor-number">
-                          {f.code ??
-                            (f.mezzanine
-                              ? 'M'
-                              : f.elevation < 0
-                                ? 'B' +
+          <div className="sidebar-scroll">
+            <div className="section-label">Floors &amp; levels</div>
+            <button
+              className={`floor-item outdoor ${floorId === null ? 'active' : ''}`}
+              onClick={() => changeFloor(null)}
+            >
+              <Leaf size={17} />
+              <span>
+                Outdoor site<small>Perimeters &amp; surroundings</small>
+              </span>
+            </button>
+            {project.buildings.map(building => (
+              <div className="building-group" key={building.id}>
+                <div className="building-label">
+                  <Building2 size={13} />
+                  {building.name}
+                  <span className="building-count">
+                    {project.floors.filter(f => f.buildingId === building.id).length}
+                  </span>
+                </div>
+                {project.floors
+                  .filter(f => f.buildingId === building.id)
+                  .sort((a, b) => b.elevation - a.elevation)
+                  .map(f => (
+                    <button
+                      key={f.id}
+                      className={`floor-item ${floorId === f.id ? 'active' : ''}`}
+                      onClick={() => changeFloor(f.id)}
+                    >
+                      <span className="floor-number">
+                        {f.code ??
+                          (f.mezzanine
+                            ? 'M'
+                            : f.elevation < 0
+                              ? 'B' +
+                                project.floors.filter(
+                                  x =>
+                                    x.buildingId === f.buildingId &&
+                                    !x.mezzanine &&
+                                    x.elevation < 0 &&
+                                    x.elevation >= f.elevation,
+                                ).length
+                              : String(
                                   project.floors.filter(
                                     x =>
                                       x.buildingId === f.buildingId &&
                                       !x.mezzanine &&
-                                      x.elevation < 0 &&
-                                      x.elevation >= f.elevation,
-                                  ).length
-                                : String(
-                                    project.floors.filter(
-                                      x =>
-                                        x.buildingId === f.buildingId &&
-                                        !x.mezzanine &&
-                                        x.elevation >= 0 &&
-                                        x.elevation < f.elevation,
-                                    ).length,
-                                  ).padStart(2, '0'))}
-                        </span>
-                        <span>
-                          {f.name}
-                          <small>{f.elevation.toFixed(1)} m elevation</small>
-                        </span>
-                        {floorId === f.id && <span className="active-floor-dot" />}
-                      </button>
-                    ))}
-                </div>
-              ))}
-            </div>
-          )}
+                                      x.elevation >= 0 &&
+                                      x.elevation < f.elevation,
+                                  ).length,
+                                ).padStart(2, '0'))}
+                      </span>
+                      <span>
+                        {f.name}
+                        <small>{f.elevation.toFixed(1)} m elevation</small>
+                      </span>
+                      {floorId === f.id && <span className="active-floor-dot" />}
+                    </button>
+                  ))}
+              </div>
+            ))}
+          </div>
           <div className="sidebar-footer">
             <span className="workspace-avatar">K</span>
             <div>
@@ -257,16 +225,20 @@ function ViewerShell({
               }
             >
               <FloorViewer
+                controls
                 project={project}
                 assets={assets}
                 statuses={liftController.statuses}
+                elevators={liftController}
                 basemap={basemap}
                 floorId={floorId}
                 onFloorChange={setFloorId}
                 selected={selected}
                 onSelect={setSelected}
-                threeD={threeD}
+                viewMode={viewMode}
+                onViewModeChange={chooseMode}
                 stack={stack}
+                onStackChange={setStack}
                 walk={walk}
                 onWalkExit={() => chooseMode('3d')}
                 dark={dark}
@@ -279,48 +251,8 @@ function ViewerShell({
                 }}
               />
             </Suspense>
-            <LiftPanel project={project} controller={liftController} onFloor={setFloorId} />
-            <div className="canvas-top-left">
-              <div className="view-switch">
-                <button className={viewMode === '2d' ? 'active' : ''} onClick={() => chooseMode('2d')}>
-                  2D
-                </button>
-                <button className={viewMode === '3d' ? 'active' : ''} onClick={() => chooseMode('3d')}>
-                  <Box size={14} />
-                  3D
-                </button>
-                <button
-                  className={viewMode === 'walk' ? 'active' : ''}
-                  title="Walk through the building at eye level"
-                  onClick={() => chooseMode('walk')}
-                >
-                  <Footprints size={14} />
-                  Walk
-                </button>
-              </div>
-              {threeD && !walk && (
-                <button className={`stack-button ${stack ? 'active' : ''}`} onClick={() => setStack(!stack)}>
-                  <Layers3 size={15} />
-                  {stack ? 'All floors' : 'Cutaway'}
-                </button>
-              )}
-            </div>
           </div>
         </main>
-        {entity && (
-          <aside className="inspector viewer-object">
-            <div className="inspector-top">
-              Selected object
-              <button className="icon-button" aria-label="Close panel" onClick={() => setSelected(null)}>
-                <X size={15} />
-              </button>
-            </div>
-            <div className="inspector-scroll">
-              <h2>{entity.name}</h2>
-              <p className="object-kind">{entity.kind}</p>
-            </div>
-          </aside>
-        )}
       </div>
       {error && (
         <div className="toast" role="alert">

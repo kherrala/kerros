@@ -11,7 +11,7 @@ import '@kerros/viewer/styles.css';
 | Import | What it is |
 | --- | --- |
 | `@kerros/viewer` | The whole facade, `FloorViewer` included. |
-| `@kerros/viewer/host` | The same facade minus `FloorViewer`: persistence, theming, status helpers, `StructureView`, the schema. |
+| `@kerros/viewer/host` | The same facade minus the map renderer: persistence, theming, status helpers, read-only panels, the schema and viewer prop types. |
 | `@kerros/viewer/styles.css` | The stylesheet (MapLibre's, then Kerros'). |
 
 `FloorViewer` reaches `maplibre-gl` and `three` — about 1.7 MB that a picker screen has no use for.
@@ -19,13 +19,8 @@ The package is published one file per module, so a bundler follows only what you
 importing `KerrosThemeProvider` from either entry point costs the same, and neither pulls the
 renderer.
 
-What each import costs, as `make budget` measures it — Kerros's own code, before first paint:
-
-| import | eager | also fetches |
-| --- | --- | --- |
-| light names, from either entry | 62 kB | — |
-| `FloorViewer` | 184 kB | `maplibre-gl` |
-| `FloorViewer`, once you enter 3D | + the 3D scene | `three` |
+`make budget` measures the current payload of each import. Light host imports do not fetch a map;
+`FloorViewer` loads MapLibre, with the 3D scene and optional panels deferred until needed.
 
 `three` is not in that first load. The 3D scene is named with a dynamic import, so a viewer left in
 2D never fetches it — which is what a host embedding a flat floor plan wants, and it needs no
@@ -46,13 +41,20 @@ entry otherwise.
 
 ## Components
 
-- **`FloorViewer`** — the 2D/3D read-only viewer. See [The viewer](../guide/viewer) for the full prop list.
-- **`FloorViewerProps`** — its props type.
+- **`FloorViewer`** — map-only by default; `controls` adds floor/view options, structure, graph view, directions/playback and read-only properties. See [The viewer](../guide/viewer) for the full prop list and elevator integration.
+- **`FloorViewerProps`**, **`ViewerMode`**, **`ViewerDisplayOptions`**, **`WalkAvatar`** — view and interaction contracts. Props and types are also available from `/host`.
 - **`StructureView`** / **`StructureViewProps`** — the building as a browsable structure rather than a
   picture: zones, their member spaces, and the portals bounding each (derived with `perimeter`/`captive`).
   Read-only by default; pass `onEdit` to let it author zones and re-read portals. The parts of the
   ontology with no shape — a zone spanning floors, a lift core — have no honest home on a map, which
   is why this is a list.
+- **`StructureTarget`** — object IDs, floor and/or position supplied by map-location buttons.
+- **`NavigationPanel`** / **`NavigationPanelProps`** — the shared directions and playback panel with authoring disabled; the host supplies endpoints, route and callbacks.
+- **`NavigationGraph`** / **`NavigationGraphProps`** — force-directed graph visualization with floor filtering, layout controls and `onLocate`/`onClose` callbacks. Graph positions are presentation state only.
+- **`ReadOnlyInspector`** / **`ReadOnlyInspectorProps`** — geometry, relationships and live status with selection/floor callbacks and no document mutation API.
+
+These panels are also exported from `/host`, load their UI on demand, and can be composed around
+a map-only `FloorViewer`. No panel loads the editor's planner or import workflow.
 
 ## Live status
 
@@ -65,6 +67,8 @@ entry otherwise.
 | `statusTone(status, now?)` | The tone the viewer renders (applies staleness). |
 | `statusLabel(status, now?)` | The label the viewer renders (applies staleness). |
 | `unknownStatus(feedId)` | A blank unknown status. |
+| `ElevatorControls` | `{ statuses, call(feedId, floorId), hold(feedId, open) }` — optional host commands used by passenger controls and route playback. |
+| `StatusPanelContext` | Context passed to `renderStatusPanel`; the viewer supplies `editing: false`. |
 
 ## Basemap
 

@@ -1,4 +1,6 @@
 import { defineConfig } from 'vitepress';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const DEMO = 'https://kherrala.fi/kerros';
 
@@ -7,7 +9,8 @@ export default defineConfig({
   description: 'Open-source indoor mapping: draw connected floor plans, explore in 3D and POV, and navigate between floors.',
   base: '/kerros/',
   cleanUrls: false, // Support static hosts without extensionless-URL rewrites.
-  lastUpdated: true,
+  // Docker's source-only context omits .git. There is no commit timestamp to read there.
+  lastUpdated: existsSync(fileURLToPath(new URL('../../.git', import.meta.url))),
   markdown: { math: true },
   head: [
     ['meta', { name: 'theme-color', content: '#f7f7f2' }],
@@ -43,6 +46,15 @@ export default defineConfig({
           ],
         },
         {
+          text: 'Developer setup',
+          items: [
+            { text: 'Docker development stack', link: '/guide/development' },
+            { text: 'MML vector maps', link: '/guide/mml-maps' },
+            { text: 'AI import with Claude', link: '/guide/ai-import' },
+            { text: 'Source analysis & calibration', link: '/guide/ai-import-analysis' },
+          ],
+        },
+        {
           text: 'Academic interest',
           items: [{ text: 'Mathematical foundations', link: '/guide/geometry-mathematics' }],
         },
@@ -54,6 +66,7 @@ export default defineConfig({
             { text: '@kerros/schema', link: '/reference/schema' },
             { text: '@kerros/viewer', link: '/reference/viewer' },
             { text: '@kerros/import', link: '/reference/import' },
+            { text: '@kerros/server', link: '/reference/server' },
             { text: '@kerros/editor', link: '/reference/editor' },
           ],
         },

@@ -292,7 +292,7 @@ describe('shared space boundaries', () => {
     room.rings = [rectangle([0, 0], 1.1, 1.1), rectangle([0, 0], 0.5, 0.5)];
     expect(transact(p, d => d.objects.push(room))).toEqual({
       ok: false,
-      error: 'A space needs at least 1 m² of usable area.',
+      error: expect.stringContaining('has 0.960 m²'),
     });
     p.objects.push(room); // An older document may already contain this outline.
     const renamed = edit(p, d => {

@@ -3,6 +3,7 @@
 // ids; no geometry is read. Reading the plan itself (inferring portals, dividing spaces) lives in
 // inference.ts, and turning this description into a routing graph lives in topology.ts.
 import { isSpace, uid, type Portal, type PortalGroup, type ProjectDocument, type Zone } from './types';
+import { effectivePortals } from './portals';
 
 /** Which way you must cross `portal` to arrive in `spaceId`, or null if you cannot get there that way.
  *  Direction is asked, never stored: a door's entry side is relative to the area you mean. */
@@ -32,13 +33,13 @@ export const zoneSpaces = (project: ProjectDocument, zone: Zone): string[] => [.
  *  stale when the building is redrawn. */
 export function perimeter(project: ProjectDocument, zone: Zone): Portal[] {
   const inside = memberSet(project, zone);
-  return (project.portals ?? []).filter(p => inside.has(p.a) !== inside.has(p.b));
+  return effectivePortals(project).filter(p => inside.has(p.a) !== inside.has(p.b));
 }
 /** Portals wholly inside `zone`. Not decorative: anything tracking where somebody ended up needs to
  *  know that crossing one of these does not change which zone you are in. */
 export function captive(project: ProjectDocument, zone: Zone): Portal[] {
   const inside = memberSet(project, zone);
-  return (project.portals ?? []).filter(p => inside.has(p.a) && inside.has(p.b));
+  return effectivePortals(project).filter(p => inside.has(p.a) && inside.has(p.b));
 }
 
 // ——— Authoring. Zones are the part a person actually writes: portals are read off the plan, but
@@ -96,6 +97,7 @@ export function nestZone(project: ProjectDocument, parentId: string, childId: st
  *  boundary, derive it with `perimeter` instead; a derived list cannot go stale. Ids that are not
  *  portals are dropped rather than rejected, mirroring addZone. */
 export function addPortalGroup(project: ProjectDocument, name: string, portalIds: string[]): PortalGroup {
+  project.portals = effectivePortals(project);
   const group: PortalGroup = {
     id: uid(),
     name,
@@ -112,6 +114,7 @@ export function removePortalGroup(project: ProjectDocument, groupId: string) {
 export function setPortalGroupMembers(project: ProjectDocument, groupId: string, portalIds: string[], member: boolean) {
   const group = project.portalGroups?.find(g => g.id === groupId);
   if (!group) return;
+  project.portals = effectivePortals(project);
   const eligible = portalIds.filter(id => (project.portals ?? []).some(p => p.id === id));
   const next = new Set(group.portalIds);
   for (const id of eligible)

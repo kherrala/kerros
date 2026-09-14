@@ -60,6 +60,9 @@ See [The editor](./editor) for adapters, modes, deep links and the status-panel 
 
 ## Build a project in code
 
+To run the reference applications, start with [the Docker development stack](./development): `make up` runs the apps, documentation and importer. The [MML vector maps](./mml-maps) and [AI import with Claude](./ai-import) guides cover optional API keys.
+
+
 `@kerros/schema` is a pure, framework-free core — you can construct and route projects with no DOM at all (a server, a CLI, a mobile backend):
 
 ```ts

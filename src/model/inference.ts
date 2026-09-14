@@ -19,14 +19,13 @@ import { isSpace, type Point, type Portal, type ProjectDocument, type SiteObject
 import { inSpace, spaceAt } from './spaces';
 import { isVertical, servedFloors, shaftKey } from './vertical';
 import { pruneOntology } from './ontology';
+import { sharedBoundaryPortals } from './portals';
+import { TRAVERSABLE } from './passages';
+export { TRAVERSABLE } from './passages';
 
 /** How far past a wall face to look for the room on that side — enough to clear the leaf and any
  *  threshold, small enough to stay in the room rather than reaching into the next one. */
 const PROBE = 0.35;
-/** Openings you can walk through. A window is an opening but not a way in, so it is never a portal —
- *  which also keeps a glazed façade from swamping the count with a thousand non-answers. */
-export const TRAVERSABLE = new Set<string>(['door', 'gate', 'turnstile']);
-
 /** Infer the portals a plan already describes: for each opening, the space on either side of the wall
  *  it sits in. This is the move software without a plan cannot make — it has to be told which
  *  doors bound an area, because none of them has a floor plan to ask.
@@ -84,8 +83,8 @@ const MIN_OPENING = 1.2;
  *  across it. Open-plan floors are made of these — a department opening onto a gallery, a lift car
  *  onto its lobby — and a model that only knows about door objects cannot see any of them.
  *
- *  Walks each space's outline, and wherever it can step across into a neighbour without crossing a
- *  wall, accumulates that run. Runs long enough to walk through become portals. */
+ * Shared virtual edges give exact connectivity. For independent outlines, walk the outline and
+ * accumulate stretches that can step across into a neighbour without crossing a wall. */
 export function inferOpenBoundaries(project: ProjectDocument): Portal[] {
   const byFloor = new Map<string, SiteObject[]>();
   const standOn = (space: SiteObject, key: string) => {
@@ -162,6 +161,9 @@ export function inferOpenBoundaries(project: ProjectDocument): Portal[] {
               if (inSpace(space, probe)) continue; // still inside ourselves
               const other = ordered.find(o => o.id !== space.id && inSpace(o, probe));
               if (!other) continue;
+              // Shared geometry already says whether these two faces have an open edge. A coarse
+              // probe must neither miss a narrow opening nor invent a shortcut at a wall junction.
+              if (space.geometry?.mode === 'boundaries' && other.geometry?.mode === 'boundaries') continue;
               const key = space.id < other.id ? `${space.id}|${other.id}` : `${other.id}|${space.id}`;
               shared.set(key, (shared.get(key) ?? 0) + len / steps);
             }
@@ -170,7 +172,7 @@ export function inferOpenBoundaries(project: ProjectDocument): Portal[] {
       }
     }
   }
-  const out: Portal[] = [];
+  const out = sharedBoundaryPortals(project);
   for (const [key, run] of shared) {
     if (run < MIN_OPENING) continue;
     const [a, b] = key.split('|');
@@ -195,9 +197,11 @@ export function refreshPortals(project: ProjectDocument): number {
   const previous = project.portals ?? [];
   const authored = previous.filter(p => !INFERRED(p.id));
   const held = new Set(authored.flatMap(p => (p.openingId ? [p.openingId] : [])));
+  const heldPairs = new Set(authored.map(p => JSON.stringify([p.a, p.b].sort())));
   const edited = new Map(previous.filter(p => INFERRED(p.id)).map(p => [p.id, p]));
   const fresh = [...inferPortals(project), ...inferOpenBoundaries(project)]
     .filter(p => !p.openingId || !held.has(p.openingId))
+    .filter(p => !p.id.startsWith('open:') || !heldPairs.has(JSON.stringify([p.a, p.b].sort())))
     .map(p => {
       const old = edited.get(p.id);
       if (!old) return p;

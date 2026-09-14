@@ -10,7 +10,8 @@ import { isSpace, type NavEdge, type NavEdgeKind, type NavNode } from './types';
 import type { Floor, ProjectDocument, SiteObject } from './types';
 import { spacePoint } from './spaces';
 import { zoneSpaces } from './ontology';
-import { TRAVERSABLE } from './inference';
+import { TRAVERSABLE } from './passages';
+import { effectivePortals } from './portals';
 
 /** Node id for a space. Prefixed so a derived graph can never collide with an authored entity id. */
 export const spaceNodeId = (spaceId: string) => `space:${spaceId}`;
@@ -55,7 +56,7 @@ export function derivedGraph(project: ProjectDocument): { nodes: NavNode[]; edge
     edges.push(edge);
   };
 
-  for (const portal of project.portals ?? []) {
+  for (const portal of effectivePortals(project)) {
     if ((portal.passage ?? 'both') === 'none') continue;
     const a = objects.get(portal.a),
       b = objects.get(portal.b);

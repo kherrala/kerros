@@ -2,6 +2,7 @@ import { fileURLToPath, URL } from 'node:url';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import { readFileSync } from 'node:fs';
+import { browserServerBoundary } from './scripts/browser-boundary';
 
 /** Which chunk a module belongs to, keyed by a fragment of its resolved id; first match wins.
  *
@@ -11,9 +12,8 @@ import { readFileSync } from 'node:fs';
  *  dependencies here buys a filename that says what is in it and a cache entry per library, so
  *  editing app code stops invalidating maplibre and three along with it.
  *
- *  The test is a plain substring match, so `react-dom` has to be listed ahead of `react`. pdfjs is
- *  deliberately absent: it is reached only through the `import('pdfjs-dist')` in ImportDialog, and
- *  it should stay that way. */
+ *  The test is a plain substring match, so `react-dom` has to be listed ahead of `react`.
+ *  PDF extraction and rendering belong to @kerros/server; the browser boundary plugin rejects them. */
 const CHUNKS: ReadonlyArray<readonly [marker: string, chunk: string]> = [
   // The toolkit's own layers. `src/map` is the whole MapLibre-and-three rendering surface and
   // nothing in `src/model` imports back into it, so the two split cleanly; keeping them apart means
@@ -42,6 +42,7 @@ const CHUNKS: ReadonlyArray<readonly [marker: string, chunk: string]> = [
   ['/src/map/water', 'scene'],
   ['/src/map/walkJourney', 'walk-journey'],
   ['/src/map/journey', 'map-journey'],
+  ['/src/map/bathMusic', 'room-music'],
   ['/src/map/', 'map'],
   ['/src/model/', 'model'],
   ['/src/schema/', 'model'],
@@ -94,8 +95,17 @@ const FACADES: ReadonlyArray<readonly [module: string, chunk: string]> = [
 ];
 
 export default defineConfig({
+  server: {
+    proxy: {
+      '/api/ai-import': {
+        target: process.env.KERROS_API_PROXY_TARGET || 'http://127.0.0.1:3001',
+        timeout: 0,
+        proxyTimeout: 0,
+      },
+    },
+  },
   publicDir: 'docs/public',
-  plugins: [react(), {
+  plugins: [react(), browserServerBoundary(), {
     name: 'kerros-landing',
     transformIndexHtml: { order: 'pre', handler: html => html.replace('<!-- kerros-landing -->', readFileSync(new URL('website/landing.html', import.meta.url), 'utf8')) },
   }],
@@ -140,6 +150,7 @@ export default defineConfig({
   },
   test: {
     environment: 'node',
+    env: { ANTHROPIC_API_KEY: '' },
     include: ['src/**/*.test.ts', 'app/**/*.test.ts'],
     /* app/demo integration tests build the full 1300-object campus; under parallel load they cross
        vitest's 5s default, which read as a phantom validation flake */

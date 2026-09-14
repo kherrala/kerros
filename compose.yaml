@@ -1,0 +1,93 @@
+name: kerros
+services:
+  docs:
+    build:
+      context: .
+      target: web
+    init: true
+    ports:
+      - "127.0.0.1:${DOCS_PORT:-5174}:5174"
+    command: [npm, run, docs:dev, --, --host, 0.0.0.0, --port, "5174", --strictPort]
+    develop:
+      watch:
+        - action: sync
+          path: docs
+          target: /app/docs
+        - action: rebuild
+          path: package.json
+        - action: rebuild
+          path: package-lock.json
+  web:
+    build:
+      context: .
+      target: web
+    init: true
+    ports:
+      - "127.0.0.1:${PORT:-5173}:5173"
+    environment:
+      VITE_MML_API_KEY: ${VITE_MML_API_KEY:-}
+      VITE_AI_IMPORT_URL: /api/ai-import
+      KERROS_API_PROXY_TARGET: http://api:3001
+    command: [npm, run, dev, --, --host, 0.0.0.0, --port, "5173", --strictPort]
+    depends_on:
+      api:
+        condition: service_healthy
+    develop:
+      watch:
+        - action: sync
+          path: .
+          target: /app
+          ignore: [package.json, package-lock.json, Dockerfile, compose.yaml]
+        - action: rebuild
+          path: package.json
+        - action: rebuild
+          path: package-lock.json
+        - action: rebuild
+          path: Dockerfile
+  api:
+    build:
+      context: .
+      target: api
+    init: true
+    shm_size: 256mb
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      ANTHROPIC_MODEL: ${ANTHROPIC_MODEL:-claude-opus-4-8}
+      KERROS_API_HOST: 0.0.0.0
+      KERROS_IMPORT_ANALYSIS_CACHE: /home/node/.cache/kerros-analysis
+    volumes:
+      - analysis-cache:/home/node/.cache/kerros-analysis
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:3001/api/ai-import').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    develop:
+      watch:
+        - action: sync+restart
+          path: server
+          target: /app/server
+        - action: sync+restart
+          path: scripts
+          target: /app/scripts
+        - action: sync+restart
+          path: src/model
+          target: /app/src/model
+        - action: sync+restart
+          path: src/schema
+          target: /app/src/schema
+        - action: sync+restart
+          path: src/import
+          target: /app/src/import
+        - action: sync+restart
+          path: src/server
+          target: /app/src/server
+        - action: rebuild
+          path: package.json
+        - action: rebuild
+          path: package-lock.json
+        - action: rebuild
+          path: Dockerfile
+volumes:
+  analysis-cache:

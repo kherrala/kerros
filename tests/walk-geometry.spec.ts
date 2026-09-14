@@ -119,3 +119,106 @@ test('the camera eye stays at collision origin and close walls remain in the POV
   expect(clip[2]).toBeLessThan(1);
   await page.screenshot({ path: info.outputPath('close-wall.png') });
 });
+
+test('mezzanine walls and exposed edges block walking while supported gallery holes still drop', async ({
+  page,
+}, info) => {
+  const p = newProject('Gallery support');
+  p.floors[0].height = 7;
+  p.floors.push({ ...p.floors[0], id: 'gallery', name: 'Gallery', elevation: 4, height: 3, mezzanine: true });
+  const unsupportedHole = rectangle([-4, 0], 2, 2).reverse();
+  for (const floor of p.floors) {
+    const room = createObject('room', [0, 0], floor.id, floor.name);
+    Object.assign(room, {
+      rings: [
+        rectangle([0, 0], 12, 12),
+        unsupportedHole,
+        ...(floor.id === 'gallery' ? [rectangle([0, 0], 4, 4).reverse()] : []),
+      ],
+      width: 12,
+      depth: 12,
+      ceilingHeight: floor.id === 'gallery' ? 3 : 7,
+    });
+    p.objects.push(room);
+  }
+  const wall = addBarrier(p, [-5, 3], [5, 3], 'floor-ground', 'wall')!;
+  wall.height = 7;
+  const door = createObject('door', [4, 3], 'floor-ground', 'Lower door');
+  Object.assign(door, { barrierId: wall.id, offset: 9, width: 1.2, height: 2.1 });
+  p.objects.push(door);
+  addBarrier(p, [-5, -3], [5, -3], 'floor-ground', 'wall')!.height = 3;
+  const valid = transact(p, () => {});
+  if (!valid.ok) throw new Error(valid.error);
+  await openFixture(page, valid.project);
+  const errors: string[] = [];
+  page.on('pageerror', e => errors.push(e.message));
+  await page.getByRole('button', { name: 'Active floor', exact: true }).click();
+  await page.locator('.place-option').filter({ hasText: 'Gallery' }).click();
+  await page.getByRole('button', { name: 'Walk', exact: true }).click();
+  const stand = (position: number[], heading: number) =>
+    page.evaluate(({ position, heading }) => (window as any).__kerrosWalk.place(position, heading), {
+      position,
+      heading,
+    });
+  const walk = async (ms = 550) => {
+    await page.keyboard.down('KeyW');
+    await page.waitForTimeout(ms);
+    await page.keyboard.up('KeyW');
+  };
+  // The ground-floor doorway has solid wall above it at the gallery's height.
+  await stand([4, 2], 0);
+  await walk();
+  const stopped = await pose(page);
+  expect(stopped.floor).toBe('gallery');
+  expect(stopped.position[1]).toBeGreaterThan(2.5);
+  expect(stopped.position[1]).toBeLessThan(2.6);
+  expect(stopped.eyeError).toBeLessThan(0.01);
+  await page.screenshot({ path: info.outputPath('gallery-host-wall.png') });
+  // The shorter host partition is entirely below the gallery.
+  await stand([4, -3.7], 0);
+  await walk();
+  expect((await pose(page)).position[1]).toBeGreaterThan(-2.8);
+  await stand([5.8, 4], 90);
+  await walk();
+  expect((await pose(page)).position[0]).toBeCloseTo(6, 3);
+  expect((await pose(page)).floor).toBe('gallery');
+  // Route playback must respect the same edge, both for ordinary legs and physical transfers.
+  for (const physical of [false, true]) {
+    await stand([5.8, 4], 90);
+    const outcome = await page.evaluate(
+      physical =>
+        new Promise(resolve => {
+          (window as any).__kerrosWalk.follow(
+            [
+              [5.8, 4],
+              [8, 4],
+            ],
+            () => resolve('arrived'),
+            {
+              physical,
+              onCancel: () => resolve('stopped'),
+            },
+          );
+        }),
+      physical,
+    );
+    expect(outcome).toBe('stopped');
+    expect((await pose(page)).position[0]).toBeLessThanOrEqual(6);
+  }
+  await stand([-4, -1.2], 0);
+  await walk();
+  expect((await pose(page)).position[1]).toBeCloseTo(-1, 3);
+  expect((await pose(page)).floor).toBe('gallery');
+  await page.screenshot({ path: info.outputPath('gallery-unsupported-hole.png') });
+  await stand([0, -2.2], 0);
+  await page.keyboard.down('KeyW');
+  await expect.poll(async () => (await pose(page)).floor).toBe('floor-ground');
+  await page.keyboard.up('KeyW');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__kerrosMap.transform.getCameraAltitude()))
+    .toBeCloseTo(2.03, 2);
+  expect((await pose(page)).position[1]).toBeGreaterThan(-2);
+  expect((await pose(page)).position[1]).toBeLessThan(-1.8);
+  await page.screenshot({ path: info.outputPath('gallery-landing.png') });
+  expect(errors).toEqual([]);
+});

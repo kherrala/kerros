@@ -6,6 +6,7 @@ import type { Floor, NavEdge, NavEdgeKind, NavNode, Point, ProjectDocument, Site
 import { uid } from './types';
 import { distance, objectPosition, pointInRing } from './geometry';
 import { topology } from './topology';
+import { servedFloors, shaftKey } from './vertical';
 import { inSpace, spaceAt } from './spaces';
 import { routeClearance } from './routeClearance';
 import type { StatusReading } from './live';
@@ -71,12 +72,9 @@ export function chainVertical(p: ProjectDocument, object: SiteObject): NavNode[]
   // An escalator carries you one way, so the edges it threads are one-way: a route may ride it in
   // the direction it runs and must walk round to come back. A stair has no direction to run in.
   const travel = object.stairModel === 'escalator' ? (object.travel ?? 'up') : null;
-  const floors = [...new Set(object.servedFloorIds ?? [])]
-    .map(id => p.floors.find(f => f.id === id))
-    .filter((f): f is Floor => !!f)
-    .sort((a, b) => a.elevation - b.elevation);
-  const twin = (floorId: string) =>
-    p.objects.find(o => o.kind === object.kind && o.name === object.name && o.floorId === floorId) ?? object;
+  const floors = servedFloors(p, object);
+  const key = shaftKey(object);
+  const twin = (floorId: string) => p.objects.find(o => shaftKey(o) === key && o.floorId === floorId) ?? object;
   const out = floors.map(f => {
     const t = twin(f.id);
     return addNavNode(p, f.id, objectPosition(p, t), t.id);

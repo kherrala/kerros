@@ -91,6 +91,9 @@ test('entering the baths plays music, respects mute, and releases audio after le
   await page.locator('.place-option').filter({ hasText: 'The endless baths' }).click();
   await expect.poll(() => page.evaluate(() => (window as any).__kerrosSound?.playing?.key)).toBe('baths@0.55');
   await expect.poll(() => page.evaluate(() => (window as any).__kerrosSound?.ctx?.state)).toBe('running');
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__kerrosSound?.playing?.layers[0]?.nodes.length ?? 0))
+    .toBeGreaterThan(0);
   await page.keyboard.press('m');
   await expect.poll(() => page.evaluate(() => (window as any).__kerrosSound.isMuted)).toBe(true);
   await page.keyboard.press('m');

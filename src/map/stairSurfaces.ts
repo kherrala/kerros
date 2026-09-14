@@ -4,6 +4,7 @@ import type { StatusReading } from '../model/live';
 import { add, distance, pointInRing, rectangle, rotate, segmentProjection } from '../model/geometry';
 import { flights, flightRun, primaryShafts, stairModel } from '../model/vertical';
 import { spiralGeometry, stairGeometry } from '../model/stairGeometry';
+import { supportedStep } from './walkSurfaces';
 
 export interface StairSurface {
   flightId: string;
@@ -109,7 +110,14 @@ export class StairWalker {
     this.pending = undefined;
     this.height = elevation;
   }
-  step(from: Point, to: Point, surfaces: StairSurface[], floor: string | null, elevation: number): Point {
+  step(
+    from: Point,
+    to: Point,
+    surfaces: StairSurface[],
+    floor: string | null,
+    elevation: number,
+    supports?: (at: Point, floorId: string | null) => boolean,
+  ): Point {
     const previous = this.height;
     if (
       surfaces.some(
@@ -125,6 +133,7 @@ export class StairWalker {
     if (!support) {
       // The final riser may be crossed between frames (turning stairs have no top pad).
       if (this.active && this.active.high - previous <= 0.3 && floor !== this.active.toFloor) {
+        if (supports && !supports(to, this.active.toFloor)) return from;
         this.height = this.active.high;
         this.pending = this.active.toFloor;
         return to;
@@ -136,7 +145,7 @@ export class StairWalker {
       )
         return from;
       this.reset(elevation);
-      return to;
+      return supportedStep(from, to, at => supports?.(at, floor) ?? true);
     }
     this.active = support;
     this.height = support.height(to);

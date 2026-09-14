@@ -1,5 +1,7 @@
 import { draggedDoorSwing } from './model/doors';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { validateProject } from './model/validate';
+import { loadAiImportSession } from './import/session';
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowDownToLine,
   ArrowLeft,
@@ -58,7 +60,7 @@ import type {
   Tool,
 } from './model/types';
 import type { StatusReading } from './model/live';
-import type { SitePlannerProps } from './model/host';
+import type { CameraState, SitePlannerProps } from './model/host';
 import { isArea, isDevice, isOpening, uid } from './model/types';
 import {
   add,
@@ -68,6 +70,8 @@ import {
   closeRing,
   distance,
   duplicateFloor,
+  footprint,
+  moveOrigin,
   removeBarrier,
   removeFloor,
   objectArea,
@@ -86,6 +90,7 @@ import {
   boundaryEdges,
   boundaryRegionAt,
   connectSpace,
+  disconnectSpace,
 } from './model/boundaries';
 import { pruneOntology } from './model/ontology';
 import { derivedGraph } from './model/topology';
@@ -107,7 +112,10 @@ import type { WalkAvatar } from './map/walk';
 import { EntityIcon } from './components/Icons';
 import { Inspector } from './components/Inspector';
 import { NavigatePanel } from './components/NavigatePanel';
-import { StructureView } from './components/StructureView';
+import { StructureView, type StructureTarget } from './components/StructureView';
+const NavigationGraph = lazy(() =>
+  import('./components/NavigationGraph').then(module => ({ default: module.NavigationGraph })),
+);
 import { AlignmentPanel, ImportDialog, makeDrawing, type PreparedDrawing } from './components/ImportDialog';
 import { Choice, FloorSelect, Modal, Toggle } from './components/controls';
 import { FIXED, sunAt } from './map/lighting';
@@ -187,7 +195,8 @@ export function SitePlanner({
     if (wanted === 'view') return 'view';
     return readOnly && monitoring ? 'live' : 'view';
   });
-  const editing = mode === 'edit',
+  const [aiRunning, setAiRunning] = useState(false);
+  const editing = mode === 'edit' && !aiRunning,
     live = mode === 'live';
   const [threeD, setThreeD] = useState(initialView?.threeD ?? initialView?.mode !== 'edit'),
     [stack, setStack] = useState(initialView?.stack ?? false),
@@ -257,6 +266,25 @@ export function SitePlanner({
     const angle = Math.round(Math.abs(sun.altitude));
     return `${clockTime}, ${angle}° ${sun.altitude < 0 ? 'below' : 'above'} the horizon`;
   }, [clock, sun.altitude]);
+  const [planImportOpen, setPlanImportOpen] = useState(false);
+  const [planImportMounted, setPlanImportMounted] = useState(false);
+  useEffect(() => {
+    if (!adapters.aiImport || readOnly) return;
+    let active = true;
+    void loadAiImportSession(adapters.assets, initial.id)
+      .then(session => {
+        if (active && session) {
+          setPlanImportMounted(true);
+          setPlanImportOpen(true);
+          setMode('edit');
+          setSidebarOpen(true);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [adapters.aiImport, adapters.assets, initial.id, readOnly]);
   const [importOpen, setImportOpen] = useState(false),
     [floorModal, setFloorModal] = useState(false),
     [helpOpen, setHelpOpen] = useState(false),
@@ -270,6 +298,10 @@ export function SitePlanner({
   // The person, apart from the camera: where the last walk ended, or where the person marker was
   // dropped. Survives leaving the walk — the 2D plan shows them standing there — and not the project.
   const [avatar, setAvatar] = useState<WalkAvatar | null>(null);
+  const [graphView, setGraphView] = useState(false);
+  const [graphFloor, setGraphFloor] = useState<string | null | undefined>(undefined);
+  const graphCamera = useRef<CameraState | undefined>(undefined);
+  const pendingLocate = useRef<{ points: Point[] } | null>(null);
   useEffect(() => setAvatar(null), [project.id]);
   // Indoor navigation: route-tool chaining anchor, the A-to-B panel and journey playback state.
   const [routeAnchor, setRouteAnchor] = useState<string | null>(null),
@@ -378,7 +410,20 @@ export function SitePlanner({
   useEffect(() => {
     if (selected) setInspectorOpen(true);
   }, [selected]);
-  const { state: saveState, flush } = useProjectPersistence(project, adapters.projects, !readOnly, notify);
+  const { state: saveState, flush, saveNow } = useProjectPersistence(project, adapters.projects, !readOnly, notify);
+  const applyAiProject = useCallback(
+    async (document: ProjectDocument) => {
+      const next = validateProject({ ...document, id: latestProject.current.id, updatedAt: new Date().toISOString() });
+      latestProject.current = next;
+      setHistory(current => ({ ...commitHistory(current, next), present: next }));
+      setFloorId(current => (next.floors.some(f => f.id === current) ? current : openingFloorId(next)));
+      setSelected(null);
+      setDraft([]);
+      // Use the same ordered writer as ordinary autosave, without waiting for its debounce.
+      await saveNow(next);
+    },
+    [saveNow],
+  );
   const leave = async () => {
     try {
       await flush();
@@ -550,6 +595,76 @@ export function SitePlanner({
     if (id) setInspectorOpen(true);
     if (focus) setFocusId(id);
   }
+  function openGraph(floor?: string | null) {
+    const map = mapRef.current;
+    if (map) {
+      const center = map.getCenter();
+      graphCamera.current = {
+        center: [center.lng, center.lat],
+        zoom: map.getZoom(),
+        pitch: map.getPitch(),
+        bearing: map.getBearing(),
+      };
+    }
+    stopPlaying();
+    setWalk(false);
+    setGraphFloor(floor);
+    setGraphView(true);
+    mapRef.current = null;
+  }
+  function frameLocated() {
+    const target = pendingLocate.current,
+      map = mapRef.current;
+    if (!target || !map) return;
+    pendingLocate.current = null;
+    if (!target.points.length) return;
+    let west = Infinity,
+      east = -Infinity,
+      south = Infinity,
+      north = -Infinity;
+    for (const point of target.points) {
+      const [lng, lat] = toLngLat(point, project.origin);
+      west = Math.min(west, lng);
+      east = Math.max(east, lng);
+      south = Math.min(south, lat);
+      north = Math.max(north, lat);
+    }
+    map.fitBounds(
+      [
+        [west, south],
+        [east, north],
+      ],
+      { padding: 90, maxZoom: 20, duration: 450 },
+    );
+  }
+  function locateStructure(target: StructureTarget) {
+    const ids = new Set(target.objectIds ?? []);
+    const objects = project.objects.filter(object => ids.has(object.id));
+    const chosenFloor =
+      target.floorId !== undefined
+        ? target.floorId
+        : objects.some(object => object.floorId === floorId)
+          ? floorId
+          : (objects[0]?.floorId ?? floorId);
+    const onFloor = objects.filter(
+      object => object.floorId === chosenFloor || object.servedFloorIds?.includes(chosenFloor ?? ''),
+    );
+    const points = target.position ? [target.position] : onFloor.flatMap(object => footprint(object).flat());
+    if (!points.length)
+      points.push(
+        ...project.objects.filter(object => object.floorId === chosenFloor).flatMap(object => footprint(object).flat()),
+      );
+    pendingLocate.current = { points };
+    setSelected(onFloor[0]?.id ?? null);
+    onSelectionChange?.(onFloor[0]?.id ?? null);
+    setGraphView(false);
+    chooseMode('2d');
+    setFloorId(chosenFloor);
+    requestAnimationFrame(frameLocated);
+  }
+  useEffect(() => {
+    if (!graphView) requestAnimationFrame(frameLocated);
+  }, [graphView, floorId, threeD]);
   function changeFloor(id: string | null) {
     setFloorId(id);
     setSelected(null);
@@ -1169,7 +1284,7 @@ export function SitePlanner({
     setPlayStep(clamped);
     const moved = step.floorId !== floorId;
     if (moved) setFloorId(step.floorId);
-    const node = (project.navNodes ?? []).find(n => n.id === step.nodeIds.at(-1));
+    const node = route.nodes.find(n => n.id === step.nodeIds.at(-1));
     if (!moved && node && mapRef.current)
       mapRef.current.easeTo({
         // Through the map's own depth aim: in 3D the step is drawn at its storey's elevation, and a
@@ -1192,7 +1307,8 @@ export function SitePlanner({
   }
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).closest('input, textarea, select, dialog')) return;
+      if ((e.target as HTMLElement).closest('input, textarea, select, dialog, [role="tab"]')) return;
+      if (graphView) return;
       const cmd = e.metaKey || e.ctrlKey;
       if (cmd && e.key.toLowerCase() === 'z' && editing) {
         e.preventDefault();
@@ -1265,6 +1381,9 @@ export function SitePlanner({
           return;
         }
         if (key === 'i') {
+          setPlanImportOpen(false);
+          setStructuring(false);
+          setNavigating(false);
           setInspectorOpen(!inspectorOpen);
           return;
         }
@@ -1273,6 +1392,7 @@ export function SitePlanner({
           return;
         }
         if (key === 'g') {
+          setPlanImportOpen(false);
           if (navigating) stopPlaying();
           setNavigating(!navigating);
           return;
@@ -1323,7 +1443,8 @@ export function SitePlanner({
     // Shift+Up/Down steps floors — registered in capture phase so it wins over MapLibre's
     // shift-pitch handling when the map canvas has focus. AltGr symbols are avoided on purpose.
     const floorKeys = (e: KeyboardEvent) => {
-      if ((e.target as HTMLElement).closest('input, textarea, select, dialog')) return;
+      if ((e.target as HTMLElement).closest('input, textarea, select, dialog, [role="tab"]')) return;
+      if (graphView) return;
       // Walking owns the movement keys outright. The walker stops these events before they get here,
       // but "before" depends on listener registration order, and losing that race pans the map 140 px
       // under the walker on every arrow — which reads as the arrows moving faster than W and S.
@@ -1444,6 +1565,63 @@ export function SitePlanner({
   );
   const selectedBarrier = project.barriers.find(b => b.id === selected);
   const deleteCount = selectedBarrier ? project.objects.filter(o => o.barrierId === selected).length : 0;
+  const renderImport = (importMode: 'reference' | 'plan') => (
+    <ImportDialog
+      key={`${project.id}:${importMode}`}
+      mode={importMode}
+      project={project}
+      floorId={floorId}
+      assets={adapters.assets}
+      importProjections={adapters.importProjections}
+      aiImport={adapters.aiImport}
+      pdfDrawing={adapters.pdfDrawing}
+      onAiProject={applyAiProject}
+      onAiRunningChange={setAiRunning}
+      onClose={() => (importMode === 'plan' ? setPlanImportOpen(false) : setImportOpen(false))}
+      onDrawing={startAlignment}
+      onProject={async p => {
+        await flush();
+        setHistory(makeHistory(p));
+        setFloorId(p.floors[0]?.id ?? null);
+        setNewFloorBuilding(p.buildings[0].id);
+        select(null);
+      }}
+      onOrigin={bearing => {
+        commit(d => {
+          const [lng, lat] = d.origin;
+          d.origin = (bearing ? [lng, lat, bearing] : [lng, lat]) as typeof d.origin;
+        });
+      }}
+      onPlan={(entities, target, layers) => {
+        let outcome: PlanImportReport | undefined;
+        if (
+          commit(d => {
+            outcome = importPlanEntities(d, entities, layers ? { floorId: target, layers } : { floorId: target });
+          }) &&
+          outcome
+        ) {
+          if (target !== floorId) setFloorId(target);
+          setActiveTab('structure');
+          const skipped = outcome.skipped.length ? ` · ${outcome.skipped.length} skipped` : '';
+          notify(
+            `Plan imported: ${outcome.walls} walls, ${outcome.rooms} rooms, ${outcome.doors} doors, ${outcome.windows} windows${outcome.passages ? ` · ${outcome.passages} open passages` : ''}${skipped}.`,
+          );
+        }
+      }}
+      onFootprints={objects => {
+        if (commit(p => p.objects.push(...objects))) {
+          setSelected(objects[0]?.id ?? null);
+          setActiveTab('objects');
+          const first = objects[0];
+          if (first && mapRef.current)
+            mapRef.current.easeTo({ center: toLngLat(first.position, project.origin), zoom: 18 });
+          notify(
+            `Imported ${objects.length} ${objects.length === 1 ? 'footprint' : 'footprints'}. Select a floor to generate its walls.`,
+          );
+        }
+      }}
+    />
+  );
   return (
     <div className={`kerros-root app-shell ${fullscreen ? 'fullscreen' : ''}`}>
       <header className="app-header">
@@ -1769,13 +1947,27 @@ export function SitePlanner({
               <span>{project.name}</span>
               <ChevronRight size={13} />
               <strong>{floor?.name ?? 'Outdoor site'}</strong>
-              <span className="mode-pill">{editing ? 'EDITING' : 'VIEWING'}</span>
+              <span className="mode-pill">{aiRunning ? 'AI IMPORT' : editing ? 'EDITING' : 'VIEWING'}</span>
             </div>
             <div>
-              {editing && (
-                <button className="button secondary small" onClick={() => setImportOpen(true)}>
-                  <ArrowUpFromLine size={14} />
-                  Import
+              {(editing || aiRunning) && (
+                <button
+                  className="icon-button"
+                  aria-label="Import plan"
+                  title="Import plan"
+                  aria-pressed={planImportOpen}
+                  data-import-running={aiRunning || undefined}
+                  onClick={() => {
+                    setPlanImportMounted(true);
+                    setPlanImportOpen(!planImportOpen);
+                    if (!planImportOpen) {
+                      setNavigating(false);
+                      setStructuring(false);
+                      setInspectorOpen(false);
+                    }
+                  }}
+                >
+                  <ArrowDownToLine size={17} />
                 </button>
               )}
               <button
@@ -1784,13 +1976,14 @@ export function SitePlanner({
                 title="Export portable project"
                 onClick={doExport}
               >
-                <ArrowDownToLine size={17} />
+                <ArrowUpFromLine size={17} />
               </button>
               <button
                 className={`icon-button ${structuring ? 'active-nav' : ''}`}
                 aria-label={structuring ? 'Hide structure panel' : 'Show structure panel'}
                 title="Structure — zones and portals"
                 onClick={() => {
+                  setPlanImportOpen(false);
                   setStructuring(!structuring);
                   if (!structuring) setNavigating(false);
                 }}
@@ -1802,6 +1995,7 @@ export function SitePlanner({
                 aria-label={navigating ? 'Hide navigation panel' : 'Show navigation panel'}
                 title="Navigate (G)"
                 onClick={() => {
+                  setPlanImportOpen(false);
                   if (navigating) stopPlaying();
                   setNavigating(!navigating);
                   if (!navigating) setStructuring(false);
@@ -1814,548 +2008,579 @@ export function SitePlanner({
                 className="icon-button"
                 aria-label={inspectorOpen ? 'Hide properties panel' : 'Show properties panel'}
                 title={inspectorOpen ? 'Hide properties panel' : 'Show properties panel'}
-                onClick={() => setInspectorOpen(!inspectorOpen)}
+                onClick={() => {
+                  setPlanImportOpen(false);
+                  setStructuring(false);
+                  setNavigating(false);
+                  setInspectorOpen(!inspectorOpen);
+                }}
               >
                 {inspectorOpen ? <PanelRightClose size={17} /> : <PanelRightOpen size={17} />}
                 {keyHint('I')}
               </button>
             </div>
           </div>
-          <div className="canvas-body">
-            <MapCanvas
-              project={displayProject}
-              canEdit={editing}
-              floorId={floorId}
-              selected={selected}
-              tool={tool}
-              draft={draft}
-              hover={hover}
-              guides={guides}
-              threeD={threeD}
-              stack={stack}
-              coverage={coverage}
-              showLabels={showLabels}
-              showPlan={showPlan}
-              sun={sun}
-              dark={dark}
-              excavation={excavation}
-              cityBuildings={cityBuildings}
-              cadastre={cadastre}
-              basemap={basemap}
-              assets={adapters.assets}
-              statuses={shownStatuses}
-              elevators={elevators}
-              focusId={focusId}
-              alignment={alignment ? { image: alignment.imagePoints, map: alignment.mapPoints } : undefined}
-              onClick={mapClick}
-              onAdopt={adoptBuilding}
-              onHover={onHover}
-              onSelect={id => select(id)}
-              onVertexMove={vertexMove}
-              onVertexPreview={(kind, id, point, _ring, _vertex, free) => geometryPreview(kind, id, point, free)}
-              snapping={snapping}
-              onError={notify}
-              route={route}
-              activeStep={playStep}
-              playing={playing}
-              onJourneyStep={index => setPlayStep(index)}
-              onJourneyEnd={() => {
-                stopPlaying();
-                writeHash(true);
-              }}
-              walk={walk}
-              onWalkExit={() => chooseMode('3d')}
-              avatar={avatar}
-              onAvatar={setAvatar}
-              onWalkAt={a => {
-                setAvatar(a);
-                if (a.floorId !== floorId) setFloorId(a.floorId);
-                chooseMode('walk');
-              }}
-              onRequestFloor={id => setFloorId(id)}
-              onReady={map => {
-                mapRef.current = map;
-                map.on('moveend', () => writeHash());
-                writeHash(true);
-              }}
-              initialCamera={initialView?.camera}
-            />
-            <div className="canvas-top-left">
-              <div className="floor-chip">
-                <Layers3 size={17} />
-                <FloorSelect
-                  ariaLabel="Active floor"
-                  value={floorId ?? 'outdoors'}
-                  onPick={id => changeFloor(id === 'outdoors' ? null : id)}
-                  entries={[
-                    { id: 'outdoors', code: 'OUT', name: 'Outdoor site' },
-                    ...project.buildings.flatMap(b =>
-                      project.floors
-                        .filter(f => f.buildingId === b.id)
-                        .sort((a, c) => c.elevation - a.elevation)
-                        .map(f => ({
-                          id: f.id,
-                          code: floorCode(f),
-                          name: mode !== 'view' && alarmFloors.has(f.id) ? `⚠ ${f.name}` : f.name,
-                          hint: project.buildings.length > 1 ? b.name : undefined,
-                        })),
-                    ),
-                  ]}
-                />
-                {keyHint('⇧↑↓')}
-              </div>
-              <div className="view-switch">
-                <button className={viewMode === '2d' ? 'active' : ''} onClick={() => chooseMode('2d')}>
-                  2D{nextView === '2d' && keyHint('T')}
-                </button>
-                <button className={viewMode === '3d' ? 'active' : ''} onClick={() => chooseMode('3d')}>
-                  <Box size={14} />
-                  3D{nextView === '3d' && keyHint('T')}
-                </button>
-                <button
-                  className={viewMode === 'walk' ? 'active' : ''}
-                  title="Walk through the building at eye level"
-                  onClick={() => chooseMode('walk')}
-                >
-                  <Footprints size={14} />
-                  Walk{viewMode !== 'walk' && keyHint('3')}
-                </button>
-              </div>
-              {threeD && !walk && (
-                <button className={`stack-button ${stack ? 'active' : ''}`} onClick={() => setStack(!stack)}>
-                  <Layers3 size={15} />
-                  {stack ? 'All floors' : 'Cutaway'}
-                  {keyHint('X')}
-                </button>
-              )}
-            </div>
-            {(() => {
-              const band = floorBand();
-              const index = band.findIndex(f => f.id === floorId);
-              const above = index < 0 ? band[0] : band[index + 1],
-                below = index < 0 ? undefined : band[index - 1];
-              return (
-                <div className="floor-step">
-                  <button aria-label="Floor up" title="Floor up (⇧↑)" disabled={!above} onClick={() => stepFloor(1)}>
-                    <ChevronUp size={14} />
-                    {above && <b>{floorCode(above)}</b>}
+          {graphView ? (
+            <Suspense
+              fallback={
+                <p className="structure-empty" role="status">
+                  Loading navigation graph…
+                </p>
+              }
+            >
+              <NavigationGraph
+                project={project}
+                initialFloor={graphFloor}
+                dark={dark}
+                onLocate={locateStructure}
+                onClose={() => setGraphView(false)}
+              />
+            </Suspense>
+          ) : (
+            <div className="canvas-body">
+              <MapCanvas
+                project={displayProject}
+                canEdit={editing}
+                floorId={floorId}
+                selected={selected}
+                tool={tool}
+                draft={draft}
+                hover={hover}
+                guides={guides}
+                threeD={threeD}
+                stack={stack}
+                coverage={coverage}
+                showLabels={showLabels}
+                showPlan={showPlan}
+                sun={sun}
+                dark={dark}
+                excavation={excavation}
+                cityBuildings={cityBuildings}
+                cadastre={cadastre}
+                basemap={basemap}
+                assets={adapters.assets}
+                statuses={shownStatuses}
+                elevators={elevators}
+                focusId={focusId}
+                alignment={alignment ? { image: alignment.imagePoints, map: alignment.mapPoints } : undefined}
+                onClick={mapClick}
+                onAdopt={adoptBuilding}
+                onHover={onHover}
+                onSelect={id => select(id)}
+                onVertexMove={vertexMove}
+                onVertexPreview={(kind, id, point, _ring, _vertex, free) => geometryPreview(kind, id, point, free)}
+                snapping={snapping}
+                onError={notify}
+                route={route}
+                activeStep={playStep}
+                playing={playing}
+                onJourneyStep={index => setPlayStep(index)}
+                onJourneyEnd={() => {
+                  stopPlaying();
+                  writeHash(true);
+                }}
+                walk={walk}
+                onWalkExit={() => chooseMode('3d')}
+                avatar={avatar}
+                onAvatar={setAvatar}
+                onWalkAt={a => {
+                  setAvatar(a);
+                  if (a.floorId !== floorId) setFloorId(a.floorId);
+                  chooseMode('walk');
+                }}
+                onRequestFloor={id => setFloorId(id)}
+                onReady={map => {
+                  mapRef.current = map;
+                  requestAnimationFrame(frameLocated);
+                  map.on('moveend', () => writeHash());
+                  writeHash(true);
+                }}
+                initialCamera={graphCamera.current ?? initialView?.camera}
+              />
+              <div className="canvas-top-left">
+                <div className="floor-chip">
+                  <Layers3 size={17} />
+                  <FloorSelect
+                    ariaLabel="Active floor"
+                    value={floorId ?? 'outdoors'}
+                    onPick={id => changeFloor(id === 'outdoors' ? null : id)}
+                    entries={[
+                      { id: 'outdoors', code: 'OUT', name: 'Outdoor site' },
+                      ...project.buildings.flatMap(b =>
+                        project.floors
+                          .filter(f => f.buildingId === b.id)
+                          .sort((a, c) => c.elevation - a.elevation)
+                          .map(f => ({
+                            id: f.id,
+                            code: floorCode(f),
+                            name: mode !== 'view' && alarmFloors.has(f.id) ? `⚠ ${f.name}` : f.name,
+                            hint: project.buildings.length > 1 ? b.name : undefined,
+                          })),
+                      ),
+                    ]}
+                  />
+                  {keyHint('⇧↑↓')}
+                </div>
+                <div className="view-switch">
+                  <button className={viewMode === '2d' ? 'active' : ''} onClick={() => chooseMode('2d')}>
+                    2D{nextView === '2d' && keyHint('T')}
                   </button>
-                  <span className="floor-step-current">{floor ? floorCode(floor) : 'OUT'}</span>
+                  <button className={viewMode === '3d' ? 'active' : ''} onClick={() => chooseMode('3d')}>
+                    <Box size={14} />
+                    3D{nextView === '3d' && keyHint('T')}
+                  </button>
                   <button
-                    aria-label="Floor down"
-                    title="Floor down (⇧↓)"
-                    disabled={!below}
-                    onClick={() => stepFloor(-1)}
+                    className={viewMode === 'walk' ? 'active' : ''}
+                    title="Walk through the building at eye level"
+                    onClick={() => chooseMode('walk')}
                   >
-                    {below && <b>{floorCode(below)}</b>}
-                    <ChevronDown size={14} />
+                    <Footprints size={14} />
+                    Walk{viewMode !== 'walk' && keyHint('3')}
                   </button>
                 </div>
-              );
-            })()}
-            <div className="canvas-top-right">
-              {monitoring && mode !== 'view' && (
-                <button
-                  className={`live-badge ${alarms.length ? 'has-alarm' : ''}`}
-                  onClick={() => {
-                    if (alarms[0]) select(alarms[0].id, true);
-                    else notify('Everything bound to the feed is reporting without active alarms.');
-                  }}
-                >
-                  {alarms.length ? <Bell size={14} /> : <span className="live-pip" />}
-                  {alarms.length ? `${alarms.length} active alarm${alarms.length > 1 ? 's' : ''}` : 'Status feed'}
-                </button>
-              )}
-              <button
-                className={`floating-icon ${fullscreen ? 'active' : ''}`}
-                aria-label={fullscreen ? 'Exit full screen' : 'Full-screen map'}
-                title={fullscreen ? 'Exit full screen' : 'Full-screen map'}
-                onClick={() => setFullscreen(!fullscreen)}
-              >
-                {fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
-                {keyHint('F')}
-              </button>
-              <button
-                className={`floating-icon ${settings ? 'active' : ''}`}
-                aria-label="Map settings"
-                onClick={() => setSettings(!settings)}
-              >
-                <Settings2 size={18} />
-              </button>
-            </div>
-            {settings && (
-              <div className="map-settings">
-                <h3>
-                  Map display
-                  <button className="icon-button" aria-label="Close map settings" onClick={() => setSettings(false)}>
-                    <X size={15} />
+                {threeD && !walk && (
+                  <button className={`stack-button ${stack ? 'active' : ''}`} onClick={() => setStack(!stack)}>
+                    <Layers3 size={15} />
+                    {stack ? 'All floors' : 'Cutaway'}
+                    {keyHint('X')}
                   </button>
-                </h3>
-                <label className="field">
-                  <span>Basemap</span>
-                  <select
-                    aria-label="Basemap"
-                    value={basemapMode}
-                    onChange={e => setBasemapMode(e.target.value as typeof basemapMode)}
-                  >
-                    <option value="plan">Plan background · offline</option>
-                    {adapters.basemap && <option value="host">{adapters.basemap.label ?? 'Map background'}</option>}
-                  </select>
-                </label>
-                {editing &&
-                  (() => {
-                    const building =
-                      project.buildings.find(b => b.id === project.floors.find(f => f.id === floorId)?.buildingId) ??
-                      project.buildings[0];
-                    return (
-                      <label className="field">
-                        <span>Exterior finish · {building.name}</span>
-                        <select
-                          aria-label="Exterior finish"
-                          value={building.exteriorPreset ?? ''}
-                          onChange={e =>
-                            commit(p => {
-                              p.buildings.find(b => b.id === building.id)!.exteriorPreset = (e.target.value ||
-                                undefined) as ExteriorPreset | undefined;
-                            })
-                          }
-                        >
-                          <option value="">Original materials</option>
-                          {Object.entries(EXTERIOR_PRESETS).map(([id, preset]) => (
-                            <option key={id} value={id}>
-                              {preset.name}
-                            </option>
-                          ))}
-                        </select>
-                        <small>Applies to the exterior on every floor.</small>
-                      </label>
-                    );
-                  })()}
-                <Toggle
-                  label="Architecture plan"
-                  description="Hide to see the basemap under this floor"
-                  value={showPlan}
-                  onChange={() => setShowPlan(!showPlan)}
-                />
-                <Toggle label="Space labels" value={showLabels} onChange={() => setShowLabels(!showLabels)} />
-                <Toggle label="Camera coverage" value={coverage} onChange={() => setCoverage(!coverage)} />
-                <Choice
-                  label="Sunlight"
-                  description={
-                    lighting === 'auto'
-                      ? `Following the sun over this site — ${sunNote}`
-                      : 'Pinned; switch to Auto to follow the clock'
-                  }
-                  value={lighting}
-                  options={[
-                    { value: 'auto', label: 'Auto', title: 'Sun position from this site and the time of day' },
-                    { value: 'day', label: 'Day', title: 'A fixed afternoon sun' },
-                    { value: 'evening', label: 'Dusk', title: 'A fixed dusk, with lamps lit' },
-                  ]}
-                  onChange={setLighting}
-                />
-                <Toggle
-                  label="Ground section"
-                  description="Cut the earth away around below-grade floors"
-                  value={excavation}
-                  onChange={() => setExcavation(!excavation)}
-                />
-                <Toggle
-                  label="3D city buildings"
-                  description="Raise surrounding basemap buildings by their MML attributes"
-                  value={cityBuildings}
-                  onChange={() => setCityBuildings(!cityBuildings)}
-                />
-                {hasCadastre && (
-                  <Toggle
-                    label="Property boundaries"
-                    description="MML cadastral parcel overlay"
-                    value={cadastre}
-                    onChange={() => setCadastre(!cadastre)}
-                  />
                 )}
-                {editing && (
-                  <Toggle label="Snap to geometry & grid" value={snapping} onChange={() => setSnapping(!snapping)} />
-                )}
-                <p className="helper">
-                  {surveyed
-                    ? 'Vector map background; attribution is shown on the map.'
-                    : 'A quiet background for detailed floor planning.'}
-                </p>
               </div>
-            )}
-            {editing && !threeD && !alignment && (
-              <div className="drawing-dock-wrap">
-                {tool === 'route' && !project.navNodes && (
-                  <button className="button secondary adopt-graph" onClick={adoptDerivedGraph}>
-                    <Waypoints size={14} />
-                    Adopt inferred graph
-                  </button>
-                )}
-                {tool !== 'select' && tool !== 'pan' && (
-                  <div className="tool-instruction">
-                    <span className="tool-instruction-dot" />
-                    <strong>{en.tools[tool]}</strong>
-                    <span>
-                      {tool === 'route'
-                        ? routeAnchor
-                          ? 'Click to chain the next route node · Esc ends the chain'
-                          : project.navNodes
-                            ? 'Click to place route nodes · lifts, stairs, doors and POIs link automatically'
-                            : 'Showing the graph the plan implies — spaces joined by their portals. Adopt it to edit it.'
-                        : tool === 'partition'
-                          ? proposal
-                            ? 'Click to build the wall shown · it squares to what it is nearest'
-                            : 'Hover inside a space to be offered the wall it is missing'
-                          : tool === 'enclose'
-                            ? 'Click inside a closed boundary to create or select its space'
-                            : tool === 'split'
-                              ? draft.length
-                                ? 'Now click the opposite wall to cut the room in two'
-                                : 'Click one wall of a room to start the cut'
-                              : tool === 'adopt'
-                                ? 'Click a building on the basemap to bring it into the project'
-                                : tool === 'measure' && draft.length === 2
-                                  ? `${distance(draft[0], draft[1]).toFixed(2)} m`
-                                  : DRAW_TOOLS.includes(tool)
-                                    ? draft.length
-                                      ? `${draft.length} point${draft.length > 1 ? 's' : ''} · ${snapLabel}`
-                                      : 'Click on the map to start'
-                                    : isOpening(tool as ObjectKind)
-                                      ? 'Click a supporting wall or fence'
-                                      : 'Click on the map to place'}{' '}
-                    </span>
-                    {draft.length > 0 && tool !== 'rectangle' && (
-                      <button onClick={finish}>
-                        Finish <kbd>↵</kbd>
-                      </button>
-                    )}
-                    {draft.length > 0 && (
-                      <button aria-label="Undo last point" onClick={() => setDraft(draft.slice(0, -1))}>
-                        Undo point <kbd>⌫</kbd>
-                      </button>
-                    )}
-                    <button aria-label="Cancel drawing" onClick={() => chooseTool('select')}>
-                      <X size={14} />
+              {(() => {
+                const band = floorBand();
+                const index = band.findIndex(f => f.id === floorId);
+                const above = index < 0 ? band[0] : band[index + 1],
+                  below = index < 0 ? undefined : band[index - 1];
+                return (
+                  <div className="floor-step">
+                    <button aria-label="Floor up" title="Floor up (⇧↑)" disabled={!above} onClick={() => stepFloor(1)}>
+                      <ChevronUp size={14} />
+                      {above && <b>{floorCode(above)}</b>}
+                    </button>
+                    <span className="floor-step-current">{floor ? floorCode(floor) : 'OUT'}</span>
+                    <button
+                      aria-label="Floor down"
+                      title="Floor down (⇧↓)"
+                      disabled={!below}
+                      onClick={() => stepFloor(-1)}
+                    >
+                      {below && <b>{floorCode(below)}</b>}
+                      <ChevronDown size={14} />
                     </button>
                   </div>
+                );
+              })()}
+              <div className="canvas-top-right">
+                {monitoring && mode !== 'view' && (
+                  <button
+                    className={`live-badge ${alarms.length ? 'has-alarm' : ''}`}
+                    onClick={() => {
+                      if (alarms[0]) select(alarms[0].id, true);
+                      else notify('Everything bound to the feed is reporting without active alarms.');
+                    }}
+                  >
+                    {alarms.length ? <Bell size={14} /> : <span className="live-pip" />}
+                    {alarms.length ? `${alarms.length} active alarm${alarms.length > 1 ? 's' : ''}` : 'Status feed'}
+                  </button>
                 )}
-                {palette && (
-                  <div className="tool-palette">
-                    <div>
-                      <h3>Draw your space</h3>
-                      {(['wall', 'boundary', 'fence', 'room', 'enclose', 'zone', 'rectangle', 'hole'] as Tool[]).map(
-                        t => (
+                <button
+                  className={`floating-icon ${fullscreen ? 'active' : ''}`}
+                  aria-label={fullscreen ? 'Exit full screen' : 'Full-screen map'}
+                  title={fullscreen ? 'Exit full screen' : 'Full-screen map'}
+                  onClick={() => setFullscreen(!fullscreen)}
+                >
+                  {fullscreen ? <Minimize2 size={18} /> : <Maximize2 size={18} />}
+                  {keyHint('F')}
+                </button>
+                <button
+                  className={`floating-icon ${settings ? 'active' : ''}`}
+                  aria-label="Map settings"
+                  onClick={() => setSettings(!settings)}
+                >
+                  <Settings2 size={18} />
+                </button>
+              </div>
+              {settings && (
+                <div className="map-settings">
+                  <h3>
+                    Map display
+                    <button className="icon-button" aria-label="Close map settings" onClick={() => setSettings(false)}>
+                      <X size={15} />
+                    </button>
+                  </h3>
+                  <label className="field">
+                    <span>Basemap</span>
+                    <select
+                      aria-label="Basemap"
+                      value={basemapMode}
+                      onChange={e => setBasemapMode(e.target.value as typeof basemapMode)}
+                    >
+                      <option value="plan">Plan background · offline</option>
+                      {adapters.basemap && <option value="host">{adapters.basemap.label ?? 'Map background'}</option>}
+                    </select>
+                  </label>
+                  {editing &&
+                    (() => {
+                      const building =
+                        project.buildings.find(b => b.id === project.floors.find(f => f.id === floorId)?.buildingId) ??
+                        project.buildings[0];
+                      return (
+                        <label className="field">
+                          <span>Exterior finish · {building.name}</span>
+                          <select
+                            aria-label="Exterior finish"
+                            value={building.exteriorPreset ?? ''}
+                            onChange={e =>
+                              commit(p => {
+                                p.buildings.find(b => b.id === building.id)!.exteriorPreset = (e.target.value ||
+                                  undefined) as ExteriorPreset | undefined;
+                              })
+                            }
+                          >
+                            <option value="">Original materials</option>
+                            {Object.entries(EXTERIOR_PRESETS).map(([id, preset]) => (
+                              <option key={id} value={id}>
+                                {preset.name}
+                              </option>
+                            ))}
+                          </select>
+                          <small>Applies to the exterior on every floor.</small>
+                        </label>
+                      );
+                    })()}
+                  <Toggle
+                    label="Architecture plan"
+                    description="Hide to see the basemap under this floor"
+                    value={showPlan}
+                    onChange={() => setShowPlan(!showPlan)}
+                  />
+                  <Toggle label="Space labels" value={showLabels} onChange={() => setShowLabels(!showLabels)} />
+                  <Toggle label="Camera coverage" value={coverage} onChange={() => setCoverage(!coverage)} />
+                  <Choice
+                    label="Sunlight"
+                    description={
+                      lighting === 'auto'
+                        ? `Following the sun over this site — ${sunNote}`
+                        : 'Pinned; switch to Auto to follow the clock'
+                    }
+                    value={lighting}
+                    options={[
+                      { value: 'auto', label: 'Auto', title: 'Sun position from this site and the time of day' },
+                      { value: 'day', label: 'Day', title: 'A fixed afternoon sun' },
+                      { value: 'evening', label: 'Dusk', title: 'A fixed dusk, with lamps lit' },
+                    ]}
+                    onChange={setLighting}
+                  />
+                  <Toggle
+                    label="Ground section"
+                    description="Cut the earth away around below-grade floors"
+                    value={excavation}
+                    onChange={() => setExcavation(!excavation)}
+                  />
+                  <Toggle
+                    label="3D city buildings"
+                    description="Raise surrounding basemap buildings by their MML attributes"
+                    value={cityBuildings}
+                    onChange={() => setCityBuildings(!cityBuildings)}
+                  />
+                  {hasCadastre && (
+                    <Toggle
+                      label="Property boundaries"
+                      description="MML cadastral parcel overlay"
+                      value={cadastre}
+                      onChange={() => setCadastre(!cadastre)}
+                    />
+                  )}
+                  {editing && (
+                    <Toggle label="Snap to geometry & grid" value={snapping} onChange={() => setSnapping(!snapping)} />
+                  )}
+                  <p className="helper">
+                    {surveyed
+                      ? 'Vector map background; attribution is shown on the map.'
+                      : 'A quiet background for detailed floor planning.'}
+                  </p>
+                </div>
+              )}
+              {editing && !threeD && !alignment && (
+                <div className="drawing-dock-wrap">
+                  {tool === 'route' && !project.navNodes && (
+                    <button className="button secondary adopt-graph" onClick={adoptDerivedGraph}>
+                      <Waypoints size={14} />
+                      Adopt inferred graph
+                    </button>
+                  )}
+                  {tool !== 'select' && tool !== 'pan' && (
+                    <div className="tool-instruction">
+                      <span className="tool-instruction-dot" />
+                      <strong>{en.tools[tool]}</strong>
+                      <span>
+                        {tool === 'route'
+                          ? routeAnchor
+                            ? 'Click to chain the next route node · Esc ends the chain'
+                            : project.navNodes
+                              ? 'Click to place route nodes · lifts, stairs, doors and POIs link automatically'
+                              : 'Showing the graph the plan implies — spaces joined by their portals. Adopt it to edit it.'
+                          : tool === 'partition'
+                            ? proposal
+                              ? 'Click to build the wall shown · it squares to what it is nearest'
+                              : 'Hover inside a space to be offered the wall it is missing'
+                            : tool === 'enclose'
+                              ? 'Click inside a closed boundary to create or select its space'
+                              : tool === 'split'
+                                ? draft.length
+                                  ? 'Now click the opposite wall to cut the room in two'
+                                  : 'Click one wall of a room to start the cut'
+                                : tool === 'adopt'
+                                  ? 'Click a building on the basemap to bring it into the project'
+                                  : tool === 'measure' && draft.length === 2
+                                    ? `${distance(draft[0], draft[1]).toFixed(2)} m`
+                                    : DRAW_TOOLS.includes(tool)
+                                      ? draft.length
+                                        ? `${draft.length} point${draft.length > 1 ? 's' : ''} · ${snapLabel}`
+                                        : 'Click on the map to start'
+                                      : isOpening(tool as ObjectKind)
+                                        ? 'Click a supporting wall or fence'
+                                        : 'Click on the map to place'}{' '}
+                      </span>
+                      {draft.length > 0 && tool !== 'rectangle' && (
+                        <button onClick={finish}>
+                          Finish <kbd>↵</kbd>
+                        </button>
+                      )}
+                      {draft.length > 0 && (
+                        <button aria-label="Undo last point" onClick={() => setDraft(draft.slice(0, -1))}>
+                          Undo point <kbd>⌫</kbd>
+                        </button>
+                      )}
+                      <button aria-label="Cancel drawing" onClick={() => chooseTool('select')}>
+                        <X size={14} />
+                      </button>
+                    </div>
+                  )}
+                  {palette && (
+                    <div className="tool-palette">
+                      <div>
+                        <h3>Draw your space</h3>
+                        {(['wall', 'boundary', 'fence', 'room', 'enclose', 'zone', 'rectangle', 'hole'] as Tool[]).map(
+                          t => (
+                            <button key={t} onClick={() => chooseTool(t)}>
+                              <EntityIcon kind={t} />
+                              {en.tools[t]}
+                            </button>
+                          ),
+                        )}
+                      </div>
+                      <div>
+                        <h3>Openings &amp; devices</h3>
+                        {(['door', 'window', 'gate', 'turnstile', 'reader', 'camera', 'alarm'] as Tool[]).map(t => (
                           <button key={t} onClick={() => chooseTool(t)}>
                             <EntityIcon kind={t} />
                             {en.tools[t]}
                           </button>
-                        ),
-                      )}
-                    </div>
-                    <div>
-                      <h3>Openings &amp; devices</h3>
-                      {(['door', 'window', 'gate', 'turnstile', 'reader', 'camera', 'alarm'] as Tool[]).map(t => (
-                        <button key={t} onClick={() => chooseTool(t)}>
-                          <EntityIcon kind={t} />
-                          {en.tools[t]}
-                        </button>
-                      ))}
-                    </div>
-                    <div>
-                      <h3>Site objects</h3>
-                      {(['elevator', 'stairs', 'office', 'container', 'storage', 'poi'] as Tool[]).map(t => (
-                        <button key={t} onClick={() => chooseTool(t)}>
-                          <EntityIcon kind={t} />
-                          {en.tools[t]}
-                        </button>
-                      ))}
-                      <button onClick={() => chooseTool('route')}>
-                        <Waypoints size={17} strokeWidth={1.75} />
-                        {en.tools.route}
-                      </button>
-                    </div>
-                    <div>
-                      <h3>Sensors &amp; areas</h3>
-                      {(['light', 'sensor', 'equipment', 'evacuation'] as Tool[]).map(t => (
-                        <button key={t} onClick={() => chooseTool(t)}>
-                          <EntityIcon kind={t} />
-                          {en.tools[t]}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
-                <div className="drawing-dock">
-                  {(() => {
-                    const KEYS: Partial<Record<Tool, string>> = {
-                      select: 'V',
-                      pan: 'H',
-                      wall: 'W',
-                      zone: 'Z',
-                      door: 'D',
-                      camera: 'C',
-                      measure: 'M',
-                      split: 'S',
-                      enclose: 'E',
-                    };
-                    const hint = (t: Tool) => (showKeys && KEYS[t] ? <kbd className="key-hint">{KEYS[t]}</kbd> : null);
-                    return (
-                      <>
-                        <button
-                          className={tool === 'select' ? 'active' : ''}
-                          aria-label="Select tool"
-                          title="Select (V)"
-                          onClick={() => chooseTool('select')}
-                        >
-                          <MousePointer2 size={20} />
-                          {hint('select')}
-                        </button>
-                        <button
-                          className={tool === 'pan' ? 'active' : ''}
-                          aria-label="Pan tool"
-                          title="Pan (H)"
-                          onClick={() => chooseTool('pan')}
-                        >
-                          <Hand size={19} />
-                          {hint('pan')}
-                        </button>
-                        <i />
-                        {(['wall', 'zone', 'door', 'camera', 'poi'] as Tool[]).map(t => (
-                          <button
-                            key={t}
-                            className={tool === t ? 'active' : ''}
-                            aria-label={`${en.tools[t]} tool`}
-                            title={KEYS[t] ? `${en.tools[t]} (${KEYS[t]})` : en.tools[t]}
-                            onClick={() => chooseTool(t)}
-                          >
-                            <EntityIcon kind={t} size={20} />
-                            {hint(t)}
+                        ))}
+                      </div>
+                      <div>
+                        <h3>Site objects</h3>
+                        {(['elevator', 'stairs', 'office', 'container', 'storage', 'poi'] as Tool[]).map(t => (
+                          <button key={t} onClick={() => chooseTool(t)}>
+                            <EntityIcon kind={t} />
+                            {en.tools[t]}
                           </button>
                         ))}
-                        <button
-                          className={tool === 'partition' ? 'active' : ''}
-                          aria-label="Partition tool"
-                          title="Partition (P)"
-                          onClick={() => chooseTool('partition')}
-                        >
-                          <Rows2 size={19} />
-                          {hint('partition')}
+                        <button onClick={() => chooseTool('route')}>
+                          <Waypoints size={17} strokeWidth={1.75} />
+                          {en.tools.route}
                         </button>
-                        <button
-                          className={tool === 'enclose' ? 'active' : ''}
-                          aria-label="Space from walls tool"
-                          title="Space from walls (E)"
-                          onClick={() => chooseTool('enclose')}
-                        >
-                          <SquareDashedBottom size={19} />
-                          {hint('enclose')}
-                        </button>
-                        <button
-                          className={tool === 'split' ? 'active' : ''}
-                          aria-label="Split room tool"
-                          title="Split room (S)"
-                          onClick={() => chooseTool('split')}
-                        >
-                          <Scissors size={19} />
-                          {hint('split')}
-                        </button>
-                        <button
-                          className={tool === 'route' ? 'active' : ''}
-                          aria-label="Route path tool"
-                          title="Route path"
-                          onClick={() => chooseTool('route')}
-                        >
-                          <Waypoints size={19} />
-                        </button>
-                        <button
-                          className={palette ? 'active' : ''}
-                          aria-label="All drawing tools"
-                          title="All drawing tools"
-                          onClick={() => setPalette(!palette)}
-                        >
-                          <Plus size={20} />
-                        </button>
-                        <i />
-                        <button
-                          className={tool === 'measure' ? 'active' : ''}
-                          aria-label="Measure tool"
-                          title="Measure (M)"
-                          onClick={() => chooseTool('measure')}
-                        >
-                          <Ruler size={19} />
-                          {hint('measure')}
-                        </button>
-                      </>
-                    );
-                  })()}
-                  {canAdopt && (
-                    <button
-                      className={tool === 'adopt' ? 'active' : ''}
-                      aria-label="Adopt building from map"
-                      title="Adopt building from map"
-                      onClick={() => chooseTool('adopt')}
-                    >
-                      <Landmark size={19} />
-                    </button>
+                      </div>
+                      <div>
+                        <h3>Sensors &amp; areas</h3>
+                        {(['light', 'sensor', 'equipment', 'evacuation'] as Tool[]).map(t => (
+                          <button key={t} onClick={() => chooseTool(t)}>
+                            <EntityIcon kind={t} />
+                            {en.tools[t]}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   )}
-                  <i />
-                  <button
-                    aria-label="Undo"
-                    title="Undo (⌘Z)"
-                    disabled={!history.past.length}
-                    onClick={() => {
-                      setHistory(undoHistory);
-                      setDraft([]);
-                      setRouteAnchor(null);
-                    }}
-                  >
-                    <Undo2 size={18} />
-                  </button>
-                  <button
-                    aria-label="Redo"
-                    title="Redo (⌘⇧Z)"
-                    disabled={!history.future.length}
-                    onClick={() => {
-                      setHistory(redoHistory);
-                      setDraft([]);
-                      setRouteAnchor(null);
-                    }}
-                  >
-                    <Redo2 size={18} />
-                  </button>
+                  <div className="drawing-dock">
+                    {(() => {
+                      const KEYS: Partial<Record<Tool, string>> = {
+                        select: 'V',
+                        pan: 'H',
+                        wall: 'W',
+                        zone: 'Z',
+                        door: 'D',
+                        camera: 'C',
+                        measure: 'M',
+                        split: 'S',
+                        enclose: 'E',
+                      };
+                      const hint = (t: Tool) =>
+                        showKeys && KEYS[t] ? <kbd className="key-hint">{KEYS[t]}</kbd> : null;
+                      return (
+                        <>
+                          <button
+                            className={tool === 'select' ? 'active' : ''}
+                            aria-label="Select tool"
+                            title="Select (V)"
+                            onClick={() => chooseTool('select')}
+                          >
+                            <MousePointer2 size={20} />
+                            {hint('select')}
+                          </button>
+                          <button
+                            className={tool === 'pan' ? 'active' : ''}
+                            aria-label="Pan tool"
+                            title="Pan (H)"
+                            onClick={() => chooseTool('pan')}
+                          >
+                            <Hand size={19} />
+                            {hint('pan')}
+                          </button>
+                          <i />
+                          {(['wall', 'zone', 'door', 'camera', 'poi'] as Tool[]).map(t => (
+                            <button
+                              key={t}
+                              className={tool === t ? 'active' : ''}
+                              aria-label={`${en.tools[t]} tool`}
+                              title={KEYS[t] ? `${en.tools[t]} (${KEYS[t]})` : en.tools[t]}
+                              onClick={() => chooseTool(t)}
+                            >
+                              <EntityIcon kind={t} size={20} />
+                              {hint(t)}
+                            </button>
+                          ))}
+                          <button
+                            className={tool === 'partition' ? 'active' : ''}
+                            aria-label="Partition tool"
+                            title="Partition (P)"
+                            onClick={() => chooseTool('partition')}
+                          >
+                            <Rows2 size={19} />
+                            {hint('partition')}
+                          </button>
+                          <button
+                            className={tool === 'enclose' ? 'active' : ''}
+                            aria-label="Space from walls tool"
+                            title="Space from walls (E)"
+                            onClick={() => chooseTool('enclose')}
+                          >
+                            <SquareDashedBottom size={19} />
+                            {hint('enclose')}
+                          </button>
+                          <button
+                            className={tool === 'split' ? 'active' : ''}
+                            aria-label="Split room tool"
+                            title="Split room (S)"
+                            onClick={() => chooseTool('split')}
+                          >
+                            <Scissors size={19} />
+                            {hint('split')}
+                          </button>
+                          <button
+                            className={tool === 'route' ? 'active' : ''}
+                            aria-label="Route path tool"
+                            title="Route path"
+                            onClick={() => chooseTool('route')}
+                          >
+                            <Waypoints size={19} />
+                          </button>
+                          <button
+                            className={palette ? 'active' : ''}
+                            aria-label="All drawing tools"
+                            title="All drawing tools"
+                            onClick={() => setPalette(!palette)}
+                          >
+                            <Plus size={20} />
+                          </button>
+                          <i />
+                          <button
+                            className={tool === 'measure' ? 'active' : ''}
+                            aria-label="Measure tool"
+                            title="Measure (M)"
+                            onClick={() => chooseTool('measure')}
+                          >
+                            <Ruler size={19} />
+                            {hint('measure')}
+                          </button>
+                        </>
+                      );
+                    })()}
+                    {canAdopt && (
+                      <button
+                        className={tool === 'adopt' ? 'active' : ''}
+                        aria-label="Adopt building from map"
+                        title="Adopt building from map"
+                        onClick={() => chooseTool('adopt')}
+                      >
+                        <Landmark size={19} />
+                      </button>
+                    )}
+                    <i />
+                    <button
+                      aria-label="Undo"
+                      title="Undo (⌘Z)"
+                      disabled={!history.past.length}
+                      onClick={() => {
+                        setHistory(undoHistory);
+                        setDraft([]);
+                        setRouteAnchor(null);
+                      }}
+                    >
+                      <Undo2 size={18} />
+                    </button>
+                    <button
+                      aria-label="Redo"
+                      title="Redo (⌘⇧Z)"
+                      disabled={!history.future.length}
+                      onClick={() => {
+                        setHistory(redoHistory);
+                        setDraft([]);
+                        setRouteAnchor(null);
+                      }}
+                    >
+                      <Redo2 size={18} />
+                    </button>
+                  </div>
+                  <div className="dock-caption">
+                    {tool === 'select' ? 'Click to select · drag handles to edit' : 'Escape to cancel'}
+                    <span>⌘ Z to undo</span>
+                  </div>
                 </div>
-                <div className="dock-caption">
-                  {tool === 'select' ? 'Click to select · drag handles to edit' : 'Escape to cancel'}
-                  <span>⌘ Z to undo</span>
+              )}
+              {mode !== 'view' && (
+                <div className="map-legend">
+                  <span>
+                    <i className="status-dot normal" />
+                    Normal
+                  </span>
+                  <span>
+                    <i className="status-dot warning" />
+                    Attention
+                  </span>
+                  <span>
+                    <i className="status-dot critical" />
+                    Alarm
+                  </span>
+                  <span>
+                    <i className="status-dot unknown" />
+                    Unknown
+                  </span>
                 </div>
-              </div>
-            )}
-            {mode !== 'view' && (
-              <div className="map-legend">
-                <span>
-                  <i className="status-dot normal" />
-                  Normal
-                </span>
-                <span>
-                  <i className="status-dot warning" />
-                  Attention
-                </span>
-                <span>
-                  <i className="status-dot critical" />
-                  Alarm
-                </span>
-                <span>
-                  <i className="status-dot unknown" />
-                  Unknown
-                </span>
-              </div>
-            )}
-          </div>
+              )}
+            </div>
+          )}
           <div className="canvas-statusbar">
             <span>
               <span className="status-dot normal" />
-              {editing ? 'Editor ready' : live ? 'Live view ready' : 'Plan viewer ready'}
+              {graphView
+                ? 'Navigation graph'
+                : editing
+                  ? 'Editor ready'
+                  : live
+                    ? 'Live view ready'
+                    : 'Plan viewer ready'}
             </span>
             <span>
               {project.barriers.length} barriers <i />
@@ -2363,109 +2588,136 @@ export function SitePlanner({
               {project.floors.length} floors
             </span>
             <span>
-              {snapping ? 'Snapping on · 0.5 m · 15°' : 'Free positioning'}
+              {graphView
+                ? 'Drag to arrange · scroll to zoom'
+                : snapping
+                  ? 'Snapping on · 0.5 m · 15°'
+                  : 'Free positioning'}
               <kbd>?</kbd>
             </span>
           </div>
         </main>
-        {alignment ? (
-          <AlignmentPanel
-            drawing={alignment.prepared}
-            imagePoints={alignment.imagePoints}
-            mapPoints={alignment.mapPoints}
-            preview={alignment.preview}
-            setImagePoints={imagePoints => setAlignment({ ...alignment, imagePoints, mapPoints: [], preview: false })}
-            onCancel={() => setAlignment(null)}
-            onPreview={previewAlignment}
-            onConfirm={confirmAlignment}
-            onKnownDistance={calibrate}
-          />
-        ) : structuring ? (
-          <StructureView
-            project={project}
-            selected={selected}
-            onSelect={setSelected}
-            onFloorChange={changeFloor}
-            // Same commit path as every map tool, so zones land in history and undo like anything else.
-            onEdit={editing ? change => commit(change) : undefined}
-          />
-        ) : navigating ? (
-          <NavigatePanel
-            project={project}
-            here={avatar ? { floorId: avatar.floorId, position: avatar.position } : null}
-            from={navFrom}
-            to={navTo}
-            route={route}
-            playing={playing}
-            activeStep={playStep}
-            editing={editing}
-            onFrom={setNavFrom}
-            onTo={setNavTo}
-            onSwap={() => {
-              setNavFrom(navTo);
-              setNavTo(navFrom);
-            }}
-            onClear={() => {
-              setNavFrom(null);
-              setNavTo(null);
-            }}
-            onPlay={() => {
-              playStart.current = avatar;
-              playingRef.current = true;
-              setPlayStep(0);
-              setPlaying(true);
-            }}
-            onPause={stopPlaying}
-            onStep={delta => seekStep((playStep ?? (delta === 1 ? -1 : 1)) + delta)}
-            onSeek={seekStep}
-            onClose={() => {
-              stopPlaying();
-              setNavigating(false);
-            }}
-          />
-        ) : inspectorOpen ? (
-          <Inspector
-            onEdit={editing ? change => commit(change) : undefined}
-            project={project}
-            floorId={floorId}
-            selected={selected}
-            statuses={shownStatuses}
-            monitoring={monitoring}
-            editing={editing}
-            live={live}
-            renderStatusPanel={renderStatusPanel}
-            onClose={() => {
-              select(null);
-              setInspectorOpen(false);
-              if (window.matchMedia('(max-width: 840px)').matches) setSidebarOpen(false);
-            }}
-            onUpdateObject={updateObject}
-            onUpdateBarrier={(id: string, patch: Partial<Barrier>) =>
-              // Thickness is geometry: a wall that grows eats into the rooms on either side of it.
-              reshape(p => Object.assign(p.barriers.find(b => b.id === id)!, patch))
-            }
-            onUpdateDrawing={(id: string, patch: Partial<Drawing>) =>
-              commit(p => Object.assign(p.drawings.find(d => d.id === id)!, patch))
-            }
-            onUpdateFloor={(id: string, patch: Partial<Floor>) =>
-              commit(p => Object.assign(p.floors.find(f => f.id === id)!, patch))
-            }
-            onDeleteFloor={requestDeleteFloor}
-            onSetInitialFloor={(id: string | null) =>
-              commit(p => {
-                // Clearing drops the field entirely — an explicit null would mean "open outdoors",
-                // which is a different intent from having no preference.
-                if (id === null) delete p.initialFloorId;
-                else p.initialFloorId = id;
-              })
-            }
-            onDuplicate={duplicateSelected}
-            onDelete={requestDelete}
-            onSelect={id => select(id, true)}
-            onFloor={changeFloor}
-            onTraceFootprint={traceFootprint}
-          />
-        ) : null}
+        {planImportMounted && (
+          <div className="plan-import-slot" hidden={!planImportOpen}>
+            {renderImport('plan')}
+          </div>
+        )}
+        {!planImportOpen &&
+          (alignment ? (
+            <AlignmentPanel
+              drawing={alignment.prepared}
+              imagePoints={alignment.imagePoints}
+              mapPoints={alignment.mapPoints}
+              preview={alignment.preview}
+              setImagePoints={imagePoints => setAlignment({ ...alignment, imagePoints, mapPoints: [], preview: false })}
+              onCancel={() => setAlignment(null)}
+              onPreview={previewAlignment}
+              onConfirm={confirmAlignment}
+              onKnownDistance={calibrate}
+            />
+          ) : structuring ? (
+            <StructureView
+              project={project}
+              selected={selected}
+              onSelect={setSelected}
+              onFloorChange={changeFloor}
+              onLocate={locateStructure}
+              onGraphView={openGraph}
+              // Same commit path as every map tool, so zones land in history and undo like anything else.
+              onEdit={editing ? change => commit(change) : undefined}
+            />
+          ) : navigating ? (
+            <NavigatePanel
+              project={project}
+              here={avatar ? { floorId: avatar.floorId, position: avatar.position } : null}
+              from={navFrom}
+              to={navTo}
+              route={route}
+              playing={playing}
+              activeStep={playStep}
+              editing={editing}
+              onFrom={setNavFrom}
+              onTo={setNavTo}
+              onSwap={() => {
+                setNavFrom(navTo);
+                setNavTo(navFrom);
+              }}
+              onClear={() => {
+                setNavFrom(null);
+                setNavTo(null);
+              }}
+              onPlay={() => {
+                setGraphView(false);
+                playStart.current = avatar;
+                playingRef.current = true;
+                setPlayStep(0);
+                setPlaying(true);
+              }}
+              onPause={stopPlaying}
+              onStep={delta => seekStep((playStep ?? (delta === 1 ? -1 : 1)) + delta)}
+              onSeek={seekStep}
+              onClose={() => {
+                stopPlaying();
+                setNavigating(false);
+              }}
+            />
+          ) : inspectorOpen ? (
+            <Inspector
+              onEdit={editing ? change => commit(change) : undefined}
+              onSpaceGeometry={
+                editing
+                  ? (id, source) =>
+                      commit(p => (source === 'independent' ? disconnectSpace(p, id) : connectSpace(p, id, source)))
+                  : undefined
+              }
+              onShiftOrigin={
+                editing
+                  ? (east, north) =>
+                      commit(p => {
+                        p.origin = moveOrigin(p.origin, east, north);
+                      })
+                  : undefined
+              }
+              project={project}
+              floorId={floorId}
+              selected={selected}
+              statuses={shownStatuses}
+              monitoring={monitoring}
+              editing={editing}
+              live={live}
+              renderStatusPanel={renderStatusPanel}
+              onClose={() => {
+                select(null);
+                setInspectorOpen(false);
+                if (window.matchMedia('(max-width: 840px)').matches) setSidebarOpen(false);
+              }}
+              onUpdateObject={updateObject}
+              onUpdateBarrier={(id: string, patch: Partial<Barrier>) =>
+                // Thickness is geometry: a wall that grows eats into the rooms on either side of it.
+                reshape(p => Object.assign(p.barriers.find(b => b.id === id)!, patch))
+              }
+              onUpdateDrawing={(id: string, patch: Partial<Drawing>) =>
+                commit(p => Object.assign(p.drawings.find(d => d.id === id)!, patch))
+              }
+              onUpdateFloor={(id: string, patch: Partial<Floor>) =>
+                commit(p => Object.assign(p.floors.find(f => f.id === id)!, patch))
+              }
+              onDeleteFloor={requestDeleteFloor}
+              onSetInitialFloor={(id: string | null) =>
+                commit(p => {
+                  // Clearing drops the field entirely — an explicit null would mean "open outdoors",
+                  // which is a different intent from having no preference.
+                  if (id === null) delete p.initialFloorId;
+                  else p.initialFloorId = id;
+                })
+              }
+              onDuplicate={duplicateSelected}
+              onDelete={requestDelete}
+              onSelect={id => select(id, true)}
+              onFloor={changeFloor}
+              onTraceFootprint={traceFootprint}
+            />
+          ) : null)}
       </div>
       {toast && (
         <div className="toast" role="status">
@@ -2476,57 +2728,7 @@ export function SitePlanner({
           </button>
         </div>
       )}
-      {importOpen && (
-        <ImportDialog
-          project={project}
-          floorId={floorId}
-          assets={adapters.assets}
-          importProjections={adapters.importProjections}
-          onClose={() => setImportOpen(false)}
-          onDrawing={startAlignment}
-          onProject={async p => {
-            await flush();
-            setHistory(makeHistory(p));
-            setFloorId(p.floors[0]?.id ?? null);
-            setNewFloorBuilding(p.buildings[0].id);
-            select(null);
-          }}
-          onOrigin={bearing => {
-            commit(d => {
-              const [lng, lat] = d.origin;
-              d.origin = (bearing ? [lng, lat, bearing] : [lng, lat]) as typeof d.origin;
-            });
-          }}
-          onPlan={(entities, target, layers) => {
-            let outcome: PlanImportReport | undefined;
-            if (
-              commit(d => {
-                outcome = importPlanEntities(d, entities, layers ? { floorId: target, layers } : { floorId: target });
-              }) &&
-              outcome
-            ) {
-              if (target !== floorId) setFloorId(target);
-              setActiveTab('structure');
-              const skipped = outcome.skipped.length ? ` · ${outcome.skipped.length} skipped` : '';
-              notify(
-                `Plan imported: ${outcome.walls} walls, ${outcome.rooms} rooms, ${outcome.doors} doors, ${outcome.windows} windows${outcome.passages ? ` · ${outcome.passages} open passages` : ''}${skipped}.`,
-              );
-            }
-          }}
-          onFootprints={objects => {
-            if (commit(p => p.objects.push(...objects))) {
-              setSelected(objects[0]?.id ?? null);
-              setActiveTab('objects');
-              const first = objects[0];
-              if (first && mapRef.current)
-                mapRef.current.easeTo({ center: toLngLat(first.position, project.origin), zoom: 18 });
-              notify(
-                `Imported ${objects.length} ${objects.length === 1 ? 'footprint' : 'footprints'}. Select a floor to generate its walls.`,
-              );
-            }
-          }}
-        />
-      )}
+      {importOpen && renderImport('reference')}
       {floorModal && (
         <Modal
           title="Add a floor"

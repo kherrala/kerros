@@ -4,17 +4,19 @@
 // lift shaft, "everywhere a contractor may go" — none of those have a shape, and drawing them on a
 // plan either lies about them or hides them. This view reads the same document as a list of what
 // groups with what and what opens onto what, which is the form those questions actually take.
-import { useMemo, useState } from 'react';
-import { isSpace, type Portal, type ProjectDocument, type SiteObject, type Zone } from '../model/types';
+import { lazy, Suspense, useMemo, useState } from 'react';
+import { isSpace, type Point, type Portal, type ProjectDocument, type SiteObject, type Zone } from '../model/types';
 import { addZone, captive, entryInto, perimeter, removeZone, setZoneMembers, zoneSpaces } from '../model/ontology';
 import { refreshPortals } from '../model/inference';
-import { spaces } from '../model/spaces';
+const StructureExplorer = lazy(() =>
+  import('./StructureExplorer').then(module => ({ default: module.StructureExplorer })),
+);
 import {
   ChevronDown,
   ChevronRight,
   DoorOpen,
   Layers,
-  Link2,
+  LocateFixed,
   MoveHorizontal,
   Plus,
   RefreshCw,
@@ -29,9 +31,16 @@ export interface StructureViewProps {
   onSelect?: (id: string) => void;
   /** Fires alongside onSelect when the pick lives on a particular floor. */
   onFloorChange?: (floorId: string | null) => void;
+  onLocate?: (target: StructureTarget) => void;
+  onGraphView?: (floorId?: string | null) => void;
   /** Omit to keep the panel read-only. Given, the panel can author zones: the host applies the
    *  mutation to a draft and owns undo, exactly as the map tools do. */
   onEdit?: (change: (draft: ProjectDocument) => void) => void;
+}
+export interface StructureTarget {
+  objectIds?: string[];
+  floorId?: string | null;
+  position?: Point;
 }
 
 const OUTDOORS = 'Outdoor site';
@@ -45,7 +54,30 @@ function passageLabel(portal: Portal, insideId: string): string {
   return 'sealed';
 }
 
-export function StructureView({ project, selected, onSelect, onFloorChange, onEdit }: StructureViewProps) {
+export function StructureView(props: StructureViewProps) {
+  return (
+    <Suspense
+      fallback={
+        <p className="structure-empty" role="status">
+          Loading structure…
+        </p>
+      }
+    >
+      <StructureExplorer {...props} renderZones={filter => <ZoneList {...props} {...filter} />} />
+    </Suspense>
+  );
+}
+
+function ZoneList({
+  project,
+  selected,
+  onSelect,
+  onFloorChange,
+  onEdit,
+  onLocate,
+  query,
+  floor,
+}: StructureViewProps & { query: string; floor: string }) {
   const [open, setOpen] = useState<string | null>(null);
   const selectedSpace = selected && project.objects.find(o => o.id === selected && isSpace(o.kind));
   const model = useMemo(() => {
@@ -54,13 +86,23 @@ export function StructureView({ project, selected, onSelect, onFloorChange, onEd
     const zones = project.zones ?? [];
     const groups = new Map<string, Zone[]>();
     for (const z of zones) {
+      const members = zoneSpaces(project, z)
+        .map(id => byId.get(id))
+        .filter(Boolean);
+      const text = [z.name, z.id, z.purpose, ...members.map(o => o?.name)].join(' ').toLowerCase();
+      if (query.trim() && !text.includes(query.trim().toLowerCase())) continue;
+      if (
+        floor !== 'all' &&
+        !members.some(o => (o?.floorId ?? 'outdoors') === floor || o?.servedFloorIds?.includes(floor))
+      )
+        continue;
       const key = z.purpose ?? 'other';
       const list = groups.get(key);
       if (list) list.push(z);
       else groups.set(key, [z]);
     }
-    return { byId, floors, groups, spaceCount: spaces(project).length, portalCount: (project.portals ?? []).length };
-  }, [project]);
+    return { byId, floors, groups };
+  }, [project, query, floor]);
 
   const name = (id: string) => model.byId.get(id)?.name ?? 'Unknown';
   const floorOf = (id: string) => {
@@ -97,59 +139,21 @@ export function StructureView({ project, selected, onSelect, onFloorChange, onEd
     </div>
   ) : null;
 
-  if (!project.zones?.length && !project.portals?.length)
+  if (!model.groups.size)
     return (
-      <div className="structure-panel">
+      <div className="structure-zone-list">
         {actions}
         <div className="structure-empty">
           <Shapes size={22} />
-          <strong>No structure yet</strong>
-          <p>
-            This project has geometry but nothing describing what it <em>means</em> — no zones grouping its spaces, no
-            portals joining them.
-          </p>
-          <p>Portals can be read straight off the plan; zones are yours to name.</p>
+          <strong>{project.zones?.length ? 'No zones match these filters' : 'No semantic zones yet'}</strong>
+          <p>Spaces and portals are available in their own tabs. Select a space on the plan to create a named zone.</p>
         </div>
       </div>
     );
 
   return (
-    <div className="structure-panel">
-      <div className="structure-summary">
-        <span>
-          <Layers size={13} /> {model.spaceCount} spaces
-        </span>
-        <span>
-          <Shapes size={13} /> {(project.zones ?? []).length} zones
-        </span>
-        <span>
-          <Link2 size={13} /> {model.portalCount} portals
-        </span>
-      </div>
-      {onEdit && (
-        <div className="structure-actions">
-          <button
-            type="button"
-            className="text-button"
-            disabled={!selectedSpace}
-            title={selectedSpace ? `New zone containing ${selectedSpace.name}` : 'Select an area on the plan first'}
-            onClick={() => {
-              if (!selectedSpace) return;
-              onEdit(d => addZone(d, `${selectedSpace.name} zone`, [selectedSpace.id], 'security'));
-            }}
-          >
-            <Plus size={13} /> New zone
-          </button>
-          <button
-            type="button"
-            className="text-button"
-            title="Re-read portals from the plan, keeping any you have edited"
-            onClick={() => onEdit(d => refreshPortals(d))}
-          >
-            <RefreshCw size={13} /> Re-read portals
-          </button>
-        </div>
-      )}
+    <div className="structure-zone-list">
+      {actions}
       <div className="inspector-scroll structure-scroll">
         {[...model.groups].map(([purpose, zones]) => (
           <section key={purpose} className="structure-group">
@@ -158,23 +162,36 @@ export function StructureView({ project, selected, onSelect, onFloorChange, onEd
               const isOpen = open === zone.id;
               const members = zoneSpaces(project, zone);
               const ways = perimeter(project, zone);
-              const inner = captive(project, zone);
+              const inner = isOpen ? captive(project, zone) : [];
               const inside = new Set(members);
               return (
                 <div key={zone.id} className={`structure-zone ${isOpen ? 'open' : ''}`}>
-                  <button
-                    type="button"
-                    className="structure-zone-head"
-                    onClick={() => setOpen(isOpen ? null : zone.id)}
-                  >
-                    {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-                    <strong>{zone.name}</strong>
-                    <span className="structure-counts">
-                      {members.length} spaces
-                      {ways.length > 0 && ` · ${ways.length} in`}
-                      {zone.connects && ` · ${zone.connects === 'all' ? 'lift' : 'stair'}`}
-                    </span>
-                  </button>
+                  <div className="structure-zone-toolbar">
+                    <button
+                      type="button"
+                      className="structure-zone-head"
+                      aria-expanded={isOpen}
+                      onClick={() => setOpen(isOpen ? null : zone.id)}
+                    >
+                      {isOpen ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
+                      <strong>{zone.name}</strong>
+                      <span className="structure-counts">
+                        {members.length} {members.length === 1 ? 'space' : 'spaces'}
+                        {ways.length > 0 && ` · ${ways.length} in`}
+                        {zone.connects &&
+                          ` · ${{ all: 'lift', adjacent: 'stairs', up: 'escalator up', down: 'escalator down' }[zone.connects]}`}
+                      </span>
+                    </button>
+                    <button
+                      className="structure-locate"
+                      aria-label={`Find ${zone.name} on map`}
+                      title="Find on map"
+                      disabled={!members.length}
+                      onClick={() => (onLocate ? onLocate({ objectIds: members }) : pick(members[0]))}
+                    >
+                      <LocateFixed size={13} />
+                    </button>
+                  </div>
                   {isOpen && (
                     <div className="structure-detail">
                       {onEdit && (
@@ -246,16 +263,28 @@ export function StructureView({ project, selected, onSelect, onFloorChange, onEd
                               const insideId = inside.has(portal.a) ? portal.a : portal.b;
                               const outsideId = insideId === portal.a ? portal.b : portal.a;
                               return (
-                                <li key={portal.id}>
-                                  <button
-                                    type="button"
-                                    className={portal.openingId === selected ? 'active' : ''}
-                                    onClick={() => pick(portal.openingId ?? insideId)}
-                                  >
+                                <li key={portal.id} className="structure-member">
+                                  <span className="structure-member-title">
                                     <span className="structure-from">{name(outsideId)}</span>
                                     <MoveHorizontal size={11} />
                                     <span>{name(insideId)}</span>
                                     <em>{passageLabel(portal, insideId)}</em>
+                                  </span>
+                                  <button
+                                    type="button"
+                                    className="structure-locate"
+                                    title="Find on map"
+                                    aria-label={`Find passage from ${name(outsideId)} to ${name(insideId)} on map`}
+                                    onClick={() =>
+                                      onLocate
+                                        ? onLocate({
+                                            objectIds: portal.openingId ? [portal.openingId] : [insideId, outsideId],
+                                            floorId: floorOf(outsideId).floorId,
+                                          })
+                                        : pick(portal.openingId ?? insideId)
+                                    }
+                                  >
+                                    <LocateFixed size={13} />
                                   </button>
                                 </li>
                               );
@@ -263,15 +292,39 @@ export function StructureView({ project, selected, onSelect, onFloorChange, onEd
                           </ul>
                         </>
                       )}
+                      {!!zone.childZoneIds?.length && (
+                        <div className="structure-note">
+                          Contains zones:{' '}
+                          {zone.childZoneIds.map(id => project.zones?.find(z => z.id === id)?.name ?? id).join(', ')}
+                        </div>
+                      )}
+                      {project.zones?.some(z => z.childZoneIds?.includes(zone.id)) && (
+                        <div className="structure-note">
+                          Part of:{' '}
+                          {project.zones
+                            .filter(z => z.childZoneIds?.includes(zone.id))
+                            .map(z => z.name)
+                            .join(', ')}
+                        </div>
+                      )}
                       <h4>
                         <Layers size={12} /> Spaces
                       </h4>
                       <ul>
                         {members.map(id => (
-                          <li key={id}>
-                            <button type="button" className={id === selected ? 'active' : ''} onClick={() => pick(id)}>
+                          <li key={id} className="structure-member">
+                            <span className="structure-member-title">
                               <span>{name(id)}</span>
                               <em>{floorOf(id).label}</em>
+                            </span>
+                            <button
+                              type="button"
+                              className="structure-locate"
+                              title="Find on map"
+                              aria-label={`Find ${name(id)} on map`}
+                              onClick={() => (onLocate ? onLocate({ objectIds: [id] }) : pick(id))}
+                            >
+                              <LocateFixed size={13} />
                             </button>
                           </li>
                         ))}

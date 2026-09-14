@@ -25,6 +25,11 @@ The framework-free core: the data model and pure operations. No React, no MapLib
 
 Guards & ids: `isArea`, `isDevice`, `isOpening`, `uid`. The full list is exported as `OBJECT_KINDS`.
 
+For read-only navigation integrations, use `navNodes(project)` and `navEdges(project)` to read the
+effective graph, including derived connectivity when authored arrays are absent. `findRoute` accepts
+`RouteEnd` values (object IDs or floor/position pairs) and returns a `Route`; `RoutePlace` describes a
+resolved endpoint. The `HERE` constant identifies the avatar option in navigation controls.
+
 ### Materials and lights
 
 Objects and barriers accept `material`, including `terrazzo` (600 mm stone floor tiles), `carpet` (matte loop pile) and `wallpaper` (a repeated
@@ -142,7 +147,7 @@ Connected-space operations, called inside `transact`:
 - `derivedSpaceRings(project, space)` — derive a connected space’s usable footprint after subtracting walls.
 - `bindSpaceToRegion(project, space, region)` — attach an area to an already identified boundary face and generate its cache, useful for importers.
 
-The `addBoundary`, `connectSpace` and `disconnectSpace` mutation variants expose these edits as data. Transactions normalize crossings and update affected space loops automatically.
+The `addBoundary`, `drawBoundary`, `connectSpace`, `disconnectSpace`, `encloseRoom`, `addHole` and `moveGeometry` mutation variants expose these edits as data. Transactions normalize crossings and update affected space loops automatically.
 
 ## Documents
 
@@ -169,7 +174,11 @@ transaction that cannot produce an invalid result.
   the authoring vocabulary as a serializable `Mutation` (`{ kind: 'addZone', … }`), executed through
   `transact`. A sequence applies whole or not at all, and `outcomes` reports what each step
   returned. Because mutations are plain data they can be logged, replayed over a wire, and
-  table-tested.
+  table-tested. The data API also covers building/floor creation and updates, floor duplication/removal,
+  barrier properties/removal, wall and junction movement, drawing boundaries, room enclosure and holes,
+  all object fields (including doors and vertical transport), portal/zone connectivity and explicit navigation.
+  `addBarrier` reports the created barrier ID; `inspect_document` in the AI tool loop can read generated IDs
+  and state. Unknown mutation names and attempts to patch immutable IDs are refused.
 - Geometry limits: `MIN_SEGMENT` (0.01 m — rejects degenerate walls while preserving short returns
   and jambs), `OPENING_MIN_SEGMENT` (the same base limit; actual opening width determines how much
   wall is needed), `COORD_LIMIT` (100 km — a corruption guard, not a site size). The 0.5 m drawing

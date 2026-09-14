@@ -1,0 +1,13 @@
+{
+  "name": "@kerros/server",
+  "version": "0.1.0",
+  "description": "Node-only PDF/DWG vector extraction, calibrated source analysis and streamed AI imports for Kerros.",
+  "type": "module",
+  "license": "MIT",
+  "repository": { "type": "git", "url": "git+https://github.com/kherrala/kerros.git", "directory": "packages/server" },
+  "engines": { "node": ">=22" },
+  "exports": { ".": { "types": "./dist/types/server/index.d.ts", "node": "./dist/index.js" } },
+  "files": ["dist", "README.md", "LICENSE"],
+  "scripts": { "build": "vite build && tsc -p tsconfig.dts.json" },
+  "dependencies": { "@anthropic-ai/sdk": "^0.125.0", "@napi-rs/canvas": "^1.0.8", "pdfjs-dist": "^6.3.289", "proj4": "^2.19.0", "polygon-clipping": "^0.15.7" }
+}

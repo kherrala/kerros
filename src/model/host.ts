@@ -65,6 +65,38 @@ export interface PlannerAdapters {
   basemap?: BasemapConfig;
   /** Extra coordinate systems offered in the footprint-import dialog (beyond lng/lat, always available). */
   importProjections?: ImportProjection[];
+  /** Optional server-backed AI import. Credentials and tool execution belong to the host backend. */
+  aiImport?: AiImportAdapter;
+  /** Host-side PDF page conversion. The editor never loads a PDF parser or worker. */
+  pdfDrawing?: PdfDrawingAdapter;
+}
+export interface PdfDrawingAdapter {
+  render(file: File, page: number): Promise<Blob>;
+}
+export interface AiImportAdapter {
+  /** Queue human instructions for the next provider turn of an already running job. */
+  sendInstruction?(jobId: string, instruction: import('../import/instructions').ImportInstruction): Promise<void>;
+  run(
+    file: File,
+    options: {
+      origin: ProjectDocument['origin'];
+      instructions: string;
+      brief?: import('../import/brief').ImportBrief;
+      base?: ProjectDocument;
+      checkpoint?: import('../import/checkpoint').ImportCheckpoint;
+      budget?: import('../import/checkpoint').ImportBudget;
+      onCheckpoint?: (checkpoint: import('../import/checkpoint').ImportCheckpoint) => void | Promise<void>;
+      onPause?: (pause: import('../import/checkpoint').ImportPause) => void | Promise<void>;
+      onAnalysis?: (preview: import('../import/analysisPreview').ImportAnalysisPreview) => void | Promise<void>;
+      onSession?: (jobId: string) => void | Promise<void>;
+      signal: AbortSignal;
+      onProgress: (event: { type: 'text' | 'tool' | 'status'; detail: string }) => void | Promise<void>;
+      /** Await acceptance/persistence before consuming the next event. */
+      onDocument: (document: ProjectDocument) => void | Promise<void>;
+      /** Cumulative usage for this run; a continuation starts a new run. */
+      onUsage?: (usage: import('../import/usage').AiTokenUsage) => void | Promise<void>;
+    },
+  ): Promise<ProjectDocument>;
 }
 /** Map camera pose. Part of ViewState; hosts persist and restore it (e.g. encoded in a deep link). */
 export interface CameraState {

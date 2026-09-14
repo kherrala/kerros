@@ -6,7 +6,15 @@
 // and so a host that only wanted `useDarkMode` to render its picker screen was paying for the whole
 // renderer up front. `@kerros/viewer` re-exports every name below; this is an added entry point, not
 // a changed one.
-export type { BasemapConfig, BasemapVectorSchema } from '../model/host';
+export type {
+  BasemapConfig,
+  BasemapVectorSchema,
+  CameraState,
+  ElevatorControls,
+  StatusPanelContext,
+} from '../model/host';
+export type { FloorViewerProps, ViewerMode, ViewerDisplayOptions } from './FloorViewer';
+export type { WalkAvatar } from '../map/walk';
 export type { StatusReading, StatusMetrics, StatusTone, StatusFeed } from '../model/live';
 export { neutralBasemap } from '../adapters/basemap';
 export { statusTone, statusLabel, unknownStatus } from '../adapters/status';
@@ -24,4 +32,12 @@ export {
 export * from '../schema';
 // The ontology browsed as a structure rather than a plan — zones, their spaces, and the portals
 // that bound them. Reads the same document as the map; needs no map.
-export { StructureView, type StructureViewProps } from '../components/StructureView';
+export { StructureView, type StructureViewProps, type StructureTarget } from '../components/StructureView';
+export {
+  NavigationPanel,
+  NavigationGraph,
+  ReadOnlyInspector,
+  type NavigationPanelProps,
+  type NavigationGraphProps,
+  type ReadOnlyInspectorProps,
+} from './panels';

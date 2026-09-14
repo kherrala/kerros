@@ -4,7 +4,7 @@
 // Deliberately derived rather than hand-written: the vertical cores come from the landings already on
 // the plan, and the portals are read off the doors. If a demo grows a floor, this follows.
 import { inferOpenBoundaries, inferPortals } from '../../src/model/inference';
-import { servedFloors } from '../../src/model/vertical';
+import { servedFloors, shaftKey } from '../../src/model/vertical';
 import { uid, type ProjectDocument, type SiteObject, type Zone } from '../../src/model/types';
 
 /** How a shaft's landings reach each other. A lift ride is direct, a stair passes every level on the
@@ -20,7 +20,7 @@ function cores(project: ProjectDocument): Zone[] {
     // Name AND place. A shaft is a vertical column standing somewhere, so two escalators at opposite
     // ends of a building that happen to share a name are two shafts, not one — group them together
     // and a route will walk you into the north escalator and out of the south one.
-    const key = `${o.kind}|${o.name}|${o.position[0].toFixed(1)},${o.position[1].toFixed(1)}`;
+    const key = shaftKey(o);
     const group = groups.get(key);
     if (group) group.push(o);
     else groups.set(key, [o]);

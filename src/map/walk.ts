@@ -17,8 +17,9 @@ import { StairWalker, type StairSurface } from './stairSurfaces';
 
 /** Eye above the slab it stands on. A constant, not the floor's height: a mezzanine and a hall are
  *  different rooms but the same visitor. */
-export { EYE, BODY } from './walkDimensions';
+export { EYE, BODY, HEAD_ROOM } from './walkDimensions';
 import { EYE, BODY } from './walkDimensions';
+import { supportedStep } from './walkSurfaces';
 /** Shoulder radius. Generous enough that you do not clip a corner, tight enough for a 0.9 m door. */
 
 /** Faster than anyone walks a corridor, because on a screen the corridor is the size of a hand and
@@ -73,15 +74,9 @@ export function walkFieldOfView(value: number): number {
 export function verticalFieldOfView(horizontal: number, aspect: number): number {
   return (2 * Math.atan(Math.tan((walkFieldOfView(horizontal) * Math.PI) / 360) / aspect) * 180) / Math.PI;
 }
-/** Degrees the view turns per pixel the mouse moves while the pointer is locked. */
-export const MOUSE_LOOK = 0.12;
-/** Degrees per pixel when dragging instead — the fallback when the browser refuses the lock. A drag
- *  is a deliberate motion and wants a bit more turn for its trouble. */
+/** Degrees the view turns per pixel while dragging to look around. */
 export const DRAG_LOOK = 0.22;
 export const TURN_SPEED = 120; // degrees per second for A, D and the arrow keys
-/** A wall piece whose underside clears this is a head-height lintel — the strip over a door — and you
- *  walk under it. Anything lower is something you walk into. */
-export const HEAD_ROOM = 1.25;
 
 /** Where the walker is, kept apart from the camera: the camera is whatever mode you are in, the
  *  avatar is the person, and they persist across leaving the walk and coming back to it. */
@@ -100,10 +95,8 @@ export interface WalkPose {
   /** Clockwise from plan +Y, matching the plan's own grid rather than the compass. */
   heading: number;
   pitch: number;
-  /** True while the mouse is aiming the view — the pointer is locked, or held down and dragged. */
+  /** True while the mouse is held down and dragged to aim the view. */
   looking: boolean;
-  /** True while the browser has given the pointer to the walk: no cursor, and Esc hands it back. */
-  locked: boolean;
 }
 
 /* ------------------------------------------------------------------ geometry */
@@ -218,7 +211,7 @@ export function aim(
   pitch: number,
   dx: number,
   dy: number,
-  perPixel = MOUSE_LOOK,
+  perPixel = DRAG_LOOK,
 ): { heading: number; pitch: number } {
   return { heading: wrap(heading + dx * perPixel), pitch: clamp(pitch - dy * perPixel, MIN_PITCH, MAX_PITCH) };
 }
@@ -307,6 +300,8 @@ export interface WalkTerrain {
   floorId?: string | null;
   elevation?: number;
   stairs?: StairSurface[];
+  /** Whether a storey's slab supports the point, or an intentional drop has a landing below. */
+  supports?: (at: Point, floorId: string | null) => boolean;
   dropAt?: (at: Point) => { floorId: string; distance: number } | undefined;
 }
 
@@ -315,12 +310,12 @@ export interface WalkCallbacks {
   onFloor?(floorId: string): void;
   /** A real opening has a landing below. Rebase the scene onto that floor before animating descent. */
   onDrop?(floorId: string): void;
-  /** Fired once per frame in which anything changed — position, heading, pitch or pointer lock. */
+  /** Fired when the position, heading, pitch or look gesture changes. */
   onPose(pose: WalkPose): void;
   /** The walker asked to change level (F, or Shift+F for down). The host decides whether there is
    *  anywhere to go from where they are standing. */
   onUse(down: boolean): void;
-  /** Escape with no pointer lock to release: the host leaves walk mode. */
+  /** Escape: the host leaves walk mode. */
   onExit(): void;
   /** M: the walker wants the sound on or off. */
   onSound?(): void;
@@ -349,10 +344,6 @@ export const KEYS: Record<string, string> = {
   ShiftRight: 'fast',
 };
 
-/** Esc leaves the pointer lock, and the browser may deliver that key to the page as well as acting
- *  on it. For this long after an unlock a second Esc is taken to be the same one. */
-const UNLOCK_GRACE_MS = 300;
-
 export class WalkController {
   private map?: GLMap;
   private origin: Origin = [0, 0];
@@ -367,9 +358,7 @@ export class WalkController {
   private planFov = 0;
   private fieldOfView = DEFAULT_WALK_FOV;
   private running = false;
-  private dragging = false;
-  private locked = false;
-  private unlockedAt = -Infinity;
+  private dragPointer: number | null = null;
   private drag: Point = [0, 0];
   private path: Point[] | null = null;
   private travelled = 0;
@@ -412,14 +401,14 @@ export class WalkController {
     canvas.addEventListener('pointermove', this.look);
     canvas.addEventListener('pointerup', this.drop);
     canvas.addEventListener('pointercancel', this.drop);
-    document.addEventListener('pointerlockchange', this.lockChanged);
+    canvas.addEventListener('lostpointercapture', this.drop);
     window.addEventListener('keydown', this.down, true);
     window.addEventListener('keyup', this.up, true);
     window.addEventListener('blur', this.release);
     map.on('resize', this.resize);
     this.last = performance.now();
     this.frame = requestAnimationFrame(this.tick);
-    canvas.style.cursor = 'crosshair';
+    canvas.style.cursor = 'grab';
     this.resize();
   }
 
@@ -429,7 +418,6 @@ export class WalkController {
     this.cancelFollow();
     cancelAnimationFrame(this.frame);
     this.keys.clear();
-    document.removeEventListener('pointerlockchange', this.lockChanged);
     window.removeEventListener('keydown', this.down, true);
     window.removeEventListener('keyup', this.up, true);
     window.removeEventListener('blur', this.release);
@@ -440,9 +428,8 @@ export class WalkController {
     canvas.removeEventListener('pointermove', this.look);
     canvas.removeEventListener('pointerup', this.drop);
     canvas.removeEventListener('pointercancel', this.drop);
-    if (document.pointerLockElement === canvas) document.exitPointerLock?.();
-    this.locked = false;
-    this.dragging = false;
+    canvas.removeEventListener('lostpointercapture', this.drop);
+    this.endDrag();
     canvas.style.cursor = '';
     for (const [h, was] of this.handlers) if (was) map[h]?.enable();
     this.handlers = [];
@@ -536,8 +523,7 @@ export class WalkController {
       position: this.position,
       heading: this.heading,
       pitch: this.pitch,
-      looking: this.locked || this.dragging,
-      locked: this.locked,
+      looking: this.dragPointer !== null,
     };
   }
 
@@ -545,76 +531,55 @@ export class WalkController {
     return !!this.stairs.active;
   }
 
-  /** A click takes the mouse: the pointer is locked to the canvas and its movement turns the head,
-   *  the way a first-person game does it. The browser can refuse — no support, a permission policy,
-   *  or Chrome's cool-down after Esc released the last lock — so the same click also begins a drag,
-   *  and the drag stays in force only if the lock never arrives. */
+  /** Drag to look. Capture only delivers the remainder of this gesture if it leaves the canvas;
+   *  the cursor stays visible and is free to operate panels as soon as the button is released. */
   private grab = (e: PointerEvent) => {
-    if (e.button !== 0 || e.pointerType === 'touch') return;
+    if (e.button !== 0 || e.pointerType === 'touch' || this.dragPointer !== null) return;
     const canvas = this.map?.getCanvas();
     if (!canvas) return;
     e.preventDefault();
-    // A click while the pointer is already locked is nothing: the mouse is aiming, and Chrome
-    // throws on a capture request from a locked element. The drag is only for when there is no lock.
-    if (this.locked || document.pointerLockElement === canvas) return;
-    this.dragging = true;
+    canvas.focus({ preventScroll: true });
+    this.dragPointer = e.pointerId;
     this.drag = [e.clientX, e.clientY];
+    canvas.style.cursor = 'grabbing';
     try {
       canvas.setPointerCapture(e.pointerId);
     } catch {
       /* the pointer went away between down and here; the drag ends with the next up */
     }
-    if (!this.locked && document.pointerLockElement !== canvas) {
-      try {
-        // Raw mouse input first — no OS acceleration, which is what aiming wants — and a plain
-        // lock when the platform has none, because Chrome refuses the whole request rather than
-        // settling for the plain one. Chrome returns a promise; Safari and Firefox return nothing
-        // and report through pointerlockerror instead. Either way a refusal leaves the drag.
-        const lock = canvas.requestPointerLock as (o?: unknown) => Promise<void> | undefined;
-        lock
-          .call(canvas, { unadjustedMovement: true })
-          ?.catch(() => lock.call(canvas))
-          ?.catch(() => undefined);
-      } catch {
-        /* no pointer lock here: drag to look */
-      }
-    }
     this.on.onPose(this.pose);
   };
 
   private drop = (e: PointerEvent) => {
-    if (!this.dragging) return;
-    this.dragging = false;
+    if (e.pointerId === this.dragPointer) this.endDrag();
+  };
+
+  private endDrag = () => {
+    const pointer = this.dragPointer;
+    if (pointer === null) return;
+    this.dragPointer = null;
     const canvas = this.map?.getCanvas();
-    if (canvas?.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+    if (canvas) {
+      if (canvas.hasPointerCapture(pointer)) canvas.releasePointerCapture(pointer);
+      canvas.style.cursor = 'grab';
+    }
     this.on.onPose(this.pose);
   };
 
-  private lockChanged = () => {
-    const canvas = this.map?.getCanvas();
-    const locked = !!canvas && document.pointerLockElement === canvas;
-    if (locked === this.locked) return;
-    this.locked = locked;
-    if (locked)
-      this.dragging = false; // the lock supersedes the drag that asked for it
-    else this.unlockedAt = performance.now();
-    this.on.onPose(this.pose);
+  private release = () => {
+    this.keys.clear();
+    this.endDrag();
   };
-
-  private release = () => this.keys.clear();
 
   private look = (e: PointerEvent) => {
-    let dx: number, dy: number;
-    if (this.locked) {
-      dx = e.movementX;
-      dy = e.movementY;
-    } else if (this.dragging) {
-      dx = e.clientX - this.drag[0];
+    if (e.pointerId !== this.dragPointer) return;
+    // Recover if a mouse-up was lost while changing window focus.
+    if (!(e.buttons & 1)) return this.endDrag();
+    const dx = e.clientX - this.drag[0],
       dy = e.clientY - this.drag[1];
-      this.drag = [e.clientX, e.clientY];
-    } else return;
+    this.drag = [e.clientX, e.clientY];
     if (!dx && !dy) return;
-    const turned = aim(this.heading, this.pitch, dx, dy, this.locked ? MOUSE_LOOK : DRAG_LOOK);
+    const turned = aim(this.heading, this.pitch, dx, dy);
     this.heading = turned.heading;
     this.pitch = turned.pitch;
     this.apply();
@@ -625,9 +590,9 @@ export class WalkController {
     const target = e.target as HTMLElement | null;
     if (target && (target.isContentEditable || ['INPUT', 'TEXTAREA', 'SELECT'].includes(target.tagName))) return;
     if (e.code === 'Escape') {
-      // With the pointer locked, Esc is the browser's: it releases the lock, and the walk carries
-      // on. Only an Esc with nothing left to release leaves the walk.
-      if (this.locked || performance.now() - this.unlockedAt < UNLOCK_GRACE_MS) return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      this.release();
       this.on.onExit();
       return;
     }
@@ -703,23 +668,30 @@ export class WalkController {
         this.terrain.stairs ?? [],
         this.terrain.floorId ?? null,
         this.terrain.elevation ?? 0,
+        this.terrain.supports,
       );
       if (this.stairs.pending) break;
+      if (this.beginFall()) return;
     }
     if (this.stairs.pending && this.on.onFloor) {
       this.apply();
       this.on.onFloor(this.stairs.pending);
       return;
     }
+    this.apply();
+  };
+
+  /** Stop at the first substep entering a hole, even when running over a narrow opening. */
+  private beginFall() {
     const drop = !this.stairs.active && this.terrain.dropAt?.(this.position);
     if (drop && this.on.onDrop) {
       this.cancelFollow();
       this.fall = { floorId: drop.floorId, remaining: drop.distance, speed: 0, ready: false };
       this.on.onDrop(drop.floorId);
-      return;
+      return true;
     }
-    this.apply();
-  };
+    return false;
+  }
 
   /** One frame of being carried along a route. The heading is rate-limited towards a point further
    *  up the path rather than snapped to the segment underfoot, which is what turns a corner into a
@@ -740,6 +712,7 @@ export class WalkController {
           this.terrain.stairs ?? [],
           this.terrain.floorId ?? null,
           this.terrain.elevation ?? 0,
+          this.terrain.supports,
         );
         if (Math.hypot(next[0] - step.at[0], next[1] - step.at[1]) > 0.04) {
           this.cancelFollow();
@@ -750,7 +723,19 @@ export class WalkController {
           this.on.onFloor?.(this.stairs.pending);
           break;
         }
-      } else this.position = step.at;
+      } else {
+        const next = supportedStep(
+          this.position,
+          step.at,
+          at => this.terrain.supports?.(at, this.terrain.floorId ?? null) ?? true,
+        );
+        if (Math.hypot(next[0] - step.at[0], next[1] - step.at[1]) > 0.001) {
+          this.cancelFollow();
+          return;
+        }
+        this.position = next;
+      }
+      if (this.beginFall()) return;
     }
     this.heading = easeHeading(this.heading, step.heading, TURN_RATE * dt);
     this.apply();

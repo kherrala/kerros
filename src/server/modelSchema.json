@@ -1,0 +1,2159 @@
+{
+  "mutation": {
+    "anyOf": [
+      {
+        "$ref": "#/$defs/T1"
+      },
+      {
+        "$ref": "#/$defs/T5"
+      },
+      {
+        "$ref": "#/$defs/T7"
+      },
+      {
+        "$ref": "#/$defs/T11"
+      },
+      {
+        "$ref": "#/$defs/T13"
+      },
+      {
+        "$ref": "#/$defs/T14"
+      },
+      {
+        "$ref": "#/$defs/T15"
+      },
+      {
+        "$ref": "#/$defs/T17"
+      },
+      {
+        "$ref": "#/$defs/T20"
+      },
+      {
+        "$ref": "#/$defs/T21"
+      },
+      {
+        "$ref": "#/$defs/T25"
+      },
+      {
+        "$ref": "#/$defs/T26"
+      },
+      {
+        "$ref": "#/$defs/T27"
+      },
+      {
+        "$ref": "#/$defs/T28"
+      },
+      {
+        "$ref": "#/$defs/T29"
+      },
+      {
+        "$ref": "#/$defs/T31"
+      },
+      {
+        "$ref": "#/$defs/T33"
+      },
+      {
+        "$ref": "#/$defs/T34"
+      },
+      {
+        "$ref": "#/$defs/T37"
+      },
+      {
+        "$ref": "#/$defs/T38"
+      },
+      {
+        "$ref": "#/$defs/T39"
+      },
+      {
+        "$ref": "#/$defs/T40"
+      },
+      {
+        "$ref": "#/$defs/T41"
+      },
+      {
+        "$ref": "#/$defs/T42"
+      },
+      {
+        "$ref": "#/$defs/T43"
+      },
+      {
+        "$ref": "#/$defs/T44"
+      },
+      {
+        "$ref": "#/$defs/T46"
+      },
+      {
+        "$ref": "#/$defs/T55"
+      },
+      {
+        "$ref": "#/$defs/T56"
+      },
+      {
+        "$ref": "#/$defs/T57"
+      },
+      {
+        "$ref": "#/$defs/T58"
+      },
+      {
+        "$ref": "#/$defs/T59"
+      },
+      {
+        "$ref": "#/$defs/T60"
+      },
+      {
+        "$ref": "#/$defs/T61"
+      },
+      {
+        "$ref": "#/$defs/T62"
+      },
+      {
+        "$ref": "#/$defs/T63"
+      },
+      {
+        "$ref": "#/$defs/T64"
+      },
+      {
+        "$ref": "#/$defs/T65"
+      },
+      {
+        "$ref": "#/$defs/T66"
+      }
+    ]
+  },
+  "definitions": {
+    "T4": {
+      "type": "object",
+      "properties": {
+        "footprint": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        },
+        "ridge": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "eave": {
+          "type": "number"
+        },
+        "peak": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "footprint",
+        "ridge",
+        "eave",
+        "peak"
+      ],
+      "additionalProperties": false
+    },
+    "T3": {
+      "type": "object",
+      "properties": {
+        "floorId": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        },
+        "sections": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/T4"
+          }
+        }
+      },
+      "required": [
+        "floorId",
+        "color",
+        "sections"
+      ],
+      "additionalProperties": false
+    },
+    "T2": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "roof": {
+          "$ref": "#/$defs/T3"
+        },
+        "sourceId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "description": "Provenance id of the basemap footprint a building was adopted from — the value of the host's\nconfigured footprints.idField (a string or number, depending on the tile source); absent for\nhand-drawn buildings."
+        },
+        "exteriorPreset": {
+          "type": "string",
+          "enum": [
+            "brick",
+            "plaster",
+            "timber",
+            "limestone",
+            "darkBrick"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    },
+    "T1": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "addBuilding"
+        },
+        "building": {
+          "$ref": "#/$defs/T2"
+        }
+      },
+      "required": [
+        "kind",
+        "building"
+      ],
+      "additionalProperties": false
+    },
+    "T6": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "roof": {
+          "$ref": "#/$defs/T3"
+        },
+        "sourceId": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "number"
+            }
+          ],
+          "description": "Provenance id of the basemap footprint a building was adopted from — the value of the host's\nconfigured footprints.idField (a string or number, depending on the tile source); absent for\nhand-drawn buildings."
+        },
+        "exteriorPreset": {
+          "type": "string",
+          "enum": [
+            "brick",
+            "plaster",
+            "timber",
+            "limestone",
+            "darkBrick"
+          ]
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "T5": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "patchBuilding"
+        },
+        "buildingId": {
+          "type": "string"
+        },
+        "set": {
+          "$ref": "#/$defs/T6"
+        }
+      },
+      "required": [
+        "kind",
+        "buildingId",
+        "set"
+      ],
+      "additionalProperties": false
+    },
+    "T9": {
+      "type": "object",
+      "properties": {
+        "kelvin": {
+          "type": "number"
+        },
+        "level": {
+          "type": "number"
+        },
+        "tint": {
+          "type": "string",
+          "description": "Optional colour cast from the fittings or reflected surroundings."
+        }
+      },
+      "required": [
+        "kelvin",
+        "level"
+      ],
+      "additionalProperties": false
+    },
+    "T10": {
+      "type": "object",
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": [
+            "silent",
+            "office",
+            "backrooms",
+            "plant",
+            "baths",
+            "elevator"
+          ]
+        },
+        "level": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "preset"
+      ],
+      "additionalProperties": false
+    },
+    "T8": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "buildingId": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "elevation": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "mezzanine": {
+          "type": "boolean",
+          "enum": [
+            false,
+            true
+          ]
+        },
+        "code": {
+          "type": "string"
+        },
+        "light": {
+          "$ref": "#/$defs/T9",
+          "description": "The artificial light this level burns — colour temperature and how brightly. Absent means a\nfluorescent ceiling at working brightness, which is what is actually overhead in most of the\nbuildings anyone draws. A building's own lighting does not follow the sun, so this is what\nkeeps a storey legible in a plan opened after dark."
+        },
+        "ambience": {
+          "$ref": "#/$defs/T10",
+          "description": "What this level sounds like from inside it — the default for every space on it that does not\nsay otherwise. Absent is silence."
+        }
+      },
+      "required": [
+        "id",
+        "buildingId",
+        "name",
+        "elevation",
+        "height"
+      ],
+      "additionalProperties": false
+    },
+    "T7": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "addFloor"
+        },
+        "floor": {
+          "$ref": "#/$defs/T8"
+        }
+      },
+      "required": [
+        "kind",
+        "floor"
+      ],
+      "additionalProperties": false
+    },
+    "T12": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "elevation": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "mezzanine": {
+          "type": "boolean",
+          "enum": [
+            false,
+            true
+          ]
+        },
+        "code": {
+          "type": "string"
+        },
+        "light": {
+          "$ref": "#/$defs/T9",
+          "description": "The artificial light this level burns — colour temperature and how brightly. Absent means a\nfluorescent ceiling at working brightness, which is what is actually overhead in most of the\nbuildings anyone draws. A building's own lighting does not follow the sun, so this is what\nkeeps a storey legible in a plan opened after dark."
+        },
+        "ambience": {
+          "$ref": "#/$defs/T10",
+          "description": "What this level sounds like from inside it — the default for every space on it that does not\nsay otherwise. Absent is silence."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "T11": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "patchFloor"
+        },
+        "floorId": {
+          "type": "string"
+        },
+        "set": {
+          "$ref": "#/$defs/T12"
+        }
+      },
+      "required": [
+        "kind",
+        "floorId",
+        "set"
+      ],
+      "additionalProperties": false
+    },
+    "T13": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "removeFloor"
+        },
+        "floorId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "floorId"
+      ],
+      "additionalProperties": false
+    },
+    "T14": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "duplicateFloor"
+        },
+        "floorId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "floorId"
+      ],
+      "additionalProperties": false
+    },
+    "T16": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "datum": {
+          "type": "string"
+        },
+        "initialFloorId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ],
+          "description": "The floor a viewer should open on — the document's own front door, so a project that is really\nabout its offices does not always land on the street. `null` means the outdoor site; omit it\nentirely to let the viewer pick (ground floor, else the lowest). Hosts can still override per\nsession via ViewState.floor / FloorViewer's `floorId`."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "T15": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "patchProject"
+        },
+        "set": {
+          "$ref": "#/$defs/T16"
+        }
+      },
+      "required": [
+        "kind",
+        "set"
+      ],
+      "additionalProperties": false
+    },
+    "T19": {
+      "type": "object",
+      "properties": {},
+      "required": [],
+      "additionalProperties": {}
+    },
+    "T18": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "height": {
+          "type": "number"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "wall",
+            "fence"
+          ]
+        },
+        "thickness": {
+          "type": "number"
+        },
+        "color": {
+          "type": "string"
+        },
+        "material": {
+          "type": "string",
+          "enum": [
+            "brick",
+            "stone",
+            "plaster",
+            "timber",
+            "oak",
+            "tile",
+            "terrazzo",
+            "grass",
+            "paving",
+            "carpet",
+            "wallpaper"
+          ]
+        },
+        "category": {
+          "type": "string"
+        },
+        "metadata": {
+          "$ref": "#/$defs/T19"
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "T17": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "patchBarrier"
+        },
+        "barrierId": {
+          "type": "string"
+        },
+        "set": {
+          "$ref": "#/$defs/T18"
+        }
+      },
+      "required": [
+        "kind",
+        "barrierId",
+        "set"
+      ],
+      "additionalProperties": false
+    },
+    "T20": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "removeBarrier"
+        },
+        "barrierId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "barrierId"
+      ],
+      "additionalProperties": false
+    },
+    "T22": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "junction"
+        },
+        "id": {
+          "type": "string"
+        },
+        "point": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "point"
+      ],
+      "additionalProperties": false
+    },
+    "T23": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "barrier"
+        },
+        "id": {
+          "type": "string"
+        },
+        "point": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "point"
+      ],
+      "additionalProperties": false
+    },
+    "T24": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "ring"
+        },
+        "id": {
+          "type": "string"
+        },
+        "point": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "ringIndex": {
+          "type": "number"
+        },
+        "index": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "kind",
+        "id",
+        "point",
+        "ringIndex",
+        "index"
+      ],
+      "additionalProperties": false
+    },
+    "T21": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "moveGeometry"
+        },
+        "move": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/T22"
+            },
+            {
+              "$ref": "#/$defs/T23"
+            },
+            {
+              "$ref": "#/$defs/T24"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "move"
+      ],
+      "additionalProperties": false
+    },
+    "T25": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "drawBoundary"
+        },
+        "a": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "b": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "floorId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "a",
+        "b",
+        "floorId"
+      ],
+      "additionalProperties": false
+    },
+    "T26": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "drawBarrier"
+        },
+        "a": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "b": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "floorId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "barrierKind": {
+          "type": "string",
+          "enum": [
+            "wall",
+            "fence"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "a",
+        "b",
+        "floorId"
+      ],
+      "additionalProperties": false
+    },
+    "T27": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "encloseRoom"
+        },
+        "floorId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "point": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "name": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "floorId",
+        "point"
+      ],
+      "additionalProperties": false
+    },
+    "T28": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "addHole"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "ring": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "objectId",
+        "ring"
+      ],
+      "additionalProperties": false
+    },
+    "T30": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "$ref": "#/$defs/T19"
+        },
+        "purpose": {
+          "type": "string",
+          "description": "Host vocabulary ('security', 'evacuation', 'hvac', …). The core never interprets it."
+        },
+        "connects": {
+          "type": "string",
+          "enum": [
+            "all",
+            "adjacent",
+            "up",
+            "down"
+          ],
+          "description": "How the spaces within this zone reach each other, when they are not joined by portals.\n'all'      — every space mutually reachable: a lift serving all of its landings.\n'adjacent' — reachable in elevation order, both ways: a stair, passing each level in turn.\n'up'/'down'— adjacent but one-way: an escalator, which carries you in a single direction.\nomitted    — no implied connectivity; the zone is a grouping only."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "T29": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "patchZone"
+        },
+        "zoneId": {
+          "type": "string"
+        },
+        "set": {
+          "$ref": "#/$defs/T30"
+        }
+      },
+      "required": [
+        "kind",
+        "zoneId",
+        "set"
+      ],
+      "additionalProperties": false
+    },
+    "T32": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "$ref": "#/$defs/T19"
+        },
+        "openingId": {
+          "type": "string",
+          "description": "The opening object (door/gate/turnstile) crossed here; absent for a virtual portal — an open\nboundary between two spaces with no physical separator, which malls and open-plan floors need.\nKept as a reference rather than folded in, so two portals can be known to share one door leaf."
+        },
+        "a": {
+          "type": "string",
+          "description": "The two sides. Order is storage, not meaning — ask `entryInto` rather than reading it."
+        },
+        "b": {
+          "type": "string"
+        },
+        "passage": {
+          "type": "string",
+          "enum": [
+            "both",
+            "a-to-b",
+            "b-to-a",
+            "none"
+          ],
+          "description": "Which way passage is possible at all. Default 'both'."
+        },
+        "attests": {
+          "type": "string",
+          "enum": [
+            "none",
+            "confirmed",
+            "assumed"
+          ],
+          "description": "How far a crossing here can be trusted to have actually happened.\n'confirmed' — a sensor saw it (a door monitor opening and closing).\n'assumed'   — inferred from a grant; nobody watched. The default for a plain door.\n'none'      — the crossing is a *request*, not an event: a lift floor button, where the\n              passenger may go anywhere. Anything counting crossings must ignore these."
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ],
+      "additionalProperties": false
+    },
+    "T31": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "addPortal"
+        },
+        "portal": {
+          "$ref": "#/$defs/T32"
+        }
+      },
+      "required": [
+        "kind",
+        "portal"
+      ],
+      "additionalProperties": false
+    },
+    "T33": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "removePortal"
+        },
+        "portalId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "portalId"
+      ],
+      "additionalProperties": false
+    },
+    "T35": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "floorId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "position": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "objectId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "floorId",
+        "position"
+      ],
+      "additionalProperties": false
+    },
+    "T36": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "elevator",
+            "walk",
+            "door",
+            "stairs"
+          ]
+        },
+        "aId": {
+          "type": "string"
+        },
+        "bId": {
+          "type": "string"
+        },
+        "directed": {
+          "type": "boolean",
+          "enum": [
+            false,
+            true
+          ],
+          "description": "Passable from `aId` to `bId` only. Escalators and one-way doors; absent means both ways."
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "weight": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "id",
+        "kind",
+        "aId",
+        "bId"
+      ],
+      "additionalProperties": false
+    },
+    "T34": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "setNavigation"
+        },
+        "nodes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/T35"
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/T36"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "nodes",
+        "edges"
+      ],
+      "additionalProperties": false
+    },
+    "T37": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "addZone"
+        },
+        "name": {
+          "type": "string"
+        },
+        "spaceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "purpose": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "spaceIds"
+      ],
+      "additionalProperties": false
+    },
+    "T38": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "removeZone"
+        },
+        "zoneId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "zoneId"
+      ],
+      "additionalProperties": false
+    },
+    "T39": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "setZoneMembers"
+        },
+        "zoneId": {
+          "type": "string"
+        },
+        "spaceIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "member": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "zoneId",
+        "spaceIds",
+        "member"
+      ],
+      "additionalProperties": false
+    },
+    "T40": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "nestZone"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "childId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "parentId",
+        "childId"
+      ],
+      "additionalProperties": false
+    },
+    "T41": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "addPortalGroup"
+        },
+        "name": {
+          "type": "string"
+        },
+        "portalIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "name",
+        "portalIds"
+      ],
+      "additionalProperties": false
+    },
+    "T42": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "removePortalGroup"
+        },
+        "groupId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "groupId"
+      ],
+      "additionalProperties": false
+    },
+    "T43": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "setPortalGroupMembers"
+        },
+        "groupId": {
+          "type": "string"
+        },
+        "portalIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "member": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "kind",
+        "groupId",
+        "portalIds",
+        "member"
+      ],
+      "additionalProperties": false
+    },
+    "T45": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "metadata": {
+          "$ref": "#/$defs/T19"
+        },
+        "passage": {
+          "type": "string",
+          "enum": [
+            "both",
+            "a-to-b",
+            "b-to-a",
+            "none"
+          ],
+          "description": "Which way passage is possible at all. Default 'both'."
+        },
+        "attests": {
+          "type": "string",
+          "enum": [
+            "none",
+            "confirmed",
+            "assumed"
+          ],
+          "description": "How far a crossing here can be trusted to have actually happened.\n'confirmed' — a sensor saw it (a door monitor opening and closing).\n'assumed'   — inferred from a grant; nobody watched. The default for a plain door.\n'none'      — the crossing is a *request*, not an event: a lift floor button, where the\n              passenger may go anywhere. Anything counting crossings must ignore these."
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "T44": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "patchPortal"
+        },
+        "portalId": {
+          "type": "string"
+        },
+        "set": {
+          "$ref": "#/$defs/T45"
+        }
+      },
+      "required": [
+        "kind",
+        "portalId",
+        "set"
+      ],
+      "additionalProperties": false
+    },
+    "T48": {
+      "type": "object",
+      "properties": {
+        "mountHeight": {
+          "type": "number",
+          "description": "Optional mounting elevation above the floor; negative values place a lamp inside a pool."
+        },
+        "kelvin": {
+          "type": "number"
+        },
+        "intensity": {
+          "type": "number"
+        },
+        "range": {
+          "type": "number"
+        },
+        "flicker": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "kelvin",
+        "intensity",
+        "range"
+      ],
+      "additionalProperties": false
+    },
+    "T49": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "const": "independent"
+        }
+      },
+      "required": [
+        "mode"
+      ],
+      "additionalProperties": false
+    },
+    "T51": {
+      "type": "object",
+      "properties": {
+        "edgeId": {
+          "type": "string"
+        },
+        "reversed": {
+          "type": "boolean",
+          "enum": [
+            false,
+            true
+          ],
+          "description": "Traverse from endId to startId. Absent means startId to endId."
+        }
+      },
+      "required": [
+        "edgeId"
+      ],
+      "additionalProperties": false
+    },
+    "T50": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "const": "boundaries"
+        },
+        "loops": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/T51"
+            }
+          }
+        }
+      },
+      "required": [
+        "mode",
+        "loops"
+      ],
+      "additionalProperties": false
+    },
+    "T52": {
+      "type": "object",
+      "properties": {
+        "axis": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 2,
+            "maxItems": 2
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "high": {
+          "type": "number"
+        },
+        "low": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "axis",
+        "high",
+        "low"
+      ],
+      "additionalProperties": false
+    },
+    "T53": {
+      "type": "object",
+      "properties": {
+        "depth": {
+          "type": "number"
+        },
+        "ripple": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "depth"
+      ],
+      "additionalProperties": false
+    },
+    "T54": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "minItems": 3,
+            "maxItems": 3
+          }
+        },
+        "radius": {
+          "type": "number"
+        }
+      },
+      "required": [
+        "path",
+        "radius"
+      ],
+      "additionalProperties": false
+    },
+    "T47": {
+      "type": "object",
+      "properties": {
+        "symbol": {
+          "type": "string",
+          "enum": [
+            "personnel",
+            "service",
+            "driveway",
+            "parking",
+            "assembly",
+            "info",
+            "aed",
+            "extinguisher",
+            "firstaid",
+            "exit",
+            "firealarm"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "height": {
+          "type": "number"
+        },
+        "light": {
+          "$ref": "#/$defs/T48"
+        },
+        "ambience": {
+          "$ref": "#/$defs/T10",
+          "description": "A space's own sound, overriding its floor's. See Floor.ambience."
+        },
+        "floorId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "color": {
+          "type": "string"
+        },
+        "material": {
+          "type": "string",
+          "enum": [
+            "brick",
+            "stone",
+            "plaster",
+            "timber",
+            "oak",
+            "tile",
+            "terrazzo",
+            "grass",
+            "paving",
+            "carpet",
+            "wallpaper"
+          ]
+        },
+        "category": {
+          "type": "string",
+          "description": "Host-defined subtype/category (e.g. 'meeting-room', 'speedgate', 'cold-store') for styling, filtering and event handlers."
+        },
+        "metadata": {
+          "$ref": "#/$defs/T19",
+          "description": "Arbitrary host metadata; ignored by the core, available to style hooks and event handlers."
+        },
+        "position": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "rotation": {
+          "type": "number"
+        },
+        "rings": {
+          "type": "array",
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          }
+        },
+        "geometry": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/T49"
+            },
+            {
+              "$ref": "#/$defs/T50"
+            }
+          ],
+          "description": "Boundary-driven spaces keep rings and dimensions as a validated, generated cache.\nAbsent is an independent outline, preserving existing/imported projects without guessing."
+        },
+        "slope": {
+          "$ref": "#/$defs/T52",
+          "description": "Makes this area a sloped plane rather than a flat plate; see Slope."
+        },
+        "ceilingHeight": {
+          "type": "number",
+          "description": "Clear ceiling height above this floor's datum; omitted uses the storey height.\nA room spanning storeys uses this with holes in the plates above it."
+        },
+        "water": {
+          "$ref": "#/$defs/T53",
+          "description": "A basin below this area's walking surface, filled with clear water."
+        },
+        "slide": {
+          "$ref": "#/$defs/T54",
+          "description": "Open water-slide centreline, in metres relative to the object's position and rotation.\nThe third coordinate is height above its floor."
+        },
+        "baseHeight": {
+          "type": "number",
+          "description": "Bottom of a raised fixture, metres above the floor surface (e.g. a doorway lintel)."
+        },
+        "width": {
+          "type": "number"
+        },
+        "depth": {
+          "type": "number"
+        },
+        "parentId": {
+          "type": "string"
+        },
+        "barrierId": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "number"
+        },
+        "doorHinge": {
+          "type": "string",
+          "enum": [
+            "left",
+            "right"
+          ],
+          "description": "Door hinge at the wall start (left, default) or end (right)."
+        },
+        "doorType": {
+          "type": "string",
+          "enum": [
+            "hinged",
+            "sliding",
+            "double"
+          ],
+          "description": "Door mechanism. Omitted means a conventional single hinged leaf."
+        },
+        "doorSwing": {
+          "type": "number",
+          "enum": [
+            1,
+            -1
+          ],
+          "description": "Door opens to the left (+1, default) or right (-1) of the directed wall."
+        },
+        "feedId": {
+          "type": "string"
+        },
+        "servedFloorIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "stairModel": {
+          "type": "string",
+          "enum": [
+            "straight",
+            "switchback",
+            "dogleg",
+            "spiral",
+            "escalator"
+          ],
+          "description": "Stairs only: which geometry this climb has.\n\n`straight` is one run. `switchback` turns back on itself around a half-landing — the half-turn\nstair that fits a storey into a short core box, and what most building stairs actually are.\n`dogleg` turns a quarter at its landing, for a stair in the corner of a plan. `spiral` winds\naround a pole and can land on every level it passes. `escalator` is a machine: a fixed 30° pitch\nand a flat comb plate at each end.\n\nAll of them connect the same floors and route identically, which is why this is one field rather\nthan five kinds — the difference is what it looks like and how much run it needs. Absent picks\nthe shape that fits: a straight run where the footprint allows a civil pitch, a switchback where\nit does not, since a plan that gives a 4.5 m box to a 4.4 m storey means a stair that turns, not\na ladder."
+        },
+        "wellGroup": {
+          "type": "string",
+          "description": "Stairs with the same group on a level share one rectangular floor/ceiling opening."
+        },
+        "travel": {
+          "type": "string",
+          "enum": [
+            "up",
+            "down"
+          ],
+          "description": "Escalators only: which way the machine carries you.\n\nIt is a property of the machine, not of the drawing and not of its name: an escalator runs one\nway, a bank of them runs alternate ways, and which way this one runs is the first thing anyone\nasks of it. The same vocabulary as `Zone.connects`, so the described layer and the object never\nneed translating between them. Absent means up, which is what a lone escalator nearly always\ndoes. A stair that is not an escalator ignores it — a stair carries you both ways.\n\nAn imported escalator arrives once per storey it is drawn on; the twin standing lowest is the\none the model draws and routes from, so that is the one to author."
+        },
+        "doorSides": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "left",
+              "right",
+              "front",
+              "back"
+            ]
+          },
+          "description": "Elevators only: which faces of the car open, relative to the object's own rotation. A through-car\nopens front and back; a corner lobby car opens front and one side. Absent means the front alone,\nwhich is what almost every lift does. Which FLOORS it opens on is `servedFloorIds` — a level the\nshaft passes without serving has no doors on any side."
+        },
+        "coverageAngle": {
+          "type": "number"
+        },
+        "coverageRange": {
+          "type": "number"
+        },
+        "watchedIds": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "description": "Camera: ids of the doors, rooms and elevators this camera observes (event footage lookup)."
+        },
+        "model": {
+          "type": "string",
+          "enum": [
+            "bed",
+            "sofa",
+            "dining",
+            "cabinet",
+            "counter",
+            "toilet",
+            "basin",
+            "shower",
+            "sauna",
+            "tree",
+            "shrub",
+            "lamp",
+            "car",
+            "chimney",
+            "vent",
+            "post"
+          ]
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "T46": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "patchObject"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "set": {
+          "$ref": "#/$defs/T47"
+        }
+      },
+      "required": [
+        "kind",
+        "objectId",
+        "set"
+      ],
+      "additionalProperties": false
+    },
+    "T55": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "addObject"
+        },
+        "objectKind": {
+          "type": "string",
+          "enum": [
+            "office",
+            "elevator",
+            "light",
+            "door",
+            "stairs",
+            "zone",
+            "room",
+            "parcel",
+            "building",
+            "container",
+            "storage",
+            "window",
+            "gate",
+            "turnstile",
+            "reader",
+            "camera",
+            "poi",
+            "fixture",
+            "landscape",
+            "sensor",
+            "alarm",
+            "equipment",
+            "evacuation"
+          ]
+        },
+        "name": {
+          "type": "string"
+        },
+        "position": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "floorId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "set": {
+          "$ref": "#/$defs/T47"
+        }
+      },
+      "required": [
+        "kind",
+        "objectKind",
+        "name",
+        "position",
+        "floorId"
+      ],
+      "additionalProperties": false
+    },
+    "T56": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "removeObjects"
+        },
+        "ids": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        }
+      },
+      "required": [
+        "kind",
+        "ids"
+      ],
+      "additionalProperties": false
+    },
+    "T57": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "refreshPortals"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "T58": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "pruneOntology"
+        }
+      },
+      "required": [
+        "kind"
+      ],
+      "additionalProperties": false
+    },
+    "T59": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "addBarrier"
+        },
+        "a": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "b": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "floorId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "barrierKind": {
+          "type": "string",
+          "enum": [
+            "wall",
+            "fence"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "a",
+        "b",
+        "floorId",
+        "barrierKind"
+      ],
+      "additionalProperties": false
+    },
+    "T60": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "addBoundary"
+        },
+        "a": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "b": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "floorId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "a",
+        "b",
+        "floorId"
+      ],
+      "additionalProperties": false
+    },
+    "T61": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "connectSpace"
+        },
+        "objectId": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string",
+          "enum": [
+            "outline",
+            "walls"
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "objectId"
+      ],
+      "additionalProperties": false
+    },
+    "T62": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "disconnectSpace"
+        },
+        "objectId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "objectId"
+      ],
+      "additionalProperties": false
+    },
+    "T63": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "splitRoom"
+        },
+        "roomId": {
+          "type": "string"
+        },
+        "a": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "b": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "wall": {
+          "type": "boolean",
+          "enum": [
+            false,
+            true
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "roomId",
+        "a",
+        "b"
+      ],
+      "additionalProperties": false
+    },
+    "T64": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "divideSpaces"
+        },
+        "floorId": {
+          "anyOf": [
+            {
+              "type": "null"
+            },
+            {
+              "type": "string"
+            }
+          ]
+        },
+        "a": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        },
+        "b": {
+          "type": "array",
+          "items": {
+            "type": "number"
+          },
+          "minItems": 2,
+          "maxItems": 2
+        }
+      },
+      "required": [
+        "kind",
+        "floorId",
+        "a",
+        "b"
+      ],
+      "additionalProperties": false
+    },
+    "T65": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "mergeSpaces"
+        },
+        "keepId": {
+          "type": "string"
+        },
+        "absorbedId": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "kind",
+        "keepId",
+        "absorbedId"
+      ],
+      "additionalProperties": false
+    },
+    "T66": {
+      "type": "object",
+      "properties": {
+        "kind": {
+          "type": "string",
+          "const": "setOrigin"
+        },
+        "origin": {
+          "anyOf": [
+            {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 3,
+              "maxItems": 3
+            },
+            {
+              "type": "array",
+              "items": {
+                "type": "number"
+              },
+              "minItems": 2,
+              "maxItems": 2
+            }
+          ]
+        }
+      },
+      "required": [
+        "kind",
+        "origin"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

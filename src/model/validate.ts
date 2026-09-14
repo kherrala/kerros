@@ -111,7 +111,7 @@ export function validateRelationships(project: ProjectDocument): string | null {
         return `A door, window or gate needs a segment at least ${OPENING_MIN_SEGMENT} m long to sit in.`;
       const offset = object.offset ?? 0;
       if (offset - object.width / 2 < -0.001 || offset + object.width / 2 > distance(a, b) + 0.001)
-        return 'The barrier is too short for its attached opening.';
+        return `The barrier is too short for its attached opening. Opening "${object.name || object.id}" (${object.id}) on barrier ${barrier.id}: width ${object.width.toFixed(2)} m, centre offset ${offset.toFixed(2)} m, segment length ${distance(a, b).toFixed(2)} m. The centre offset must be between ${(object.width / 2).toFixed(2)} and ${(distance(a, b) - object.width / 2).toFixed(2)} m; if that interval is empty, choose a longer host segment.`;
       if (
         project.objects.some(
           o =>
@@ -561,7 +561,9 @@ export function transact(
       if (isArea(o.kind) && objectArea(o) < MIN_SPACE_AREA) {
         const old = project.objects.find(previous => previous.id === o.id && isArea(previous.kind));
         if (!old || objectArea(old) !== objectArea(o))
-          throw new Error(`A space needs at least ${MIN_SPACE_AREA} m² of usable area.`);
+          throw new Error(
+            `A space needs at least ${MIN_SPACE_AREA} m² of usable area. "${o.name || o.id}" (${o.id}) has ${objectArea(o).toFixed(3)} m².`,
+          );
       }
     validateProject(draft);
     return { ok: true, project: options?.freeze === false ? draft : freezeProject(draft) };

@@ -67,4 +67,8 @@ The optional `elevators` prop enables passenger controls in Walk (see [the edito
 
 ## Custom basemaps
 
-Any MapLibre style works underneath the plan. Provide a `BasemapConfig` (`{ style, transformRequest?, surveyed? }`) as `adapters.basemap` (editor) or the `basemap` prop (viewer). `neutralBasemap` is the offline default; set `surveyed: true` only if your tiles follow the national-survey schema the adoption/cadastre features expect.
+Any MapLibre style works underneath the plan. Provide a `BasemapConfig`
+(`{ style, transformRequest?, styleTransform?, label?, vectorSchema? }`) as `adapters.basemap`
+(editor) or the `basemap` prop (viewer). `neutralBasemap` is the offline default. Describe the
+provider's building and parcel layers in `vectorSchema` to enable adoption, cadastre and 3D city
+features. See [MML vector maps](./mml-maps) for a complete reference configuration and API-key setup.

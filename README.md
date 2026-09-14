@@ -8,11 +8,11 @@ on that model is up to you — the library ships no application of its own.
 ## Getting started
 
 ```sh
-npm install
-npm run dev        # http://127.0.0.1:5173
-npm test           # Vitest unit tests (model layer)
-npm run build      # type-check + production bundle
+make up            # Docker: apps, docs and AI importer with live source updates
 ```
+
+Open <http://127.0.0.1:5173/app.html> for the editor. See [development setup](docs/guide/development.md)
+for optional API keys, container controls and native Node.js development.
 
 Open one of the demo workspaces (Stockmann Helsinki — a real eight-floor department store, or
 The Silo — a fictional hundred-level shaft), generate a Backrooms office complex, create a blank
@@ -43,8 +43,17 @@ nearby wayfinding markers are hidden by walls. The procedural layout and office 
 
 Copy `.env.example` to `.env.local` and set `VITE_MML_API_KEY` to a Maanmittauslaitos API key
 to enable the *MML · Finnish land survey* vector basemap in map settings. Without a key the app
-uses a self-contained offline plan background. The key ships in the client bundle, so use a
-browser-restricted public key.
+uses a self-contained offline plan background. The key is visible in the client bundle and map
+requests. See [MML vector maps](docs/guide/mml-maps.md) for obtaining a key, enabling property
+boundaries, configuring a host and troubleshooting.
+
+### AI import with Claude
+
+Set `ANTHROPIC_API_KEY` in `.env.local` (without a `VITE_` prefix), then run `make up`.
+In the editor, **Import plan → AI import** accepts images, PDFs and DWGs, with validated edits saved to the live project
+and streamed Claude output. The key and tool execution stay on the local backend.
+See [AI import with Claude](docs/guide/ai-import.md) for Console setup, supported inputs,
+architecture, review and CLI usage, and [development setup](docs/guide/development.md) for Docker.
 
 ## Feature overview
 

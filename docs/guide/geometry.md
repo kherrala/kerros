@@ -70,6 +70,8 @@ A new boundary across a connected space creates separate usable regions. The lar
 
 Removing a referenced wall replaces it with a virtual boundary. Both spaces keep their identities. **Merge** is a separate choice that removes the shared virtual division and keeps the chosen survivor's identity. It recovers the floor area previously occupied by the removed wall. Remove the physical dividing wall before merging connected spaces.
 
+Two spaces sharing opposite sides of a virtual boundary are connected through an open passage. No door object or manually authored portal is required: routing and the structure panel derive the connection directly from the shared edge, including narrow openings such as an 80 cm closet entrance. A shared corner alone does not connect spaces. Building a wall on that edge removes the inferred passage; explicit passage restrictions still take precedence.
+
 Legacy independent spaces retain polygon-based split and merge operations. Their area follows the authored outline rather than automatically subtracting every wall. Connect them when you need wall-aware usable-area measurements.
 
 ## Minimum space area

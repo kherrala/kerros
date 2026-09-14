@@ -59,6 +59,7 @@ export {
   mergeSpaces,
 } from '../model/inference';
 export { derivedGraph } from '../model/topology';
+export { sharedBoundaryPortals, effectivePortals } from '../model/portals';
 export { isArea, isDevice, isOpening, isSpace, uid, OBJECT_KINDS } from '../model/types';
 export { createObject, emptyProject } from '../model/factory';
 export { enclosedRegion, enclosedRegions, refitEnclosedRooms } from '../model/spaces';
@@ -127,6 +128,9 @@ export { applyMutation, applyMutations } from '../model/mutations';
 export type { Mutation, MutationOutcome, MutationResult } from '../model/mutations';
 export {
   findRoute,
+  navNodes,
+  navEdges,
+  HERE,
   routeSteps,
   routeAnchors,
   floorPhrase,
@@ -142,7 +146,7 @@ export {
   DOOR_COST,
   NAV_WELD,
 } from '../model/navigation';
-export type { Route, RouteStep, RouteLeg, RouteOptions } from '../model/navigation';
+export type { Route, RouteStep, RouteLeg, RouteOptions, RouteEnd, RoutePlace } from '../model/navigation';
 
 export { EXTERIOR_PRESETS, type ExteriorPreset } from '../model/materials';
 

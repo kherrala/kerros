@@ -40,7 +40,6 @@
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
-    "polygon-clipping": "^0.15.7",
-    "pdfjs-dist": "^6.3.289"
+    "polygon-clipping": "^0.15.7"
   }
 }

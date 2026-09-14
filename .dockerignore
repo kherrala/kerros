@@ -1,0 +1,16 @@
+.git
+.env
+.env.*
+!.env.example
+node_modules
+dist
+packages/*/dist
+docs/.vitepress/cache
+docs/.vitepress/dist
+test-results
+playwright-report
+.pruner
+.cache
+.idea
+*.tsbuildinfo
+.DS_Store

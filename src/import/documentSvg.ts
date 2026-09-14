@@ -5,17 +5,22 @@
 import { barrierEnds, footprint, isSpace, objectPosition } from '../schema';
 import type { ProjectDocument } from '../schema';
 
+const escapeXml = (text: string) =>
+  text.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&apos;' })[c]!);
+
 export function documentSvg(doc: ProjectDocument, width = 1600): string {
   const pts: [number, number][] = [];
   for (const o of doc.objects) for (const ring of o.rings ?? []) pts.push(...(ring as [number, number][]));
   for (const b of doc.barriers) pts.push(...barrierEnds(doc, b));
   if (!pts.length)
     return `<svg xmlns="http://www.w3.org/2000/svg" width="200" height="60"><text x="10" y="30">empty document</text></svg>`;
-  const xs = pts.map(p => p[0]),
-    ys = pts.map(p => p[1]);
-  const [x0, y0, x1, y1] = [Math.min(...xs) - 1, Math.min(...ys) - 1, Math.max(...xs) + 1, Math.max(...ys) + 1];
-  const S = width / (x1 - x0),
-    H = Math.round((y1 - y0) * S);
+  const bounds = pts.reduce(
+    (b, p) => [Math.min(b[0], p[0]), Math.min(b[1], p[1]), Math.max(b[2], p[0]), Math.max(b[3], p[1])],
+    [Infinity, Infinity, -Infinity, -Infinity],
+  );
+  const [x0, y0, x1, y1] = [bounds[0] - 1, bounds[1] - 1, bounds[2] + 1, bounds[3] + 1];
+  const S = Math.min(width / (x1 - x0), 2000 / (y1 - y0)),
+    H = Math.max(60, Math.round((y1 - y0) * S));
   const X = (v: number) => ((v - x0) * S).toFixed(1);
   const Y = (v: number) => ((y1 - v) * S).toFixed(1);
   const shapes: string[] = [];
@@ -25,7 +30,7 @@ export function documentSvg(doc: ProjectDocument, width = 1600): string {
       shapes.push(`<path d="${d}" fill="#dde6da" fill-rule="evenodd" stroke="#7a8577" stroke-width="1"/>`);
       const at = objectPosition(doc, o);
       shapes.push(
-        `<text x="${X(at[0])}" y="${Y(at[1])}" font-size="12" text-anchor="middle" fill="#3c4440">${o.name}</text>`,
+        `<text x="${X(at[0])}" y="${Y(at[1])}" font-size="12" text-anchor="middle" fill="#3c4440">${escapeXml(o.name)}</text>`,
       );
     }
   }

@@ -1,9 +1,11 @@
 import { resolve } from 'node:path';
 import { defineConfig } from 'vite';
+import { browserServerBoundary } from '../../scripts/browser-boundary';
 
 // Library build: bundles the shared src/ closure behind this package's facade; framework and
 // heavyweight rendering dependencies stay external (declared as peer/regular deps below).
 export default defineConfig({
+  plugins: [browserServerBoundary()],
   build: {
     // Two entries: the facade, and the map-free `./host` subpath a consumer imports when it only
     // wants persistence or theming. Their shared closure lands in a chunk both of them import, so

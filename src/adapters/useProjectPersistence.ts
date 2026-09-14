@@ -25,29 +25,33 @@ export function useProjectPersistence(
   const mounted = useRef(true);
   latest.current = project;
   const [state, setState] = useState<'saving' | 'saved' | 'error'>('saved');
-  const flush = useCallback(async () => {
-    clearTimeout(timer.current);
-    if (!enabled) return;
-    // The debounce effect optimistically shows 'saving'; converge back to 'saved' even when the
-    // snapshot turns out to be identical, so the indicator can never stick on "Saving changes…".
-    if (saved.current === latest.current) {
-      if (mounted.current) setState('saved');
-      return;
-    }
-    const snapshot = latest.current;
-    if (mounted.current) setState('saving');
-    try {
-      await writer.current.save(snapshot);
-      saved.current = snapshot;
-      if (mounted.current && latest.current === snapshot) setState('saved');
-    } catch (error) {
-      if (mounted.current) {
-        setState('error');
-        onError('Could not save to this browser. Your work is still open; export a backup before leaving.');
+  const saveNow = useCallback(
+    async (snapshot: ProjectDocument) => {
+      clearTimeout(timer.current);
+      if (!enabled) return;
+      latest.current = snapshot;
+      // The debounce effect optimistically shows 'saving'; converge back to 'saved' even when the
+      // snapshot turns out to be identical, so the indicator can never stick on "Saving changes…".
+      if (saved.current === latest.current) {
+        if (mounted.current) setState('saved');
+        return;
       }
-      throw error;
-    }
-  }, [enabled, onError]);
+      if (mounted.current) setState('saving');
+      try {
+        await writer.current.save(snapshot);
+        saved.current = snapshot;
+        if (mounted.current && latest.current === snapshot) setState('saved');
+      } catch (error) {
+        if (mounted.current) {
+          setState('error');
+          onError('Could not save to this browser. Your work is still open; export a backup before leaving.');
+        }
+        throw error;
+      }
+    },
+    [enabled, onError],
+  );
+  const flush = useCallback(() => saveNow(latest.current), [saveNow]);
   useEffect(() => {
     if (!enabled) return;
     setState('saving');
@@ -71,5 +75,5 @@ export function useProjectPersistence(
     window.addEventListener('beforeunload', warn);
     return () => window.removeEventListener('beforeunload', warn);
   }, [enabled]);
-  return { state, flush };
+  return { state, flush, saveNow };
 }

@@ -11,8 +11,25 @@
 // no new behaviour, only a data shape for the behaviour that exists. Interactive gestures (dragging
 // a wall, tracing a footprint) stay as plain `transact` callbacks in the editor; a Mutation is for
 // changes worth naming.
-import type { ObjectKind, Origin, Point, Portal, PortalGroup, ProjectDocument, SiteObject, Zone } from './types';
-import { addBarrier, splitRoom } from './geometry';
+import type {
+  Barrier,
+  Building,
+  Floor,
+  NavEdge,
+  NavNode,
+  ObjectKind,
+  Origin,
+  Point,
+  Portal,
+  PortalGroup,
+  ProjectDocument,
+  Ring,
+  SiteObject,
+  Zone,
+} from './types';
+import { uid } from './types';
+import { addBarrier, duplicateFloor, removeBarrier, removeFloor, splitRoom } from './geometry';
+import { applyGeometryDrag, drawBarrier, encloseRoom, type GeometryDrag } from './authoring';
 import { createObject } from './factory';
 import {
   addPortalGroup,
@@ -26,11 +43,29 @@ import {
 } from './ontology';
 import { divideSpaces, mergeSpaces, refreshPortals } from './inference';
 import { transact, type TransactResult } from './validate';
-import { addVirtualBoundary, connectSpace, disconnectSpace } from './boundaries';
+import { addBoundaryHole, addVirtualBoundary, connectSpace, disconnectSpace, drawVirtualBoundary } from './boundaries';
 
 /** Every mutation the schema can execute, as data. `kind` names the operation; the rest are its
  *  arguments, exactly as the underlying authoring function takes them. */
 export type Mutation =
+  | { kind: 'addBuilding'; building: Building }
+  | { kind: 'patchBuilding'; buildingId: string; set: Partial<Omit<Building, 'id'>> }
+  | { kind: 'addFloor'; floor: Floor }
+  | { kind: 'patchFloor'; floorId: string; set: Partial<Omit<Floor, 'id' | 'buildingId'>> }
+  | { kind: 'removeFloor'; floorId: string }
+  | { kind: 'duplicateFloor'; floorId: string }
+  | { kind: 'patchProject'; set: Partial<Pick<ProjectDocument, 'name' | 'description' | 'datum' | 'initialFloorId'>> }
+  | { kind: 'patchBarrier'; barrierId: string; set: Partial<Omit<Barrier, 'id' | 'startId' | 'endId' | 'floorId'>> }
+  | { kind: 'removeBarrier'; barrierId: string }
+  | { kind: 'moveGeometry'; move: GeometryDrag }
+  | { kind: 'drawBoundary'; a: Point; b: Point; floorId: string | null }
+  | { kind: 'drawBarrier'; a: Point; b: Point; floorId: string | null; barrierKind?: 'wall' | 'fence' }
+  | { kind: 'encloseRoom'; floorId: string | null; point: Point; name?: string }
+  | { kind: 'addHole'; objectId: string; ring: Ring }
+  | { kind: 'patchZone'; zoneId: string; set: Partial<Pick<Zone, 'name' | 'purpose' | 'connects' | 'metadata'>> }
+  | { kind: 'addPortal'; portal: Omit<Portal, 'id'> }
+  | { kind: 'removePortal'; portalId: string }
+  | { kind: 'setNavigation'; nodes: NavNode[]; edges: NavEdge[] }
   | { kind: 'addZone'; name: string; spaceIds: string[]; purpose?: string }
   | { kind: 'removeZone'; zoneId: string }
   | { kind: 'setZoneMembers'; zoneId: string; spaceIds: string[]; member: boolean }
@@ -76,6 +111,70 @@ export type MutationOutcome = Zone | PortalGroup | string[] | string | boolean |
 
 const run = (draft: ProjectDocument, m: Mutation): MutationOutcome => {
   switch (m.kind) {
+    case 'addBuilding':
+      draft.buildings.push(structuredClone(m.building));
+      return m.building.id;
+    case 'patchBuilding':
+      return patch(draft.buildings, m.buildingId, m.set, ['id']);
+    case 'addFloor':
+      draft.floors.push(structuredClone(m.floor));
+      return m.floor.id;
+    case 'patchFloor':
+      return patch(draft.floors, m.floorId, m.set, ['id', 'buildingId']);
+    case 'removeFloor':
+      return removeFloor(draft, m.floorId);
+    case 'duplicateFloor':
+      if (!draft.floors.some(f => f.id === m.floorId)) throw new Error('No such floor.');
+      return duplicateFloor(draft, m.floorId);
+    case 'patchProject':
+      for (const key of Object.keys(m.set))
+        if (!['name', 'description', 'datum', 'initialFloorId'].includes(key))
+          throw new Error(`Cannot patch project ${key}.`);
+      Object.assign(draft, m.set);
+      return draft.id;
+    case 'patchBarrier':
+      return patch(draft.barriers, m.barrierId, m.set, ['id', 'startId', 'endId', 'floorId']);
+    case 'removeBarrier':
+      removeBarrier(draft, m.barrierId);
+      pruneOntology(draft);
+      return undefined;
+    case 'moveGeometry':
+      applyGeometryDrag(draft, m.move);
+      return m.move.id;
+    case 'drawBoundary':
+      return drawVirtualBoundary(draft, m.floorId, m.a, m.b);
+    case 'drawBarrier':
+      return drawBarrier(draft, m.floorId, m.a, m.b, m.barrierKind)?.id;
+    case 'encloseRoom': {
+      const result = encloseRoom(draft, m.floorId, m.point);
+      if (!result) throw new Error('No enclosed region at that point. Complete its walls or virtual boundaries first.');
+      if (m.name) result.room.name = m.name;
+      return result.room.id;
+    }
+    case 'addHole': {
+      const object = draft.objects.find(o => o.id === m.objectId);
+      if (!object?.rings?.length) throw new Error('Select an area with a footprint.');
+      if (object.geometry?.mode === 'boundaries') addBoundaryHole(draft, object, m.ring);
+      else object.rings.push(structuredClone(m.ring));
+      return object.id;
+    }
+    case 'patchZone':
+      for (const key of Object.keys(m.set))
+        if (!['name', 'purpose', 'connects', 'metadata'].includes(key)) throw new Error(`Cannot patch zone ${key}.`);
+      return patch(draft.zones ?? [], m.zoneId, m.set, ['id']);
+    case 'addPortal': {
+      const id = uid();
+      (draft.portals ??= []).push({ ...structuredClone(m.portal), id });
+      return id;
+    }
+    case 'removePortal':
+      draft.portals = (draft.portals ?? []).filter(p => p.id !== m.portalId);
+      pruneOntology(draft);
+      return undefined;
+    case 'setNavigation':
+      draft.navNodes = structuredClone(m.nodes);
+      draft.navEdges = structuredClone(m.edges);
+      return undefined;
     case 'addZone':
       return addZone(draft, m.name, m.spaceIds, m.purpose);
     case 'removeZone':
@@ -99,20 +198,14 @@ const run = (draft: ProjectDocument, m: Mutation): MutationOutcome => {
       setPortalGroupMembers(draft, m.groupId, m.portalIds, m.member);
       return undefined;
     case 'patchPortal': {
-      const portal = (draft.portals ?? []).find(x => x.id === m.portalId);
-      if (!portal) throw new Error('No such portal.');
-      Object.assign(portal, m.set);
-      return portal.id;
+      return patch(draft.portals ?? [], m.portalId, m.set, ['id', 'a', 'b', 'openingId']);
     }
     case 'patchObject': {
-      const object = draft.objects.find(x => x.id === m.objectId);
-      if (!object) throw new Error('No such object.');
-      Object.assign(object, m.set);
-      return object.id;
+      return patch(draft.objects, m.objectId, m.set, ['id', 'kind']);
     }
     case 'addObject': {
       const object = createObject(m.objectKind, m.position, m.floorId, m.name);
-      if (m.set) Object.assign(object, m.set);
+      if (m.set) patch([object], object.id, m.set, ['id', 'kind']);
       draft.objects.push(object);
       return object.id;
     }
@@ -139,8 +232,7 @@ const run = (draft: ProjectDocument, m: Mutation): MutationOutcome => {
       pruneOntology(draft);
       return undefined;
     case 'addBarrier':
-      addBarrier(draft, m.a, m.b, m.floorId, m.barrierKind);
-      return undefined;
+      return addBarrier(draft, m.a, m.b, m.floorId, m.barrierKind)?.id;
     case 'addBoundary':
       return addVirtualBoundary(draft, m.floorId, m.a, m.b);
     case 'connectSpace':
@@ -162,8 +254,20 @@ const run = (draft: ProjectDocument, m: Mutation): MutationOutcome => {
         throw new Error('Those spaces do not touch, so there is nothing to merge.');
       return true;
     }
+    default:
+      throw new Error(`Unknown mutation: ${String((m as { kind?: unknown }).kind)}`);
   }
 };
+
+function patch<T extends { id: string }>(items: T[], id: string, set: object, immutable: string[]) {
+  const item = items.find(x => x.id === id);
+  if (!item) throw new Error(`No such entity: ${id}`);
+  for (const key of Object.keys(set))
+    if (immutable.includes(key) || ['__proto__', 'constructor', 'prototype'].includes(key))
+      throw new Error(`Cannot patch ${key}.`);
+  Object.assign(item, structuredClone(set));
+  return id;
+}
 
 export type MutationResult = TransactResult & { outcomes?: MutationOutcome[] };
 
@@ -177,7 +281,15 @@ export const applyMutation = (project: ProjectDocument, mutation: Mutation): Mut
 export function applyMutations(project: ProjectDocument, mutations: Mutation[]): MutationResult {
   const outcomes: MutationOutcome[] = [];
   const result = transact(project, draft => {
-    for (const mutation of mutations) outcomes.push(run(draft, mutation));
+    for (const [index, mutation] of mutations.entries()) {
+      try {
+        outcomes.push(run(draft, mutation));
+      } catch (error) {
+        throw new Error(
+          `Mutation #${index + 1} (${mutation.kind}): ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+    }
   });
   return result.ok ? { ...result, outcomes } : result;
 }

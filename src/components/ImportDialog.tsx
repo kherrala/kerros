@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
-import { FileImage, FileJson, UploadCloud, ArrowRight, Check } from 'lucide-react';
+import { lazy, Suspense, useEffect, useRef, useState } from 'react';
+import { FileImage, FileJson, UploadCloud, ArrowRight, Check, X } from 'lucide-react';
 import type { AssetRepository, Drawing, Point, ProjectDocument } from '../model/types';
-import type { ImportProjection } from '../model/host';
+import type { AiImportAdapter, ImportProjection, PdfDrawingAdapter } from '../model/host';
 import { uid } from '../model/types';
 import { blobDataUrl, importProject } from '../adapters/persistence';
 import { importFootprints } from '../model/imports';
@@ -9,6 +9,7 @@ import type { PlanEntity } from '../import/planImport';
 import type { PlanLayerMap } from '../import/types';
 import { detectLayers, layerPattern, LAYER_ROLES, type LayerDetection, type LayerRole } from '../import/detect';
 import { Modal } from './controls';
+const AiImportPanel = lazy(() => import('./AiImportPanel').then(m => ({ default: m.AiImportPanel })));
 
 export interface PreparedDrawing {
   blob: Blob;
@@ -145,17 +146,24 @@ export function ImportDialog({
   assets,
   onClose,
   onProject,
+  onAiProject,
+  onAiRunningChange,
   onFootprints,
   onDrawing,
   onPlan,
   onOrigin,
   importProjections = [],
+  aiImport,
+  pdfDrawing,
+  mode = 'reference',
 }: {
   project: ProjectDocument;
   floorId: string | null;
   assets: AssetRepository;
   onClose: () => void;
   onProject: (p: ProjectDocument) => void | Promise<void>;
+  onAiProject?: (p: ProjectDocument) => void | Promise<void>;
+  onAiRunningChange?: (running: boolean) => void;
   onFootprints: (objects: ProjectDocument['objects']) => void;
   onDrawing: (drawing: PreparedDrawing) => void | Promise<void>;
   /** CAD plan entities (metres, extracted host-side — see scripts/plan-import). The handler builds
@@ -164,8 +172,13 @@ export function ImportDialog({
   /** Turn the site to a new bearing (degrees clockwise from north) before the plan is applied. */
   onOrigin?: (bearing: number) => void;
   importProjections?: ImportProjection[];
+  aiImport?: AiImportAdapter;
+  pdfDrawing?: PdfDrawingAdapter;
+  mode?: 'reference' | 'plan';
 }) {
-  const [kind, setKind] = useState<'drawing' | 'footprint' | 'plan' | 'project'>('drawing'),
+  const [kind, setKind] = useState<'drawing' | 'footprint' | 'plan' | 'project' | 'ai'>(
+      mode === 'plan' ? (aiImport ? 'ai' : 'plan') : 'drawing',
+    ),
     [file, setFile] = useState<File | null>(null),
     [crsIndex, setCrsIndex] = useState(0), // 0 = WGS84 lng/lat; 1..N = importProjections[i-1]
     [type, setType] = useState<'building' | 'parcel'>('building'),
@@ -175,6 +188,11 @@ export function ImportDialog({
     [busy, setBusy] = useState(false),
     [error, setError] = useState('');
   const input = useRef<HTMLInputElement>(null);
+  const [aiBusy, setAiBusy] = useState(false);
+  useEffect(() => {
+    onAiRunningChange?.(aiBusy);
+    return () => onAiRunningChange?.(false);
+  }, [aiBusy, onAiRunningChange]);
   // The layer census, read as soon as a CAD file is chosen — the roles are what the import turns on,
   // so they have to be reviewable before it runs, not explained afterwards by a bad result.
   const [detection, setDetection] = useState<LayerDetection | null>(null);
@@ -233,30 +251,11 @@ export function ImportDialog({
       else {
         let blob: Blob = file;
         if (file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf')) {
-          const [pdfjs, worker] = await Promise.all([import('pdfjs-dist'), import('../import/pdfWorker')]);
-          pdfjs.GlobalWorkerOptions.workerSrc = worker.pdfWorkerUrl();
-          const task = pdfjs.getDocument({ data: await file.arrayBuffer() });
-          const pdf = await task.promise;
-          try {
-            if (!Number.isInteger(page) || page < 1 || page > pdf.numPages)
-              throw new Error(`Choose a page between 1 and ${pdf.numPages}.`);
-            const pdfPage = await pdf.getPage(page);
-            const natural = pdfPage.getViewport({ scale: 1 });
-            const scale = Math.min(2, 4096 / Math.max(natural.width, natural.height));
-            const viewport = pdfPage.getViewport({ scale });
-            const canvas = document.createElement('canvas');
-            canvas.width = Math.ceil(viewport.width);
-            canvas.height = Math.ceil(viewport.height);
-            await pdfPage.render({ canvas, viewport }).promise;
-            blob = await new Promise<Blob>((resolve, reject) =>
-              canvas.toBlob(
-                result => (result ? resolve(result) : reject(new Error('Could not render this PDF page.'))),
-                'image/png',
-              ),
+          if (!pdfDrawing)
+            throw new Error(
+              'PDF conversion requires a connected import backend. Start make up or use an image drawing.',
             );
-          } finally {
-            await task.destroy();
-          }
+          blob = await pdfDrawing.render(file, page);
         }
         if (!['image/png', 'image/jpeg', 'image/webp'].includes(blob.type))
           throw new Error('Use a PNG, JPEG, WebP, or PDF drawing.');
@@ -278,154 +277,214 @@ export function ImportDialog({
       setBusy(false);
     }
   }
-  return (
-    <Modal
-      title="Bring your site into focus"
-      subtitle="Start with the drawings and geometry you already have."
-      onClose={onClose}
-    >
-      <div className="import-tabs">
-        {(['drawing', 'footprint', 'plan', 'project'] as const).map(k => (
+  const tabs = (
+    <div className="import-tabs">
+      {(mode === 'plan'
+        ? [...(aiImport ? ['ai' as const] : []), 'plan' as const]
+        : ['drawing' as const, 'footprint' as const, 'project' as const]
+      ).map(k => (
+        <button
+          key={k}
+          className={kind === k ? 'active' : ''}
+          disabled={aiBusy || busy}
+          onClick={() => {
+            setKind(k);
+            setFile(null);
+            setError('');
+          }}
+        >
+          {k === 'drawing' ? <FileImage size={19} /> : <FileJson size={19} />}
+          {k === 'drawing'
+            ? 'Floor drawing'
+            : k === 'footprint'
+              ? 'GeoJSON'
+              : k === 'plan'
+                ? 'CAD plan'
+                : k === 'ai'
+                  ? 'AI import'
+                  : 'Project'}
+        </button>
+      ))}
+    </div>
+  );
+  const contents = (
+    <>
+      {mode !== 'plan' && tabs}
+      {kind === 'ai' && aiImport ? (
+        <Suspense
+          fallback={
+            <p className="helper" role="status">
+              Loading AI import…
+            </p>
+          }
+        >
+          <AiImportPanel
+            adapter={aiImport}
+            assets={assets}
+            onProject={onAiProject ?? onProject}
+            onRunningChange={setAiBusy}
+            currentProject={project}
+          />
+        </Suspense>
+      ) : (
+        <>
           <button
-            key={k}
-            className={kind === k ? 'active' : ''}
-            onClick={() => {
-              setKind(k);
-              setFile(null);
-              setError('');
+            className="dropzone"
+            onClick={() => input.current?.click()}
+            onDragOver={e => e.preventDefault()}
+            onDrop={e => {
+              e.preventDefault();
+              setFile(e.dataTransfer.files[0] ?? null);
             }}
           >
-            {k === 'drawing' ? <FileImage size={19} /> : <FileJson size={19} />}
-            {k === 'drawing' ? 'Floor drawing' : k === 'footprint' ? 'GeoJSON' : k === 'plan' ? 'CAD plan' : 'Project'}
+            {file ? <Check size={30} /> : <UploadCloud size={32} />}
+            <strong>{file?.name ?? 'Drop a file here, or browse'}</strong>
+            <span>{kind === 'drawing' ? 'PNG, JPEG, WebP or PDF · up to 50 MB' : 'JSON or GeoJSON · up to 50 MB'}</span>
           </button>
-        ))}
-      </div>
-      <button
-        className="dropzone"
-        onClick={() => input.current?.click()}
-        onDragOver={e => e.preventDefault()}
-        onDrop={e => {
-          e.preventDefault();
-          setFile(e.dataTransfer.files[0] ?? null);
-        }}
-      >
-        {file ? <Check size={30} /> : <UploadCloud size={32} />}
-        <strong>{file?.name ?? 'Drop a file here, or browse'}</strong>
-        <span>{kind === 'drawing' ? 'PNG, JPEG, WebP or PDF · up to 50 MB' : 'JSON or GeoJSON · up to 50 MB'}</span>
-      </button>
-      <input
-        ref={input}
-        type="file"
-        hidden
-        accept={kind === 'drawing' ? '.png,.jpg,.jpeg,.webp,.pdf' : '.json,.geojson'}
-        onChange={e => setFile(e.target.files?.[0] ?? null)}
-      />
-      {kind === 'drawing' && (
-        <p className="helper">
-          Your drawing will be added to {project.floors.find(f => f.id === floorId)?.name ?? 'Outdoor site'}. Match two
-          points to position it on the map, or calibrate a known distance.
-        </p>
-      )}
-      {kind === 'plan' && (
-        <>
-          <label className="field">
-            <span>Target floor</span>
-            <select value={planFloor ?? ''} onChange={e => setPlanFloor(e.target.value || null)}>
-              {project.floors.map(f => (
-                <option key={f.id} value={f.id}>
-                  {f.name}
-                </option>
-              ))}
-              <option value="">Outdoor site</option>
-            </select>
-          </label>
-          <p className="helper">
-            Walls, rooms, doors and windows will be built on the chosen floor — repeat per floor for a multi-storey
-            building. Produce the JSON from a DWG with <code>scripts/plan-import/extract.mjs --expand --units m</code>.
-          </p>
-          {detection && (
-            <LayerPicker
-              detection={detection}
-              roles={roles}
-              onRole={(role, layer) =>
-                setRoles(current => {
-                  const next = { ...current };
-                  if (layer) next[role] = layer;
-                  else delete next[role];
-                  return next;
-                })
-              }
-            />
+          <input
+            ref={input}
+            type="file"
+            hidden
+            accept={kind === 'drawing' ? '.png,.jpg,.jpeg,.webp,.pdf' : '.json,.geojson'}
+            onChange={e => setFile(e.target.files?.[0] ?? null)}
+          />
+          {kind === 'drawing' && (
+            <p className="helper">
+              Your drawing will be added to {project.floors.find(f => f.id === floorId)?.name ?? 'Outdoor site'}. Match
+              two points to position it on the map, or calibrate a known distance.
+            </p>
           )}
-          <label className="field">
-            <span>Site bearing</span>
-            <input
-              type="number"
-              aria-label="Site bearing"
-              step={0.1}
-              min={-360}
-              max={360}
-              value={bearing}
-              onChange={e => setBearing(e.target.value)}
-            />
-          </label>
-          <p className="helper">
-            A drawing is square to its sheet, not to the world, so an imported plan lands on the site's current heading.
-            Degrees clockwise from north; adjustable afterwards under Site anchor.
-          </p>
+          {kind === 'plan' && (
+            <>
+              <label className="field">
+                <span>Target floor</span>
+                <select value={planFloor ?? ''} onChange={e => setPlanFloor(e.target.value || null)}>
+                  {project.floors.map(f => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                  <option value="">Outdoor site</option>
+                </select>
+              </label>
+              <p className="helper">
+                Walls, rooms, doors and windows will be built on the chosen floor — repeat per floor for a multi-storey
+                building. Produce the JSON from a DWG with{' '}
+                <code>scripts/plan-import/extract.mjs --expand --units m</code>.
+              </p>
+              {detection && (
+                <LayerPicker
+                  detection={detection}
+                  roles={roles}
+                  onRole={(role, layer) =>
+                    setRoles(current => {
+                      const next = { ...current };
+                      if (layer) next[role] = layer;
+                      else delete next[role];
+                      return next;
+                    })
+                  }
+                />
+              )}
+              <label className="field">
+                <span>Site bearing</span>
+                <input
+                  type="number"
+                  aria-label="Site bearing"
+                  step={0.1}
+                  min={-360}
+                  max={360}
+                  value={bearing}
+                  onChange={e => setBearing(e.target.value)}
+                />
+              </label>
+              <p className="helper">
+                A drawing is square to its sheet, not to the world, so an imported plan lands on the site's current
+                heading. Degrees clockwise from north; adjustable afterwards under Site anchor.
+              </p>
+            </>
+          )}
+          {kind === 'drawing' && file?.name.toLowerCase().endsWith('.pdf') && (
+            <label className="field">
+              <span>PDF page</span>
+              <input
+                type="number"
+                aria-label="PDF page"
+                min={1}
+                value={page}
+                onChange={e => setPage(Number(e.target.value))}
+              />
+            </label>
+          )}
+          {kind === 'footprint' && (
+            <div className="field-grid">
+              <label className="field">
+                <span>Source coordinates</span>
+                <select value={crsIndex} onChange={e => setCrsIndex(Number(e.target.value))}>
+                  <option value={0}>WGS84 · longitude / latitude</option>
+                  {importProjections.map((p, i) => (
+                    <option key={p.label} value={i + 1}>
+                      {p.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span>Import as</span>
+                <select value={type} onChange={e => setType(e.target.value as typeof type)}>
+                  <option value="building">Building footprint</option>
+                  <option value="parcel">Parcel boundary</option>
+                </select>
+              </label>
+            </div>
+          )}
+          {kind === 'project' && (
+            <p className="helper">
+              Open a portable Kerros JSON export as a new project, including its reference images.
+            </p>
+          )}
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          <footer>
+            <button className="button secondary" onClick={onClose}>
+              Cancel
+            </button>
+            <button className="button primary" disabled={!file || busy} onClick={proceed}>
+              {busy ? 'Preparing…' : kind === 'drawing' ? 'Align drawing' : 'Import'}
+              <ArrowRight size={16} />
+            </button>
+          </footer>
         </>
       )}
-      {kind === 'drawing' && file?.name.toLowerCase().endsWith('.pdf') && (
-        <label className="field">
-          <span>PDF page</span>
-          <input
-            type="number"
-            aria-label="PDF page"
-            min={1}
-            value={page}
-            onChange={e => setPage(Number(e.target.value))}
-          />
-        </label>
-      )}
-      {kind === 'footprint' && (
-        <div className="field-grid">
-          <label className="field">
-            <span>Source coordinates</span>
-            <select value={crsIndex} onChange={e => setCrsIndex(Number(e.target.value))}>
-              <option value={0}>WGS84 · longitude / latitude</option>
-              {importProjections.map((p, i) => (
-                <option key={p.label} value={i + 1}>
-                  {p.label}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="field">
-            <span>Import as</span>
-            <select value={type} onChange={e => setType(e.target.value as typeof type)}>
-              <option value="building">Building footprint</option>
-              <option value="parcel">Parcel boundary</option>
-            </select>
-          </label>
-        </div>
-      )}
-      {kind === 'project' && (
-        <p className="helper">Open a portable Kerros JSON export as a new project, including its reference images.</p>
-      )}
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
-      <footer>
-        <button className="button secondary" onClick={onClose}>
-          Cancel
+    </>
+  );
+  return mode === 'plan' ? (
+    <aside className="inspector plan-import-panel" aria-label="Plan import" onKeyDown={e => e.stopPropagation()}>
+      <header className="inspector-top">
+        <h2>Plan import</h2>
+        <button
+          className="icon-button"
+          aria-label="Close plan import"
+          title={aiBusy ? 'Hide sidebar; import keeps running' : 'Close plan import'}
+          disabled={busy}
+          onClick={onClose}
+        >
+          <X size={20} />
         </button>
-        <button className="button primary" disabled={!file || busy} onClick={proceed}>
-          {busy ? 'Preparing…' : kind === 'drawing' ? 'Align drawing' : 'Import'}
-          <ArrowRight size={16} />
-        </button>
-      </footer>
+      </header>
+      {tabs}
+      <div className={kind === 'ai' ? 'ai-import-shell' : 'inspector-scroll'}>{contents}</div>
+    </aside>
+  ) : (
+    <Modal
+      title="Reference drawings and files"
+      subtitle="Align a drawing for tracing, add site geometry, or open a saved project."
+      onClose={onClose}
+    >
+      {contents}
     </Modal>
   );
 }

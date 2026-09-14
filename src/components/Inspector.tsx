@@ -23,18 +23,18 @@ import type { Barrier, Drawing, Floor, Portal, ProjectDocument, SiteObject } fro
 import type { StatusReading } from '../model/live';
 import type { StatusPanelContext } from '../model/host';
 import { isArea, isOpening, isSpace } from '../model/types';
-import { barrierEnds, distance, moveOrigin, objectArea, objectPosition } from '../model/geometry';
+import { barrierEnds, distance, objectArea, objectPosition } from '../model/geometry';
 import { entryInto, zoneSpaces } from '../model/ontology';
+import { effectivePortals } from '../model/portals';
 import { coverageOf } from '../model/coverage';
 import { spaceAt } from '../model/spaces';
-import { connectSpace, disconnectSpace } from '../model/boundaries';
 import { statusLabel, statusTone } from '../adapters/status';
 import { EntityIcon } from './Icons';
 import { Choice, Field, Toggle } from './controls';
 import { DEFAULT_LIGHT, kelvinColor, LAMPS, lampFor } from '../map/lighting';
 import { AMBIENCES } from '../map/ambience';
 
-interface Props {
+export interface InspectorProps {
   project: ProjectDocument;
   floorId: string | null;
   selected: string | null;
@@ -50,6 +50,9 @@ interface Props {
   /** Apply an arbitrary change through the host's commit/undo path — used for the ontology, which
    *  edits entities beside the object rather than fields on it. */
   onEdit?: (change: (draft: ProjectDocument) => void) => void;
+  /** Editing operations are supplied by the editor, so read-only consumers need no authoring engine. */
+  onSpaceGeometry?: (id: string, source: 'outline' | 'walls' | 'independent') => void;
+  onShiftOrigin?: (east: number, north: number) => void;
   onUpdateBarrier: (id: string, patch: Partial<Barrier>) => void;
   onUpdateDrawing: (id: string, patch: Partial<Drawing>) => void;
   onUpdateFloor: (id: string, patch: Partial<Floor>) => void;
@@ -87,7 +90,8 @@ function Connections({
   const kindOf = (id: string) => project.objects.find(o => o.id === id)?.kind ?? '';
 
   // An opening: the two sides of the portal it carries, and which way each may be crossed.
-  const portal = (project.portals ?? []).find(x => x.openingId === object.id);
+  const portals = effectivePortals(project);
+  const portal = portals.find(x => x.openingId === object.id);
   if (portal)
     for (const side of [portal.a, portal.b]) {
       const other = side === portal.a ? portal.b : portal.a;
@@ -156,7 +160,7 @@ function Connections({
 
   // A space: every portal on it, named by what is on the other side.
   if (isSpace(object.kind))
-    for (const p of project.portals ?? []) {
+    for (const p of portals) {
       if (p.a !== object.id && p.b !== object.id) continue;
       const other = p.a === object.id ? p.b : p.a;
       const opening = p.openingId ? project.objects.find(o => o.id === p.openingId) : undefined;
@@ -205,11 +209,11 @@ function Connections({
   );
 }
 
-export function Inspector(props: Props) {
+export function Inspector(props: InspectorProps) {
   const { project, floorId, selected, statuses, monitoring, editing } = props;
   // The portal this opening carries, if the plan has one. Direction is the part a person decides:
   // a fire exit lets you out and never back in, and nothing else in the model can say so.
-  const portal = (project.portals ?? []).find(x => x.openingId === selected);
+  const portal = effectivePortals(project).find(x => x.openingId === selected);
   const spaceName = (id: string) => project.objects.find(o => o.id === id)?.name ?? 'elsewhere';
   const object = project.objects.find(o => o.id === selected),
     barrier = project.barriers.find(b => b.id === selected),
@@ -240,10 +244,7 @@ export function Inspector(props: Props) {
     });
   };
   const turn = (delta: number) => setBearing((project.origin[2] ?? 0) + delta);
-  const shift = (east: number, north: number) =>
-    props.onEdit?.(d => {
-      d.origin = moveOrigin(d.origin, east, north);
-    });
+  const shift = (east: number, north: number) => props.onShiftOrigin?.(east, north);
   const setOrigin = (part: 0 | 1 | 2, raw: string) => {
     const value = Number(raw);
     if (raw.trim() === '' || !Number.isFinite(value)) return;
@@ -388,9 +389,7 @@ export function Inspector(props: Props) {
                         value={object.geometry?.mode ?? 'independent'}
                         onChange={e => {
                           const mode = e.target.value;
-                          props.onEdit?.(p =>
-                            mode === 'boundaries' ? connectSpace(p, object.id) : disconnectSpace(p, object.id),
-                          );
+                          props.onSpaceGeometry?.(object.id, mode === 'boundaries' ? 'outline' : 'independent');
                         }}
                       >
                         <option value="boundaries">Shared boundaries</option>
@@ -403,10 +402,7 @@ export function Inspector(props: Props) {
                         : 'This outline stays where you draw it. Connect it to share edits with adjacent spaces.'}
                     </p>
                     {object.geometry?.mode !== 'boundaries' && (
-                      <button
-                        className="button secondary"
-                        onClick={() => props.onEdit?.(p => connectSpace(p, object.id, 'walls'))}
-                      >
+                      <button className="button secondary" onClick={() => props.onSpaceGeometry?.(object.id, 'walls')}>
                         Use surrounding walls
                       </button>
                     )}
