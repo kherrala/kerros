@@ -97,6 +97,11 @@ The checks include closed ordered loops on the correct floor, loop orientation, 
 
 Unfinished strokes remain drafts. Invalid polygon clicks keep the last usable draft. Wall, junction and outline drags show a lightweight snapped preview without running model validation while the pointer moves. Releasing the pointer validates the requested drop once. If it is invalid, the original geometry returns and the editor explains why; no partial move enters history or persistence. Undo and redo restore boundary references together with the generated footprints.
 
+Wall, fence and virtual-boundary strokes finish automatically when an accepted segment closes the
+outline or ends on an existing boundary. Starting on a boundary still lets you draw away from it;
+crossing a wall with the middle of a segment also keeps the stroke active. A rejected segment leaves
+the last accepted point ready for correction. You can also finish an open stroke with Enter.
+
 ### Current limits
 
 The model permits incomplete floors and independent overlapping areas. Passing validation does **not** certify that every square metre is assigned to exactly one space, or that an imported independent outline follows walls.
@@ -117,7 +122,11 @@ The 3D viewer generates meshes from this 2D model plus elevations and heights: a
 
 The editor offers a 0.5 m positioning grid and 15° directions relative to the floor's main axis, including 45° and 90° directions. Geometry snapping reuses junctions and projects onto receiving boundaries. Disable snapping or hold Shift during a drag for details that the grid would suppress.
 
-Dragging a junction preserves a nearby existing wall axis before falling back to the grid. Moving a
+Dragging a corner snaps to parallels and perpendiculars of the unchanged edges at its neighbours.
+When two nearby alignments intersect, it snaps to their common point, so a distorted rectangle can
+be restored even when rotated away from the floor axis or positioned off-grid. This works for
+shared wall/virtual-boundary junctions and independent polygon corners, including holes.
+Other junction drags preserve a nearby existing wall axis before falling back to the grid. Moving a
 whole wall slides it along its normal and snaps where adjoining segments become collinear or reach
 a nearby 15° floor direction. Preview and release use the same snapping; the preview becomes a saved
 position only after release passes validation. Connected wall surfaces meet at shared

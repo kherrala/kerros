@@ -2,6 +2,7 @@
 import {
   addBarrier,
   barrierEnds,
+  barrierJoinPoint,
   barrierStrokeIssue,
   centroid,
   closeRing,
@@ -9,6 +10,7 @@ import {
   intersects,
   objectArea,
   openRing,
+  segmentProjection,
   MIN_SEGMENT,
 } from './geometry';
 import { inSpace } from './spaces';
@@ -16,6 +18,7 @@ import { createObject } from './factory';
 import { divideSpaces } from './inference';
 import type { Point, ProjectDocument, Ring } from './types';
 import { transact } from './validate';
+import { GEOMETRY_EPS, JOIN_EPS, MIN_RING_EDGE } from './precision';
 import {
   bindSpaceToRegion,
   boundaryEdges,
@@ -48,6 +51,27 @@ export function drawBarrier(
   const barrier = addBarrier(project, a, b, floorId, kind);
   if (barrier && kind === 'wall') divideSpaces(project, floorId, ...barrierEnds(project, barrier));
   return barrier;
+}
+
+/** A completed stroke stops chaining when its tip meets an existing boundary, including an
+ * earlier segment of the same outline. Test before adding the segment: afterwards every tip
+ * belongs to a boundary. Use the model's joining tolerance, not the pointer's snap reach. */
+export function endsBoundaryStroke(
+  project: ProjectDocument,
+  floorId: string | null,
+  a: Point,
+  b: Point,
+  kind: 'wall' | 'fence' | 'boundary' = 'wall',
+): boolean {
+  const physical = kind !== 'boundary';
+  const start = physical ? barrierJoinPoint(project, a, floorId) : a;
+  const end = physical ? barrierJoinPoint(project, b, floorId) : b;
+  if (distance(start, end) < (physical ? MIN_SEGMENT - GEOMETRY_EPS : MIN_RING_EDGE)) return false;
+  return boundaryEdges(project).some(edge => {
+    if (edge.floorId !== floorId) return false;
+    const tolerance = physical && 'kind' in edge ? JOIN_EPS : GEOMETRY_EPS;
+    return segmentProjection(end, ...barrierEnds(project, edge)).distance <= tolerance;
+  });
 }
 
 /** The enclose tool: creating and re-fitting use exactly the same generated outline. */

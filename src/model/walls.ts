@@ -6,7 +6,7 @@
 // bearing — so 0° is the site's own grid rather than true north, and a building laid out along its
 // street needs no reference angle at all beyond the default.
 import polygonClipping from 'polygon-clipping';
-import { boundaryEdges } from './boundaries';
+import { boundaryEdges, type BoundaryEdge } from './boundaries';
 import { drawBarrier } from './authoring';
 import { transact } from './validate';
 import {
@@ -24,6 +24,90 @@ import {
 } from './geometry';
 import type { Point, ProjectDocument, Ring } from './types';
 
+interface CornerNeighbour {
+  point: Point;
+  /** Other ends of unchanged edges meeting this neighbour. */
+  references: Point[];
+}
+
+/** Hold the moving corner to parallels/perpendiculars of the unchanged neighbouring edges.
+ * Two nearby constraints determine a corner exactly; projecting onto just one cannot restore a
+ * rectangle. Prefer their intersection over a one-line projection, within the same screen reach. */
+function snapCorner(raw: Point, tolerance: number, neighbours: CornerNeighbour[]): Point | undefined {
+  const lines: { anchor: Point; direction: Point; neighbour: number }[] = [];
+  let best = tolerance,
+    projected: Point | undefined;
+  for (const [neighbour, { point: anchor, references }] of neighbours.entries()) {
+    for (const reference of references) {
+      const length = distance(anchor, reference);
+      if (length < 1e-6) continue;
+      const dx = (reference[0] - anchor[0]) / length,
+        dy = (reference[1] - anchor[1]) / length;
+      for (const direction of [
+        [dx, dy],
+        [-dy, dx],
+      ] as Point[]) {
+        const along = (raw[0] - anchor[0]) * direction[0] + (raw[1] - anchor[1]) * direction[1];
+        const point: Point = [anchor[0] + along * direction[0], anchor[1] + along * direction[1]];
+        const error = distance(raw, point);
+        if (error >= tolerance) continue;
+        lines.push({ anchor, direction, neighbour });
+        if (error < best) {
+          best = error;
+          projected = point;
+        }
+      }
+    }
+  }
+  best = tolerance;
+  let intersection: Point | undefined;
+  for (let i = 0; i < lines.length; i++) {
+    const a = lines[i];
+    for (let j = i + 1; j < lines.length; j++) {
+      const b = lines[j];
+      if (a.neighbour === b.neighbour) continue;
+      const denominator = a.direction[0] * b.direction[1] - a.direction[1] * b.direction[0];
+      if (Math.abs(denominator) < 1e-6) continue;
+      const dx = b.anchor[0] - a.anchor[0],
+        dy = b.anchor[1] - a.anchor[1];
+      const along = (dx * b.direction[1] - dy * b.direction[0]) / denominator;
+      const point: Point = [a.anchor[0] + along * a.direction[0], a.anchor[1] + along * a.direction[1]];
+      const error = distance(raw, point);
+      if (error < best) {
+        best = error;
+        intersection = point;
+      }
+    }
+  }
+  return intersection ?? projected;
+}
+
+// A gesture reads one immutable project snapshot. Index adjacency once so corner constraints only
+// inspect local neighbours on pointer moves, without traversing the full plan for each neighbour.
+const dragIndexes = new WeakMap<
+  ProjectDocument,
+  {
+    positions: Map<string, Point>;
+    incident: Map<string, BoundaryEdge[]>;
+  }
+>();
+function dragIndex(project: ProjectDocument) {
+  const cached = dragIndexes.get(project);
+  if (cached) return cached;
+  const positions = new Map(project.junctions.map(j => [j.id, j.position]));
+  const incident = new Map<string, BoundaryEdge[]>();
+  for (const edge of boundaryEdges(project)) {
+    for (const id of [edge.startId, edge.endId]) {
+      const edges = incident.get(id) ?? [];
+      edges.push(edge);
+      incident.set(id, edges);
+    }
+  }
+  const index = { positions, incident };
+  dragIndexes.set(project, index);
+  return index;
+}
+
 /** A drag snaps in the geometry's frame. Rounding x/y independently moves an imported wall's
  * junction off its centreline, even when the pointer follows that centreline exactly. */
 export function snapDragPoint(
@@ -34,6 +118,8 @@ export function snapDragPoint(
   raw: Point,
   snapping: boolean,
   tolerance: number,
+  ringIndex = 0,
+  vertexIndex = 0,
 ): Point {
   if (kind === 'barrier') {
     const wall = boundaryEdges(project).find(b => b.id === id);
@@ -76,8 +162,21 @@ export function snapDragPoint(
     return [(a[0] + b[0]) / 2 + nx * slide, (a[1] + b[1]) / 2 + ny * slide];
   }
   if (!snapping) return raw;
-  if (kind !== 'junction') return [Math.round(raw[0] * 2) / 2, Math.round(raw[1] * 2) / 2];
-  const incident = boundaryEdges(project).filter(b => b.startId === id || b.endId === id);
+  if (kind === 'ring') {
+    const ring = openRing(project.objects.find(o => o.id === id)?.rings?.[ringIndex] ?? []);
+    const neighbours: CornerNeighbour[] = [];
+    if (ring.length >= 3 && vertexIndex >= 0 && vertexIndex < ring.length) {
+      for (const step of [-1, 1]) {
+        neighbours.push({
+          point: ring[(vertexIndex + step + ring.length) % ring.length],
+          references: [ring[(vertexIndex + 2 * step + ring.length) % ring.length]],
+        });
+      }
+    }
+    return snapCorner(raw, tolerance, neighbours) ?? [Math.round(raw[0] * 2) / 2, Math.round(raw[1] * 2) / 2];
+  }
+  const index = dragIndex(project);
+  const incident = index.incident.get(id) ?? [];
   const incoming = new Set(incident.map(b => b.id));
   const others = {
     ...project,
@@ -89,6 +188,18 @@ export function snapDragPoint(
   // dragged or weld it back onto one of its own changing segments.
   const nearby = snapPoint(others, floorId, raw, tolerance, undefined, false);
   if (nearby.label) return nearby.point;
+  const neighbours = [...new Set(incident.map(edge => (edge.startId === id ? edge.endId : edge.startId)))];
+  const corner = snapCorner(
+    raw,
+    tolerance,
+    neighbours.map(neighbour => ({
+      point: index.positions.get(neighbour)!,
+      references: (index.incident.get(neighbour) ?? [])
+        .filter(edge => !incoming.has(edge.id))
+        .map(edge => index.positions.get(edge.startId === neighbour ? edge.endId : edge.startId)!),
+    })),
+  );
+  if (corner) return corner;
   let best = tolerance,
     aligned: Point | undefined;
   for (const wall of incident) {

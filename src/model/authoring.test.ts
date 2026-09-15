@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { appendAreaPoint, dragGeometry, drawBarrier, encloseRoom } from './authoring';
+import { appendAreaPoint, dragGeometry, drawBarrier, encloseRoom, endsBoundaryStroke } from './authoring';
+import { addVirtualBoundary } from './boundaries';
 import { createObject } from './factory';
 import {
   addBarrier,
@@ -25,6 +26,43 @@ function doorOn(project: ProjectDocument, offset: number, width = 1) {
   project.objects.push(door);
   return door;
 }
+
+describe('boundary stroke completion', () => {
+  it.each(['wall', 'fence', 'boundary'] as const)('ends a stroke at a receiving %s', receiving => {
+    const p = newProject();
+    if (receiving === 'boundary') addVirtualBoundary(p, floor, [0, 6], [8, 6]);
+    else addBarrier(p, [0, 6], [8, 6], floor, receiving);
+    for (const kind of ['wall', 'fence', 'boundary'] as const) {
+      expect(endsBoundaryStroke(p, floor, [4, 0], [4, 6], kind)).toBe(true);
+      expect(endsBoundaryStroke(p, floor, [4, 0], [8, 6], kind)).toBe(true);
+      expect(endsBoundaryStroke(p, floor, [0, 6], [0, 0], kind)).toBe(false);
+      expect(endsBoundaryStroke(p, floor, [4, 0], [4, 8], kind)).toBe(false);
+      expect(endsBoundaryStroke(p, floor, [4, 0], [4, 5.98], kind)).toBe(false);
+      expect(endsBoundaryStroke(p, 'another-floor', [4, 0], [4, 6], kind)).toBe(false);
+      expect(endsBoundaryStroke(p, floor, [8, 6], [8, 6], kind)).toBe(false);
+    }
+  });
+
+  it('recognizes the closing segment of an outline', () => {
+    const p = newProject();
+    drawBarrier(p, floor, [0, 0], [8, 0]);
+    drawBarrier(p, floor, [8, 0], [8, 6]);
+    drawBarrier(p, floor, [8, 6], [0, 6]);
+    expect(endsBoundaryStroke(p, floor, [0, 6], [0, 0])).toBe(true);
+  });
+
+  it('matches physical welding without treating a near miss on a virtual edge as connected', () => {
+    const p = newProject();
+    addBarrier(p, [0, 6], [8, 6], floor, 'wall');
+    expect(endsBoundaryStroke(p, floor, [4, 0], [4, 6.0005])).toBe(true);
+    expect(endsBoundaryStroke(p, floor, [4, 0], [0.005, 6])).toBe(true);
+    expect(endsBoundaryStroke(p, floor, [4, 0], [4, 6.0005], 'boundary')).toBe(false);
+    expect(endsBoundaryStroke(p, floor, [0, 6], [0.005, 6])).toBe(false);
+    const virtual = newProject();
+    addVirtualBoundary(virtual, floor, [0, 6], [8, 6]);
+    expect(endsBoundaryStroke(virtual, floor, [4, 0], [4, 6.0005])).toBe(false);
+  });
+});
 
 describe('authoring regressions', () => {
   it('holds all 15 degree increments relative to the main axis of a rotated floor', () => {

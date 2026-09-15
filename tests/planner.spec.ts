@@ -50,6 +50,8 @@ async function clickAt(page: Page, point: { x: number; y: number }) {
 }
 
 async function importFile(page: Page, name: string, mimeType: string, buffer: Buffer, tab?: string) {
+  // Reference imports live under Structure; a previous footprint import selects Objects.
+  await page.locator('.sidebar').getByRole('button', { name: 'Structure', exact: true }).click();
   await page.getByRole('button', { name: 'Import reference drawing', exact: true }).click();
   const dialog = page.getByRole('dialog');
   if (tab) await dialog.getByRole('button', { name: tab, exact: true }).click();
@@ -522,10 +524,14 @@ test('walls hold to the building axis, and the partition tool offers the wall a 
     const wall = project.barriers[index];
     return [wall.startId, wall.endId].map(id => project.junctions.find(j => j.id === id)!.position);
   };
+  // Selecting the new zone opens the inspector and resizes the map. Measure only after
+  // that layout settles, otherwise the 600 px pointer move can land outside the canvas.
+  await cameraSettled(page, 'Move vertex 1');
   // Aimed 6 px off level over a 600 px run — about half a degree, which nobody means.
   const start = await canvasPoint(page, 0.3, 0.4);
   await page.getByRole('button', { name: 'Wall tool' }).click();
   await clickAt(page, start);
+  await expect(page.locator('.tool-instruction')).toContainText('1 point');
   await page.mouse.move(start.x + 600, start.y + 6);
   await expect(page.locator('.tool-instruction')).toContainText('Parallel to floor axis');
   await clickAt(page, { x: start.x + 600, y: start.y + 6 });
