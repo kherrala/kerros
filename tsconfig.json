@@ -23,9 +23,6 @@
       "@kerros/schema": [
         "src/schema/index.ts"
       ],
-      "@kerros/import": [
-        "src/import/index.ts"
-      ],
       "@kerros/viewer": [
         "src/viewer/index.ts"
       ],

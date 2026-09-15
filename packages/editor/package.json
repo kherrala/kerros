@@ -1,7 +1,7 @@
 {
   "name": "@kerros/editor",
   "version": "0.1.0",
-  "description": "Full Kerros floor-plan authoring product: the editor plus adapters for browser persistence and drawing/footprint imports (PDF, image and vector).",
+  "description": "Kerros React floor-plan editor, browser-safe CAD conversion, SVG output and host adapters for persistence, maps and server-backed drawing imports.",
   "license": "MIT",
   "type": "module",
   "repository": {

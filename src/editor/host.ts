@@ -36,6 +36,8 @@ export {
   type ConfirmOptions,
 } from '../theme';
 export * from '../schema';
+// Shared, browser-safe drawing conversion and SVG helpers; extraction stays on the backend.
+export * from '../import';
 // The ontology browsed as a structure rather than a plan — zones, their spaces, and the portals
 // that bound them. Reads the same document as the map; needs no map.
 export { StructureView, type StructureViewProps, type StructureTarget } from '../components/StructureView';

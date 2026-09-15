@@ -138,7 +138,6 @@ export default defineConfig({
       '@kerros/viewer/host': fileURLToPath(new URL('src/viewer/host.ts', import.meta.url)),
       '@kerros/editor/host': fileURLToPath(new URL('src/editor/host.ts', import.meta.url)),
       '@kerros/schema': fileURLToPath(new URL('src/schema/index.ts', import.meta.url)),
-      '@kerros/import': fileURLToPath(new URL('src/import/index.ts', import.meta.url)),
       '@kerros/viewer': fileURLToPath(new URL('src/viewer/index.ts', import.meta.url)),
       '@kerros/editor': fileURLToPath(new URL('src/editor/index.ts', import.meta.url)),
     },

@@ -29,7 +29,8 @@ flattens the INSERT tree into one frame; `--units m` converts via `--plot-scale`
 
 ## Where the logic lives
 
-The browser-safe `@kerros/import` module converts extracted entity JSON into geometry.
+Browser hosts get CAD conversion and SVG helpers from `@kerros/editor/host`; Node.js tools get
+the same helpers from `@kerros/server`. Their implementation is shared in `src/import/`.
 The Node-only `@kerros/server` package owns PDF/DWG extraction, vector analysis and
 `runAiPlanImport`. These scripts provide command-line orchestration and environment configuration.
 The backend streams accepted changes to the editor; native parsers and the AI schema stay on the server.

@@ -1,4 +1,4 @@
-// Browser-safe conversion of already extracted entity JSON into Kerros geometry.
+// Shared browser-safe helpers, exported by @kerros/editor (/host too) and @kerros/server.
 // Native PDF/DWG extraction, source analysis and AI execution live in @kerros/server.
 export { importPlanEntities } from './planImport';
 export { VERTEX_LAYERS } from './types';

@@ -21,6 +21,6 @@ PDF paths/text and DWG entities are source evidence. Images/scanned PDF regions 
 
 The package includes `dist/tools/raster.py`. Raster support requires Python 3 with OpenCV/numpy and Tesseract (`fin`, `eng`, `swe` language data); the API Docker image supplies them. Override the Python executable with `KERROS_OPENCV_PYTHON` or the host's `raster.python` option. `source.analyse({ mode: 'raster', profile: 'scan', bbox: [x0,y0,x1,y1], ocr: true })` uses original source coordinates. Run `make test-raster` for the isolated, offline native fixtures; no LLM calls are made.
 
-The browser editor uses HTTP host adapters and does not import this package. AI execution APIs have moved here from `@kerros/import`; that package continues to convert already extracted entity JSON.
+The browser editor uses HTTP host adapters and does not import this package. For headless CAD conversion, this package also exports `importPlanEntities`, layer detection, sheet registration and `documentSvg`. Browser hosts get the same helpers from `@kerros/editor` or `@kerros/editor/host`; their implementation is shared internally.
 
 Build from the repository with `npm run build --workspace @kerros/server`, then create a local tarball with `npm pack --workspace @kerros/server --pack-destination /tmp`. The complete reference is in `docs/reference/server.md` in the repository.

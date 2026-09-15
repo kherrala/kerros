@@ -1,7 +1,7 @@
 {
   "name": "@kerros/server",
   "version": "0.1.0",
-  "description": "Node-only PDF/DWG vector extraction, calibrated source analysis and streamed AI imports for Kerros.",
+  "description": "Node-only PDF/DWG extraction, calibrated source analysis, deterministic CAD conversion, SVG output and streamed AI imports for Kerros.",
   "type": "module",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/kherrala/kerros.git", "directory": "packages/server" },

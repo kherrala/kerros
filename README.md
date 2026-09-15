@@ -1,178 +1,194 @@
 # Kerros
 
-A React + Vite + MapLibre toolkit for modelling and visualizing premises of any kind: draw walls,
-rooms, zones, doors, openings and POIs over real map geometry, stack them into floors and buildings,
-route between them, and read the whole thing back as a portable, validated document. What you build
-on that model is up to you — the library ships no application of its own.
+Kerros is a TypeScript toolkit for indoor mapping applications. It provides a building and floor-plan
+model, transactional geometry editing, React editor and viewer components, cross-floor routing, and a
+Node.js engine for importing architectural drawings.
 
-## Getting started
+The repository includes reference applications with browser persistence and sample buildings. Hosts can
+replace storage, basemaps, live-status feeds and import services through typed adapters.
+
+[User guide](docs/guide/getting-started.md) · [API reference](docs/reference/schema.md) ·
+[Portable format](docs/reference/portable-format.md) · [Development guide](docs/guide/development.md)
+
+## Modules
+
+| Package | Purpose | Runtime |
+| --- | --- | --- |
+| [`@kerros/schema`](docs/reference/schema.md) | Document types, geometry, validation, mutations, topology, routing and portable JSON | Browser / Node.js |
+| [`@kerros/viewer`](docs/reference/viewer.md) | Read-only React viewer: 2D, 3D, first-person movement, structure, graph view and route playback | Browser |
+| [`@kerros/editor`](docs/reference/editor.md) | React authoring interface, CAD entity conversion, SVG output and host adapters | Browser |
+| [`@kerros/server`](docs/reference/server.md) | PDF/DWG extraction, OpenCV/OCR, CAD conversion, SVG output and AI import execution | Node.js 22+ |
+
+The React components use MapLibre GL for the map and Three.js for 3D rendering. Their peer dependencies
+are `react`, `react-dom`, `maplibre-gl` and `three`; supported versions are declared in the
+[viewer](packages/viewer/package.json) and [editor](packages/editor/package.json) manifests.
+PDF parsing, native image analysis and the LLM SDK stay in the server module.
+
+## Run the reference applications
+
+With Docker and Docker Compose Watch available, run from the repository root:
 
 ```sh
-make up            # Docker: apps, docs and AI importer with live source updates
+make up
 ```
 
-Open <http://127.0.0.1:5173/app.html> for the editor. See [development setup](docs/guide/development.md)
-for optional API keys, container controls and native Node.js development.
+This starts the applications, documentation and import backend with source watching. It creates
+`.env.local` from `.env.example` if needed. The first build installs the native drawing-analysis tools.
 
-Open one of the demo workspaces (Stockmann Helsinki — a real eight-floor department store, or
-The Silo — a fictional hundred-level shaft), generate a Backrooms office complex, create a blank
-site, or import a portable project JSON. Projects and reference drawings autosave to IndexedDB;
-older projects saved in `localStorage` remain readable.
+| Application | Local address |
+| --- | --- |
+| Editor | <http://127.0.0.1:5173/app.html> |
+| Viewer | <http://127.0.0.1:5173/viewer.html> |
+| Documentation | <http://127.0.0.1:5173/guide/> |
 
-Run `npm run test:geometry` for repeatable randomized building authoring and geometry regressions.
-The tests draw rotated buildings and try mixed sequences of walls, suggested partitions, rooms,
-rectangles, doors, wall drags, deletion, undo and redo through the editor's model operations.
-They also exercise centimetre-scale returns, closely spaced junctions, narrow openings,
-centimetre-rounded pointer input, and preservation of floor area when splitting small alcoves.
-Every accepted edit must pass full validation and a JSON save/load round trip; failures include
-the seed and action history. Ordinary generated edits must succeed, so rejecting all changes
-cannot make this test pass. Dedicated cases also check safe recovery from impossible gestures.
+Editing and the bundled Stockmann, Silo and Backrooms examples work without API keys. The reference
+applications save projects and drawing assets in IndexedDB. Optional services are configured separately:
+
+| Setting in `.env.local` | Enables |
+| --- | --- |
+| `VITE_MML_API_KEY` | MML vector maps and cadastral boundaries; this is a public browser credential |
+| `ANTHROPIC_API_KEY` | Claude import on the backend; keep this secret and never use a `VITE_` prefix |
+
+See [development setup](docs/guide/development.md) for native Node.js development and container controls,
+and [MML maps](docs/guide/mml-maps.md) for map configuration.
+
+## Embed a viewer
+
+The packages are npm workspaces built from this checkout. To build their ESM output and TypeScript
+declarations, use Node.js 22+:
 
 ```sh
-GEOMETRY_FUZZ_CASES=1000 npm run test:geometry  # longer stress run
-GEOMETRY_FUZZ_SEED=12 npm run test:geometry    # replay one seed
+npm ci
+npm run build:lib
 ```
 
-The **Backrooms · Offices** sample has a live plan preview, a repeatable seed, and 144–216 m floor
-sizes. Its three office levels contain hundreds of connected rooms each, carpet and wallpaper
-materials, and flickering fluorescent panels in walk mode. Room labels stay in the walk caption;
-nearby wayfinding markers are hidden by walls. The procedural layout and office themes live in
-`app/demo/officeLayout.ts` and `app/demo/backrooms.ts`. Spa and other level families are not yet included.
-
-### MML basemap
-
-Copy `.env.example` to `.env.local` and set `VITE_MML_API_KEY` to a Maanmittauslaitos API key
-to enable the *MML · Finnish land survey* vector basemap in map settings. Without a key the app
-uses a self-contained offline plan background. The key is visible in the client bundle and map
-requests. See [MML vector maps](docs/guide/mml-maps.md) for obtaining a key, enabling property
-boundaries, configuring a host and troubleshooting.
-
-### AI import with Claude
-
-Set `ANTHROPIC_API_KEY` in `.env.local` (without a `VITE_` prefix), then run `make up`.
-In the editor, **Import plan → AI import** accepts images, PDFs and DWGs, with validated edits saved to the live project
-and streamed Claude output. The key and tool execution stay on the local backend.
-See [Import features](docs/guide/ai-import.md) for Console setup, supported inputs,
-architecture, review and CLI usage, and [development setup](docs/guide/development.md) for Docker.
-
-## Feature overview
-
-- **Editor** — connected walls and fences (shared junctions; new segments split existing ones),
-  rooms/zones with polygon holes and parent/child nesting, rectangle tool, measuring, metric
-  0.5 m grid + 15° angular snapping relative to the floor's main axis, shared T/four-way junction
-  snapping, undo/redo, keyboard shortcuts (see the
-  in-app help), vertex/endpoint drag editing.
-- **Attached openings** — doors and windows attach to walls, gates to fences, positioned by
-  offset along the segment; they follow barrier edits and reject invalid placements.
-- **Small details** — walls and fences can be as short as 1 cm. Short returns and jambs stay in
-  place, and openings use their actual width to determine whether they fit. Turn snapping off
-  for details smaller than the 0.5 m drawing grid; internal intersections retain full precision.
-- **Imports** — GeoJSON building/parcel footprints (lng/lat, or any CRS via a host-supplied
-  converter), PNG/JPEG/WebP/PDF reference drawings aligned by two point pairs or a known distance,
-  and portable project JSON.
-  A building footprint can generate floor walls via *Create floor walls*.
-- **Floors** — elevations and heights per floor (basements, roof terraces), floor duplication
-  with fresh IDs and cleared feed bindings, multiple buildings plus an outdoor site level.
-- **3D viewer** — Three.js custom layer sharing the MapLibre camera; single-floor cutaway or a
-  full building stack with real elevations, wall openings, and elevated markers.
-- **Live status (bring your own)** — objects carry a host-owned `feedId`; a host that supplies a
-  `StatusFeed` gets a monitoring surface that overlays whatever state it publishes, with staleness
-  handling and per-floor rollups. Transient status never enters undo history or saves, and a host
-  that supplies no feed gets no monitoring chrome at all. The reference app supplies none: what a
-  a reading *means* is an application's business, not the toolkit's.
-
-## Architecture
-
-The **library** lives in `src/` and the **reference application** in `app/` — separate source
-roots. `app/` consumes the library only by `@kerros/*` package name (dev/build alias → the `src/`
-facades; the published packages resolve to npm), so it exercises the same contract a third-party host
-would.
-
-```
-src/model/       Pure domain: types, metric geometry, validation, history, factories, imports
-src/adapters/    Integration seams: persistence, status interpretation, neutral basemap
-src/map/         MapLibre rendering: 2D features, Three.js 3D SceneLayer, MapCanvas
-src/components/  Inspector, import/alignment dialogs, shared controls
-src/schema/      Public facade: data schema types + pure document functions
-src/viewer/      Public facade: FloorViewer (minimal read-only embed) + browser persistence
-src/editor/      Public facade: FloorEditor (= SitePlanner) + bundled adapters
-src/SitePlanner.tsx  The embeddable editor (SiteViewer = read-only wrapper)
-
-app/main.tsx     Reference editor app — home shell wiring local adapters to the planner
-app/viewer.tsx   Reference viewer app — a read-only host around FloorViewer (@kerros/viewer only)
-app/demo/        Built-in sample data (Stockmann, the Silo) and its derived ontology
-app/mmlBasemap.ts  Reference MML (Finnish land survey) BasemapConfig — region-specific, not shipped
-```
-
-Geometry is stored in **local metric coordinates** (metres) relative to a WGS84 lng/lat project
-origin, via an ellipsoidal local-tangent-plane — no projection library, works anywhere — and
-converted to lng/lat only at the map boundary. Wall junctions and segments are the authoritative
-wall geometry; wall surfaces and openings are derived at render time. Spaces keep separate polygons,
-with supported editor operations refitting matching enclosed rooms after wall changes. See
-[Space geometry & walls](docs/guide/geometry.md) for the connections, consistency limits and mesh tradeoff.
-
-### Facades & layering
-
-```
-schema  ←  viewer  ←  reference viewer app (app/viewer.tsx)
-schema  ←  editor  ←  reference editor app (app/main.tsx)
-```
-
-| Facade | Exports | Becomes (after npm extraction) |
-|---|---|---|
-| `src/schema` | `ProjectDocument` + entity types, `validateProject`, `exportProject`, `importProject`, `parseExport`, `blobDataUrl` — no React, no MapLibre, no browser storage | `kerros/schema` |
-| `src/viewer` | `FloorViewer` + `FloorViewerProps`, `neutralBasemap`, `StatusFeed`, `statusTone` / `statusLabel` / `unknownStatus`, browser persistence, theme provider, plus everything from `schema` | `kerros/viewer` |
-| `src/editor` | `FloorEditor` (= `SitePlanner`), `SiteViewer`, the adapter contracts and bundled implementations, plus everything from `schema` | `kerros/editor` |
-
-The deployed site serves the documentation at `/`, the full reference editor at `/app.html`, and a
-sample viewer host at `/viewer.html`. The editor and viewer share the browser-persisted data —
-projects saved in the editor appear in the viewer's picker.
-
-A host embeds the viewer like this (shown with post-extraction package paths; the working
-in-repo equivalent is `app/viewer.tsx`):
+In a React host, serve a portable project as `building.json` and provide a `<div id="root"></div>`.
+Import the package stylesheet at the application entry point; it includes MapLibre's styles.
 
 ```tsx
 import { createRoot } from 'react-dom/client';
-import { FloorViewer } from 'kerros/viewer';
-import { parseExport } from 'kerros/schema';
-import 'kerros/styles.css';
+import { FloorViewer } from '@kerros/viewer';
+import { parseExport } from '@kerros/schema';
+import '@kerros/viewer/styles.css';
 
-const { project, assets } = parseExport(await (await fetch('/site.json')).text());
-createRoot(document.getElementById('plan')!).render(
-  <FloorViewer project={project} assets={assets} statuses={liveStatuses}
-    threeD dark={prefersDark} onSelect={id => showDetails(id)} />
+const response = await fetch('./building.json');
+if (!response.ok) throw new Error(`Could not load the project: ${response.status}`);
+const { project, assets } = parseExport(await response.text());
+
+createRoot(document.getElementById('root')!).render(
+  <div style={{ height: '100dvh' }}>
+    <FloorViewer project={project} assets={assets} controls />
+  </div>,
 );
 ```
 
-**Styling contract:** components never import stylesheets; hosts import `src/styles.css`
-(future `kerros/styles.css`) at their entrypoint. The one exception is MapLibre's own CSS,
-which arrives via `MapCanvas`'s `maplibre-gl/dist/maplibre-gl.css` import — a documented
-bundler assumption. Env reads (`VITE_MML_API_KEY`) belong in entrypoints, never in library
-code. See [docs/reference/schema.md](docs/reference/schema.md) for the schema reference.
+`parseExport` validates the document and supplies an asset repository for embedded reference images.
+`controls` enables floor and view selection, structure inspection and navigation. Omit it for a
+map-only embed with host-owned controls. Selection, view mode and routes can also be controlled through
+props; see the [viewer API](docs/reference/viewer.md) and [reference host](app/viewer.tsx).
 
-### Embedding & adapter contracts
+For authoring, use `FloorEditor` from `@kerros/editor` and import `@kerros/editor/styles.css`. It takes a
+`project` and `PlannerAdapters`, including project and asset repositories. The editor owns its edit
+history; observe accepted edits with `onChange`. See the [editor API](docs/reference/editor.md) and
+[reference application](app/main.tsx) for persistence, basemap, status and import adapters.
+The `/host` entry points expose host utilities without importing the map renderer. Drawing-conversion
+and SVG helpers are available through `@kerros/editor/host` as well as the main editor entry point.
 
-`SitePlanner` / `SiteViewer` are host-agnostic components (`src/model/types.ts`):
+## Work with the model
+
+`ProjectDocument` stores local metric geometry relative to a WGS84 origin. Floors share the horizontal
+coordinate frame and define their own elevations and heights. The model is a planar subdivision with
+vertical dimensions; the viewer generates rendering meshes from it.
+
+Walls and virtual boundaries reference shared junctions. Connected spaces reference ordered boundary
+loops, and their usable polygons are derived after accounting for wall thickness. Doors and windows
+attach to a barrier by offset and width. Independent space outlines are also supported. Zones group
+spaces; portals connect them, and routing uses that connectivity together with vertical transport.
+
+Apply edits through `applyMutation`, `applyMutations` or `transact`. They update a draft, synchronize
+connected geometry and validate before returning a replacement document. A refused edit leaves the
+input unchanged. For example, this batch creates four walls and their enclosed room atomically:
 
 ```ts
-interface PlannerAdapters {
-  projects: ProjectRepository;  // list / load / save / delete ProjectDocuments
-  assets: AssetRepository;      // get / put / delete drawing Blobs by id
-  status?: StatusFeed;          // subscribe(project, listener) => unsubscribe; omit → no live view
-  basemap?: BasemapConfig;      // MapLibre style + optional transformRequest
-}
+import { emptyProject, applyMutations } from '@kerros/schema';
+
+const project = emptyProject([24.938, 60.169], 'Example building');
+const floorId = project.floors[0].id;
+const result = applyMutations(project, [
+  { kind: 'addBarrier', floorId, barrierKind: 'wall', a: [0, 0], b: [8, 0] },
+  { kind: 'addBarrier', floorId, barrierKind: 'wall', a: [8, 0], b: [8, 6] },
+  { kind: 'addBarrier', floorId, barrierKind: 'wall', a: [8, 6], b: [0, 6] },
+  { kind: 'addBarrier', floorId, barrierKind: 'wall', a: [0, 6], b: [0, 0] },
+  { kind: 'encloseRoom', floorId, point: [4, 3], name: 'Office' },
+]);
+
+if (!result.ok) throw new Error(result.error);
+const updatedProject = result.project;
 ```
 
-The bundled implementations are `LocalProjectRepository` (localStorage), `IndexedProjectRepository`
-and `IndexedAssetRepository` (IndexedDB). The reference app uses
-`new IndexedProjectRepository(new LocalProjectRepository())` to keep older saves accessible while
-allowing large generated documents. A host application replaces these with server-backed ones,
-supplies its own `StatusFeed` if it has live data to show, and passes its own MapLibre style
-(e.g. an MML vector style with custom themes) via `basemap`.
+`validateProject` checks incoming documents without repairing them. Portal inference is separate from
+geometry synchronization; use `refreshPortals` when an integration needs to regenerate inferred
+connections. Validation permits incomplete floor plans and independent overlapping areas, so it does
+not certify complete room coverage or drawing accuracy.
 
-### Portable project format
+The [geometry guide](docs/guide/geometry.md) explains boundary ownership and editing constraints.
+The [portable format reference](docs/reference/portable-format.md) documents `schemaVersion: 1`,
+coordinate conventions, relationships and embedded assets for third-party readers and generators.
+[Mathematical foundations](docs/guide/geometry-mathematics.md) links to the academic background.
 
-`Export project` produces a versioned `ProjectDocument` JSON (schemaVersion 1) with all
-geometry plus `embeddedAssets`, a map of asset id → data-URL for reference drawings. Imports
-are fully validated (schema, geometry, cross-references, relationship rules) before they
-replace anything; a failed import never touches the open project.
+## Import drawings
+
+Reference images, deterministic CAD conversion and AI-assisted modelling are distinct workflows:
+
+- A reference image is aligned beneath a floor plan for manual tracing. PDF pages are converted on the backend.
+- `importPlanEntities` converts extracted CAD entity JSON into walls, spaces and openings. Import it
+  from `@kerros/editor` in the browser or `@kerros/server` in Node.js; both use the same implementation.
+- `@kerros/server` extracts PDF/DWG geometry and text, or analyses raster drawings with OpenCV, OCR and
+  symbol matching. It exposes calibrated JSON/SVG evidence to the AI tool loop.
+
+AI imports apply proposed edits through the same model transactions. The reference backend streams
+accepted documents, activity, token usage and continuation checkpoints to the editor; accepted changes
+are saved to the live project. Source analysis can run without an LLM. Drawing evidence still needs scale
+calibration and review; detection candidates are not automatically valid building geometry.
+
+Use the [import guide](docs/guide/ai-import.md) for the editor workflow and the
+[AI engine reference](docs/reference/ai-import.md) for adapters, tools, streaming and CLI integration.
+The reference HTTP backend is for local development; a hosted service must provide authentication,
+per-user job isolation and usage controls.
+
+## Develop and verify
+
+Run these commands from the repository root after `npm ci`:
+
+| Command | Purpose |
+| --- | --- |
+| `make dev` | Run the reference applications with Vite |
+| `make docs` | Run the documentation server |
+| `make check` | Check formatting, types, unit tests and generated AI tool schemas |
+| `npm run test:geometry` | Run deterministic geometry regressions and randomized authoring sequences |
+| `make e2e` | Run browser tests; install Chromium with `npx playwright install chromium` first |
+| `make test-raster` | Run native OpenCV/OCR fixtures in an isolated Docker container |
+| `make budget` | Measure package import sizes and check bundle boundaries |
+| `make lib` | Build all workspace packages and declarations |
+| `make site` | Build the applications and documentation |
+
+Ordinary tests use mocked AI providers and do not spend LLM tokens. Native analysis tests are opt-in.
+For model or mutation changes, regenerate the tool definitions with `npm run generate:ai-tools`.
+The geometry suite reports failing seeds; use `GEOMETRY_FUZZ_SEED=12 npm run test:geometry` to replay one,
+or `GEOMETRY_FUZZ_CASES=1000 npm run test:geometry` for a longer run.
+
+| Source | Responsibility |
+| --- | --- |
+| `src/model/` | Geometry, validation, transactions, ontology and navigation |
+| `src/schema/`, `src/viewer/`, `src/editor/`, `src/server/` | Public package entry points |
+| `src/import/` | Internal drawing-conversion helpers and contracts shared by editor and server |
+| `src/map/`, `src/components/`, `src/adapters/` | Rendering, shared UI and host integrations |
+| `app/` | Reference hosts, sample data and HTTP adapters |
+| `server/` | Reference HTTP backend and isolated import worker |
+| `packages/` | Package manifests and build configurations |
+| `tests/` | Browser integration tests |
+| `docs/` | User guides, API references and academic articles |
+
+## License
+
+[MIT](LICENSE).

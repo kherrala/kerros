@@ -1,6 +1,6 @@
 # `@kerros/editor`
 
-The full authoring editor + adapters. Re-exports everything from [`@kerros/viewer`](./viewer) (and thus `@kerros/schema`), plus the deterministic CAD importer from [`@kerros/import`](./import). Peers: `react`, `react-dom`, `maplibre-gl`, `three`.
+The authoring editor, host adapters and browser-safe drawing helpers. Re-exports [`@kerros/schema`](./schema) and the [CAD conversion and SVG API](./import). Peers: `react`, `react-dom`, `maplibre-gl`, `three`. The standalone read-only viewer is available in [`@kerros/viewer`](./viewer).
 
 ```ts
 import '@kerros/editor/styles.css';
@@ -11,7 +11,7 @@ import '@kerros/editor/styles.css';
 | Import | What it is |
 | --- | --- |
 | `@kerros/editor` | The whole facade, `FloorEditor` and `SiteViewer` included. |
-| `@kerros/editor/host` | The same facade minus the two components that draw a plan: persistence, theming, `StructureView`, the schema. |
+| `@kerros/editor/host` | The same facade minus the two components that draw a plan: persistence, theming, `StructureView`, the schema and drawing-conversion helpers. |
 | `@kerros/editor/styles.css` | The stylesheet (MapLibre's, then Kerros'). |
 
 Drawing a plan means `maplibre-gl` and `three` — about 1.7 MB that a screen listing saved projects
@@ -24,18 +24,11 @@ import { KerrosThemeProvider, useDarkMode, IndexedProjectRepository } from '@ker
 const FloorEditor = lazy(() => import('@kerros/editor').then(m => ({ default: m.FloorEditor })));
 ```
 
-What each import costs, as `make budget` measures it — Kerros's own code, before first paint:
+`make budget` checks the built packages as a consumer would import them. Host utilities and CAD
+conversion helpers must not pull in MapLibre, Three.js or PDF.js. The map renderer loads MapLibre;
+Three.js arrives only when a 3D view is opened. PDF conversion and native analysis are server-side
+operations exposed through host adapters.
 
-| import | eager | also fetches |
-| --- | --- | --- |
-| light names, from either entry | 62 kB | — |
-| `FloorEditor` | 449 kB | `maplibre-gl` |
-| `FloorEditor`, once you enter 3D | + the 3D scene | `three` |
-| opening a PDF to trace | + pdf.js and its worker | |
-
-`three` is not in that first load. The 3D scene is named with a dynamic import, so a host that shows
-a plan flat — and plenty only ever do — never fetches it; entering 3D is what pays for it. The same
-is true of pdf.js: a footprint import in any other format never touches it.
 The `lazy()` is still yours to write — tree-shaking decides what is in the bundle, not when it
 arrives, and mounting the editor is what makes the renderer worth fetching.
 
@@ -47,7 +40,7 @@ guaranteed — a shared module a hundred screens import, say — and use the mai
 ## Components
 
 - **`FloorEditor`** — the authoring editor. See [The editor](../guide/editor). Its sidebar includes the
-  structure panel (`StructureView`, re-exported from `@kerros/viewer`): zones, their spaces, and each
+  structure panel (`StructureView`, shared with `@kerros/viewer`): zones, their spaces, and each
   zone's derived ways in — plus zone authoring and portal re-reading in edit mode.
 - **`SiteViewer`** — the same component in read-only mode.
 
@@ -56,7 +49,7 @@ guaranteed — a shared module a hundred screens import, say — and use the mai
 | Export | Description |
 | --- | --- |
 | `SitePlannerProps` | The editor's props: `project`, `adapters`, `initialView`, `onViewChange`, `onModeChange`, `renderStatusPanel`, `elevators`, `onChange`, `onSelectionChange`, `onBack`. |
-| `PlannerAdapters` | `{ projects, assets, status, basemap? }`. |
+| `PlannerAdapters` | Required `projects` and `assets`; optional `status`, `basemap`, `importProjections`, `aiImport` and `pdfDrawing`. |
 | `PlannerMode` | `'view' \| 'edit' \| 'live'`. |
 | `ElevatorControls` | Optional `{ statuses, call(feedId, floorId), hold(feedId, open) }` for passenger controls in Walk. The host owns arrival and door sequencing. |
 | `StatusPanelContext` | `{ object, status?, editing, live }` — passed to `renderStatusPanel`. |
@@ -75,3 +68,10 @@ guaranteed — a shared module a hundred screens import, say — and use the mai
 `neutralBasemap`, `BasemapConfig`; `KerrosThemeProvider`, `useKerrosTheme`, `useDarkMode`, `KerrosTheme`, `MapStyleOptions`, `ConfirmOptions`.
 
 > The editor reads no `import.meta.env` and never mutates the URL — the host supplies the basemap via `adapters.basemap` and persists the view emitted by `onViewChange`.
+
+## Drawing conversion
+
+`importPlanEntities`, `detectLayers`, `VERTEX_LAYERS`, `layerPattern`, `LAYER_ROLES`, `documentSvg`,
+`landmarks`, `sheetOffset`, `shiftEntities` and their types are exported from both `@kerros/editor`
+and `@kerros/editor/host`. See [CAD conversion and SVG](./import) for contracts and supported drawings.
+The same helpers are available to Node.js consumers through `@kerros/server`.

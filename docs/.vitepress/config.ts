@@ -74,7 +74,7 @@ export default defineConfig({
             { text: '@kerros/schema', link: '/reference/schema' },
             { text: 'Portable project format', link: '/reference/portable-format' },
             { text: '@kerros/viewer', link: '/reference/viewer' },
-            { text: '@kerros/import', link: '/reference/import' },
+            { text: 'CAD conversion & SVG', link: '/reference/import' },
             { text: '@kerros/server', link: '/reference/server' },
             { text: 'AI import engine & integration', link: '/reference/ai-import' },
             { text: '@kerros/editor', link: '/reference/editor' },

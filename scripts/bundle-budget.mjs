@@ -39,6 +39,7 @@ const BUDGETS = [
   { probe: 'viewer-light', kB: 80, heavy: [] },
   { probe: 'editor-host', kB: 80, heavy: [] },
   { probe: 'editor-light', kB: 80, heavy: [] },
+  { probe: 'editor-import', kB: 125, heavy: [] },
   // The renderers may pull maplibre, because they are a map. They may NOT pull three: the 3D scene
   // is named with a dynamic import so that a host showing a flat plan — which plenty only ever do —
   // pays nothing for a renderer it never runs. That is the invariant this line exists to hold.

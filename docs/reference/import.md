@@ -1,10 +1,21 @@
-# `@kerros/import`
+# CAD conversion and SVG
 
-CAD drawings into Kerros documents. Pure functions over [`@kerros/schema`](./schema) — no React, no
-rendering, no AI SDK — so the module runs anywhere the schema runs. The editor depends on it and
-re-exports its surface; hosts can also install it alone.
+Browser-safe helpers convert extracted CAD entities into Kerros documents and render document SVGs.
+The editor and server export the same implementation; there is no separate import package.
 
-PDF/DWG parsing, source analysis and the AI tool loop belong to the Node-only [`@kerros/server`](./server) package. This package accepts already extracted entity JSON and contains no PDF parser, worker, native canvas or LLM SDK.
+| Environment | Entry point |
+| --- | --- |
+| Browser application | `@kerros/editor` |
+| Browser host utilities without the map renderer | `@kerros/editor/host` |
+| Node.js tools and backends | `@kerros/server` |
+
+```ts
+import { importPlanEntities, detectLayers, documentSvg } from '@kerros/editor/host';
+```
+
+On Node.js, import those same names from `@kerros/server`. The conversion functions operate on
+already extracted entity JSON. PDF/DWG parsing, native source analysis and the AI tool loop remain
+in the [server module](./server); browser entry points contain no PDF parser or LLM SDK.
 
 ## Deterministic import
 
@@ -37,12 +48,26 @@ plan afterwards, translate its junctions and independent objects in a transactio
 polygons and dimensions are regenerated from the junctions. Call `refreshBoundarySpaces` before
 `refreshPortals` if portal inference runs inside that same transaction.
 
+## Layer detection, registration and SVG
+
+- `detectLayers(entities)` proposes layer roles; `layerPattern` and `LAYER_ROLES` support custom mappings.
+- `landmarks`, `sheetOffset` and `shiftEntities` register related sheets in a common coordinate frame.
+- `documentSvg(project, width?)` returns an SVG string for reviewing the current document without a map.
+- `PlanEntity`, `PlanImportOptions`, `PlanImportReport`, `PlanLayerMap`, `LayerDetection`, `LayerReport`,
+  `LayerRole` and `Landmark` describe conversion inputs and reports.
+- `ImportBrief`, `SourceCalibration`, `AiTokenUsage` and `ImportInstruction` are shared integration types.
+
 ## Server extraction and AI import
 
-The AI APIs moved to [`@kerros/server`](./server). Use that entry point for `runAiPlanImport`, `AiProvider`, `PlanSource`, `AI_IMPORT_TOOLS` and `AI_IMPORT_SYSTEM`. The browser-safe `documentSvg(doc)` helper remains here. See [Import features](/guide/ai-import) for setup and the live-project workflow.
+Use [`@kerros/server`](./server) for `runAiPlanImport`, `AiProvider`, `PlanSource`, `AI_IMPORT_TOOLS` and `AI_IMPORT_SYSTEM`. See [Import features](/guide/ai-import) for the live-project workflow.
 
 ## In the editor
 
 The import dialog's **CAD plan** tab feeds `importPlanEntities` through the editor's transactional
 commit: pick the target floor, drop the entity JSON, and the walls, rooms and openings appear —
 with the result toast reporting counts and skips. Repeat per floor for a multi-storey building.
+
+## Migration
+
+Replace imports from the former `@kerros/import` package with `@kerros/editor/host` in browser hosts
+or `@kerros/server` in Node.js. Function names and argument contracts are unchanged.

@@ -2,7 +2,7 @@
 
 Node-only PDF/DWG extraction, source analysis and AI import execution. The package is a local workspace package prepared for release; publishing it is a separate step. It requires Node.js 22 or newer. Its export map provides a Node entry point and intentionally has no browser entry point.
 
-The editor uses `PlannerAdapters.aiImport` for streamed project changes and `PlannerAdapters.pdfDrawing` for PDF reference pages. It receives JSON and PNG responses; PDF.js, its worker, native canvas, the Claude SDK, the AI tool schema and source-analysis implementations stay on the server. Browser builds fail if these dependencies enter any eager or lazy chunk. `@kerros/import` remains the browser-safe converter for already extracted entity JSON.
+The editor uses `PlannerAdapters.aiImport` for streamed project changes and `PlannerAdapters.pdfDrawing` for PDF reference pages. It receives JSON and PNG responses; PDF.js, its worker, native canvas, the Claude SDK, the AI tool schema and source-analysis implementations stay on the server. Browser builds fail if these dependencies enter any eager or lazy chunk. Both `@kerros/editor` and `@kerros/server` export the shared [CAD conversion and SVG helpers](./import).
 
 See [AI import engine and integration](./ai-import) for the architecture diagram, Claude configuration,
 streaming lifecycle, CLI, context limits and checkpoints. End-user controls are in [Import features](../guide/ai-import).
@@ -113,6 +113,6 @@ The development endpoint emits a `session` event with `jobId`. The editor can PO
 
 ## Migration
 
-Import `runAiPlanImport`, `AI_IMPORT_TOOLS`, `AI_IMPORT_SYSTEM`, `AiProvider` and `PlanSource` from `@kerros/server` on the backend. They are no longer exported from `@kerros/import`.
+Import `runAiPlanImport`, `AI_IMPORT_TOOLS`, `AI_IMPORT_SYSTEM`, `AiProvider` and `PlanSource` from `@kerros/server` on the backend. Headless conversion helpers such as `importPlanEntities`, `detectLayers` and `documentSvg` are exported here too; browser hosts use `@kerros/editor/host`. See [CAD API migration](./import#migration) for the former standalone package.
 
 Hosts that support PDF tracing backgrounds must supply `PlannerAdapters.pdfDrawing.render(file, page): Promise<Blob>`. The reference client in `app/aiImport.ts` implements the HTTP request. Hosts without that adapter can still import image backgrounds and already extracted CAD entity JSON; choosing a PDF explains the missing backend. Credentials and parsing libraries never need to be supplied to the editor.
