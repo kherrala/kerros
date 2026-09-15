@@ -11,10 +11,12 @@ A `ProjectDocument` is a plain, JSON-serializable object — the single source o
 - **`barriers`** (`Barrier[]`) — walls and fences; openings (doors/windows) attach to them.
 - **`junctions`** and optional **`virtualBoundaries`** — the shared boundary network used by connected spaces.
 - **`drawings`** — reference images (PDF/PNG) aligned to the map.
-- **`navNodes` / `navEdges`** — the optional indoor routing graph.
+- **`zones`**, **`portals`** and **`portalGroups`** — optional semantic membership and connection records.
+- **`navNodes` / `navEdges`** — an optional authored graph overriding derived routing.
 - **`origin`** — the geographic anchor (see Coordinates below).
 
-Construct an empty one with `emptyProject(origin, name)` and add objects with `createObject(kind, position, floorId)`.
+Construct an empty one with `emptyProject(origin, name)`. `createObject(kind, position, floorId)`
+creates an object value; add or change document entities through `transact` or mutations.
 
 ## Coordinates
 
@@ -40,14 +42,18 @@ Status is *transient overlay data* — it is **not** part of the persisted `Proj
 
 ## Navigation
 
-Author a routing graph (`navNodes` + `navEdges`, or the `navPath` / `chainVertical` helpers), then `findRoute(project, fromId, toId)` returns a cross-floor route with turn-by-turn `routeSteps`. Routing is pure and lives in `@kerros/schema`, so it works headlessly.
+`findRoute(project, fromId, toId)` uses the graph derived from spaces, effective portals and zone
+connectivity unless an explicit `navNodes` / `navEdges` graph is supplied. `navPath` and
+`chainVertical` support authored graphs; connect their horizontal and vertical paths explicitly.
+Routing is pure and lives in `@kerros/schema`, so it works headlessly. A route does not itself
+operate a lift or enforce host permissions.
 
 ## Spaces, zones and portals
 
 Geometry describes the building; the **ontology** describes what it means — which areas group into
 zones, which portals connect them, and which way you may go through each one. It is the layer your own
-application joins to — by space, zone or portal id — and portals are inferred from the plan rather than
-authored. See [Spaces, zones & portals](/guide/ontology).
+application joins to by space, zone or portal ID. Portals can be inferred from openings, derived
+from shared virtual boundaries or authored explicitly. See [Spaces, zones & portals](/guide/ontology).
 
 ## The document is always valid
 

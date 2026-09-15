@@ -4,31 +4,22 @@ Kerros keeps its contract small and pushes domain specifics to the host. The mai
 
 ## A custom status feed
 
-The live-status contract is a single method:
+Import `StatusFeed` and `StatusReading` from `@kerros/viewer/host` or `@kerros/editor/host`.
+`StatusFeed.subscribe(project, listener)` subscribes to complete current snapshots and returns an
+unsubscribe function. Notifications replace previous readings; they are not incremental events.
 
-```ts
-interface StatusFeed {
-  subscribe(project: ProjectDocument, listener: (statuses: StatusReading[]) => void): () => void;
-}
-```
+This source-independent adapter holds the latest snapshot and publishes only readings bound to
+the subscribing project's objects. Create it once per host session:
 
-Implement it against any telemetry source and map your domain onto `tone` + `label` (+ optional `metrics`, `details`):
+<<< ../snippets/status-feed.ts
 
-```ts
-class OccupancyFeed implements StatusFeed {
-  subscribe(project, listener) {
-    const tick = () => listener(project.objects
-      .filter(o => o.feedId)
-      .map(o => ({ feedId: o.feedId!, tone: 'normal', label: 'Online', timestamp: Date.now(),
-                   metrics: { occupancy: read(o) } })));
-    tick();
-    const t = setInterval(tick, 3000);
-    return () => clearInterval(t);
-  }
-}
-```
+Call `publish(readings)` with the full current set. For an event-based source, first accumulate the
+latest reading for each feed in your host. Publishing `[]` clears the overlay. Use actual observation
+timestamps so forwarding an old reading does not make it appear fresh.
 
-The library never needs to know whether that tone means occupancy, a door state, a reservation or a sensor reading — it renders what you give it.
+The editor accepts the feed as `adapters.status`. For `FloorViewer`, subscribe in the host and
+pass the resulting `statuses` array; the viewer has no `statusFeed` prop. Unsubscribe when the
+project or feed changes and on unmount. See [Live status](./viewer#live-status).
 
 ## Carrying rich state with `details`
 
@@ -38,18 +29,28 @@ The library never needs to know whether that tone means occupancy, a door state,
 // feed: emit rich state alongside the generic tone/label
 { feedId, tone: 'critical', label: 'Forced open', details: { lock: 'unlocked', contact: 'open' } }
 
-// your status panel: cast it back
+// after validating the host payload, read it in your status panel
 const { lock, contact } = status.details as MyDoorState;
 ```
 
 ## Categories & metadata
 
-Attach host-defined data to any object or barrier:
+Attach host-defined data to an object or barrier inside a transaction draft. For example:
 
 ```ts
-object.category = 'meeting-room';                // a host subtype
-object.metadata = { asset: 'MR-14', seats: 8 };
+import { transact, type ProjectDocument } from '@kerros/schema';
+
+export function setObjectCategory(project: ProjectDocument, objectId: string, category: string) {
+  return transact(project, draft => {
+    const object = draft.objects.find(object => object.id === objectId);
+    if (!object) throw new Error('Object not found.');
+    object.category = category;
+  });
+}
 ```
+
+Assign `metadata` on the draft in the same way. Persist and publish the returned project only when
+`result.ok` is true; an unsuccessful transaction leaves the original unchanged.
 
 `category` drives `mapStyle.objectColor`, becomes a `cat-<category>` CSS class and a `data-category` attribute on the plan marker, and — with `metadata` — is available in `onSelect` / `onHoverObject` handlers. Model your own subtypes (a door variety, a sensor class, a tenancy code…) and any domain extension as **data**, not new object kinds.
 
