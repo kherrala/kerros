@@ -1,4 +1,5 @@
-import { stockmannOffices } from './stockmannOffices';
+import { stockmannNavigation } from './stockmannNavigation';
+import { stockmannFitout, stockmannMezzanine } from './stockmannFitout';
 import { STOCKMANN_ID } from './ids';
 import { attachOntology } from './ontology';
 import { stockmannGarage } from './stockmannGarage';
@@ -17,6 +18,7 @@ import {
   isArea,
   isVertical,
   navPath,
+  normalizeBoundaries,
   objectPosition,
   PITCH,
   pointInRing,
@@ -227,7 +229,7 @@ const STK_SPIRALS: Point[] = [
   [16.5, 19],
 ];
 const STK_SPIRAL_SIZE = 3.6;
-// name, elevation, storey height, colour, ground-floor sub-departments, isOffice
+// id, name, elevation, storey height, colour, isOffice
 // Two storeys are taller than the rest because each has a mezzanine standing inside it: the ground
 // hall carries the entresol gallery half way up it, Herkku the pharmacy gallery. At 4.2 m neither
 // host had room for a level anyone could stand up in — the entresol was 1.6 m under a soffit, a
@@ -239,35 +241,19 @@ const STK_SPIRAL_SIZE = 3.6;
 // used to carry, which under a strong sun read as beige and made a whole department store look like
 // a model made of cardboard. Offices sit a shade bluer than retail, and basements only a step darker
 // so below-grade still reads below-grade.
-const STK_FLOORS: [string, string, number, number, string, string[], boolean][] = [
-  ['floor-basement', 'Herkku food market', -9, 4.8, '#d2d8de', ['Bakery', 'Deli & sushi', 'Alko'], false],
-  [
-    'floor-b1',
-    'Electronics & services',
-    -4.2,
-    4.2,
-    '#d2d8de',
-    ['Power electronics', 'Shoe repair', 'Pet supplies'],
-    false,
-  ],
-  ['floor-ground', 'Beauty & cosmetics', 0, 5.6, '#e1e6ea', ['Fragrances', 'Skincare', 'Watches & jewellery'], false],
-  ['floor-01', 'Womenswear', 5.6, 4.2, '#e1e6ea', ['Designer studio', 'Knitwear', 'Lingerie'], false],
-  ['floor-02', 'Menswear & denim', 9.8, 4.2, '#e1e6ea', ['Suits', 'Casual', 'Shoes'], false],
-  ['floor-03', 'Shoes & accessories', 14, 4.2, '#e1e6ea', ['Handbags', 'Travel', 'Sunglasses'], false],
-  ['floor-04', 'Kids & sport', 18.2, 4.2, '#e1e6ea', ['Toys', 'Outdoor', 'Denim junior'], false],
-  ['floor-05', 'Home & interior', 22.4, 4.2, '#e1e6ea', ['ISKU Koti', 'Kitchen', 'Textiles'], false],
-  [
-    'floor-06',
-    'Books, toys & café',
-    26.6,
-    4.2,
-    '#e1e6ea',
-    ['Academic bookstore', 'Restaurant', 'Crazy Days hall'],
-    false,
-  ],
-  ['floor-07', 'Offices · buying & admin', 30.8, 4.2, '#dfe6ec', [], true],
-  ['floor-08', 'Offices · marketing & HR', 35, 4.2, '#dfe6ec', [], true],
-  ['floor-09', 'Offices · management & F8 lounge', 39.2, 4.2, '#dfe6ec', [], true],
+const STK_FLOORS: [string, string, number, number, string, boolean][] = [
+  ['floor-basement', 'Herkku food market', -9, 4.8, '#d2d8de', false],
+  ['floor-b1', 'Electronics & services', -4.2, 4.2, '#d2d8de', false],
+  ['floor-ground', 'Beauty & cosmetics', 0, 5.6, '#e1e6ea', false],
+  ['floor-01', 'Womenswear', 5.6, 4.2, '#e1e6ea', false],
+  ['floor-02', 'Menswear & denim', 9.8, 4.2, '#e1e6ea', false],
+  ['floor-03', 'Shoes & accessories', 14, 4.2, '#e1e6ea', false],
+  ['floor-04', 'Kids & sport', 18.2, 4.2, '#e1e6ea', false],
+  ['floor-05', 'Home & interior', 22.4, 4.2, '#e1e6ea', false],
+  ['floor-06', 'Books, toys & café', 26.6, 4.2, '#e1e6ea', false],
+  ['floor-07', 'Offices · buying & admin', 30.8, 4.2, '#dfe6ec', true],
+  ['floor-08', 'Offices · marketing & HR', 35, 4.2, '#dfe6ec', true],
+  ['floor-09', 'Offices · management & F8 lounge', 39.2, 4.2, '#dfe6ec', true],
 ];
 // A floor plate is the footprint with the atrium (and, for offices, the cores) punched out.
 /** Push a ring outward from its centre by `metres` — a serviceable buffer for the broadly convex
@@ -313,6 +299,7 @@ function core(
   stair: [string, Point],
   wc: Point,
   all: string[],
+  entrance?: Point,
 ) {
   const coreWalls = p.barriers.length;
   partitions(p, f, boxWalls(ring));
@@ -324,9 +311,10 @@ function core(
   )[0];
   if (longest) {
     const [wa, wb] = barrierEnds(p, longest) as [Point, Point];
-    const door = createObject('door', [(wa[0] + wb[0]) / 2, (wa[1] + wb[1]) / 2], f, `${stair[0]} core door`);
+    const at = segmentProjection(entrance ?? [(wa[0] + wb[0]) / 2, (wa[1] + wb[1]) / 2], wa, wb);
+    const door = createObject('door', at.point, f, `${stair[0]} core door`);
     door.barrierId = longest.id;
-    door.offset = distance(wa, wb) / 2;
+    door.offset = at.t * at.length;
     p.objects.push(door);
   }
   // The core walls, door and washroom belong to each storey; the lift and the stair do not. A shaft
@@ -387,7 +375,7 @@ function createCampus(): ProjectDocument {
 
   p.id = STOCKMANN_ID;
   p.referenceNote =
-    'Office layouts are illustrative: façade-aligned workspaces and circulation, not surveyed Stockmann interiors.';
+    'Illustrative department-store layouts, not surveyed Stockmann interiors. Each level has a distinct programme, reserved circulation, lift lobbies and clear stair/escalator approaches within the sample footprint.';
   p.buildings[0].exteriorPreset = 'darkBrick';
   // The real store is crowned by a steep mansard in dark sheet metal, set back above the cornice with
   // the top storey's arcade beneath it. Each façade edge becomes one roof plane leaning inward from
@@ -470,32 +458,6 @@ function createCampus(): ProjectDocument {
   ];
   const gallery = poly(p, 'zone', 'Entresol gallery', ENT, 'floor-entresol', '#edf1f5');
   gallery.rings!.push(closeRing(ATRIUM.map(pt => [...pt] as Point)));
-  poly(
-    p,
-    'room',
-    'Café Entresol',
-    [
-      [-16, -16],
-      [24, -16],
-      [24, -9],
-      [-16, -9],
-    ],
-    'floor-entresol',
-    '#ead9c0',
-  );
-  poly(
-    p,
-    'room',
-    'Accessories gallery',
-    [
-      [-16, -9],
-      [-9, -9],
-      [-9, 24],
-      [-16, 24],
-    ],
-    'floor-entresol',
-    '#e5eae7',
-  );
   // The spiral stairs themselves are built once, with the rest of the vertical cores, on the lowest
   // level they serve. There used to be a second pair here — same name, same place, no stair model,
   // three levels — and the two disagreed about everything: the renderer drew the drum from the
@@ -503,32 +465,8 @@ function createCampus(): ProjectDocument {
   // -1A: the pharmacy mezzanine ring with its real tunnel link toward the Academic Bookstore.
   const b1aGallery = poly(p, 'zone', 'Wellness gallery', ENT, 'floor-b1a', '#e0e6ec');
   b1aGallery.rings!.push(closeRing(ATRIUM.map(pt => [...pt] as Point)));
-  poly(
-    p,
-    'room',
-    'Pharmacy',
-    [
-      [-16, -16],
-      [24, -16],
-      [24, -9],
-      [-16, -9],
-    ],
-    'floor-b1a',
-    '#dbe4dc',
-  );
-  poly(
-    p,
-    'room',
-    'Wellness devices',
-    [
-      [-16, -9],
-      [-9, -9],
-      [-9, 24],
-      [-16, 24],
-    ],
-    'floor-b1a',
-    '#dde1e6',
-  );
+  stockmannMezzanine(p, 'floor-entresol', closeRing(ENT), closeRing(ATRIUM));
+  stockmannMezzanine(p, 'floor-b1a', closeRing(ENT), closeRing(ATRIUM));
   const tunnel = (s: Point, len: number, w: number): Point[] => {
     const d: Point = [-0.571, 0.821],
       q: Point = [0.821, 0.571];
@@ -571,7 +509,7 @@ function createCampus(): ProjectDocument {
   poly(p, 'parcel', 'Property boundary', outset(STK, 7), null, '#f3f4f0');
   poly(p, 'building', 'Stockmann', STK, null, '#dadee4');
   const all = p.floors.map(f => f.id);
-  for (const [f, dept, elevation, height, color, sub, office] of STK_FLOORS) {
+  for (const [f, dept, elevation, height, color, office] of STK_FLOORS) {
     const level = f === 'floor-basement' ? -2 : f === 'floor-b1' ? -1 : f === 'floor-ground' ? 0 : Number(f.slice(-2));
     // Zone plate carries the atrium hole so the void shows through the selling floors in the stacked
     // view. Only the floors ABOVE the hall, though, because a void has a floor: the light well opens
@@ -604,6 +542,9 @@ function createCampus(): ProjectDocument {
       ['Stair East', [24, 13]],
       [28, 2],
       all,
+      // The office lobby spans y=6.5–9.5. Its partition meets the core at the old midpoint;
+      // centre the entrance in the lobby instead of putting a T-junction through the door.
+      office ? [31, 8] : undefined,
     );
     core(p, f, CORE_W, [['Lift D', [-33, -11]]], ['Stair West', [-30, -4]], [-34, -4], all);
     pillars(p, f, height);
@@ -637,28 +578,22 @@ function createCampus(): ProjectDocument {
         p.objects.push(s);
       }
     }
-    if (office) stockmannOffices(p, f, STK, ATRIUM, [CORE_E, CORE_W], shaftClearances(p, f));
-    else {
-      const retail = plate(p, 'room', f, dept, [...voids, CORE_E, CORE_W], color);
-      retail.material = 'terrazzo';
-      retail.color = '#e6dfcf';
-      sub.forEach((name, i) => {
-        const poi = createObject('poi', [-40, i * 7 - 7] as Point, f, name);
-        poi.symbol = 'personnel';
-        p.objects.push(poi);
-      });
-    }
+    stockmannFitout(p, f, closeRing(STK), voids.map(closeRing), shaftClearances(p, f));
     if (level === 0) {
       attached(p, 'door', 'Aleksanterinkatu entrance', [3, -49], f, 2.6);
       attached(p, 'door', 'Corner entrance', [12, -51], f, 2.4);
       attached(p, 'door', 'Keskuskatu entrance', [-33, -21], f, 2.2);
     }
+    // Office outlines contribute T-junctions along the facade. Split those walls before placing
+    // windows so the glazing stays between junctions, as it does when using the editor tools.
+    normalizeBoundaries(p, f);
     if (level >= 0) windowsAlong(p, f, STK, 'Stockmann glazing', { width: 1.25, height: 2.95, bay: 2.9 });
   }
   // The selling floors and both gallery levels share the same shopping-hall tile finish.
   for (const o of p.objects) {
     if (
-      ['floor-entresol', 'floor-b1a', 'floor-b1', 'floor-basement'].includes(o.floorId ?? '') &&
+      o.floorId !== null &&
+      !['floor-07', 'floor-08', 'floor-09'].includes(o.floorId) &&
       ['room', 'zone'].includes(o.kind)
     ) {
       o.material = 'terrazzo';
@@ -691,61 +626,12 @@ function createCampus(): ProjectDocument {
   p.initialFloorId = 'floor-08';
   stockmannGarage(p);
   campusNav(p);
+  stockmannNavigation(p);
   return p;
 }
 
-// Nav graph: a gallery ring just outside the atrium on every level, spurs to the lift/stair/escalator
-// cores, a vertical chain per distinct core name, the ground-floor entrances stepping out to the Main
-// entrance POI through bound doors, and the retail sub-department POIs strung along a west spine.
+// Vertical rides and exterior connections are explicit; indoor walking comes from the fit-out.
 function campusNav(p: ProjectDocument) {
-  // The ring steps out to each escalator on its way past, because a shaft's route node stands at the
-  // object's own position and the banks sit a half-run back from the void. Follow the atrium instead
-  // and the nodes the vertical chain hangs off would be adrift on the plate, connected to nothing.
-  const [south, north] = [STK_ESCALATORS[0][2], STK_ESCALATORS[2][2]];
-  const RING: Point[] = [
-    [-12, -12],
-    [6, south],
-    [11, south],
-    [20, -12],
-    [20, 0],
-    [20, 13],
-    [20, 20],
-    [11, north],
-    [6, north],
-    [-12, 20],
-    [-12, -11],
-    [-12, -12],
-  ];
-  for (const f of p.floors) {
-    navPath(p, f.id, RING);
-    navPath(p, f.id, [
-      [20, 0],
-      [23, 0],
-      [23, 4],
-      [28, 8],
-    ]); // CORE_E lifts A/B/C
-    navPath(p, f.id, [
-      [20, 13],
-      [24, 13],
-    ]);
-    navPath(p, f.id, [
-      [-12, -11],
-      [-33, -11],
-    ]);
-    navPath(p, f.id, [
-      [-12, -11],
-      [-30, -4],
-    ]); // Stair East, Lift D, Stair West
-    // Out to the spiral stairs themselves: a spur that stopped three metres short left the drum's
-    // route nodes standing alone, so nothing could ever be routed onto the stair.
-    navPath(p, f.id, [[11, south], [13, -11], STK_SPIRALS[0]]);
-    navPath(p, f.id, [[11, north], [13, 19], STK_SPIRALS[1]]);
-    const pois = p.objects.filter(o => o.kind === 'poi' && o.symbol === 'personnel' && o.floorId === f.id);
-    if (pois.length) {
-      for (const poi of pois) addNavNode(p, f.id, poi.position, poi.id);
-      navPath(p, f.id, [[-33, -11], ...pois.map(poi => poi.position)]);
-    }
-  }
   // One vertical chain per shaft, elected the way the renderer elects one: `primaryShafts` picks the
   // lowest twin of each, so the object routing rides is the object the model draws. Threading by name
   // instead picked whichever copy happened to be first in the list — which chained one of the two
@@ -754,32 +640,17 @@ function campusNav(p: ProjectDocument) {
   const primary = primaryShafts(p);
   for (const o of p.objects) if (isVertical(o.kind) && primary.has(o.id)) chainVertical(p, o);
   const outs: Point[] = [];
-  for (const [dname, outPt, approach] of [
-    [
-      'Aleksanterinkatu entrance',
-      [3, -53],
-      [
-        [6, south],
-        [3, -30],
-      ],
-    ],
-    [
-      'Corner entrance',
-      [13, -55],
-      [
-        [11, south],
-        [12, -30],
-      ],
-    ],
-    ['Keskuskatu entrance', [-37, -24], [[-33, -11]]],
-  ] as [string, Point, Point[]][]) {
+  for (const [dname, outPt] of [
+    ['Aleksanterinkatu entrance', [3, -53]],
+    ['Corner entrance', [13, -55]],
+    ['Keskuskatu entrance', [-37, -24]],
+  ] as [string, Point][]) {
     const door = p.objects.find(o => o.kind === 'door' && o.name === dname && o.floorId === 'floor-ground');
     if (!door) continue;
     const insidePt = objectPosition(p, door),
       inside = addNavNode(p, 'floor-ground', insidePt, door.id),
       outside = addNavNode(p, null, outPt);
     addNavEdge(p, 'door', inside, outside, door.id);
-    navPath(p, 'floor-ground', [...approach, insidePt]);
     outs.push(outPt);
   }
   const main = p.objects.find(o => o.name === 'Main entrance');

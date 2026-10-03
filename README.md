@@ -166,6 +166,8 @@ Run these commands from the repository root after `npm ci`:
 | `make docs` | Run the documentation server |
 | `make check` | Check formatting, types, unit tests and generated AI tool schemas |
 | `npm run test:geometry` | Run deterministic geometry regressions and randomized authoring sequences |
+| `npm run render:stockmann` | Render all sample floors as SVG/PNG plans, an atlas and portable JSON |
+| `npm run test:stockmann` | Exercise editor mutations against the full Stockmann campus |
 | `make e2e` | Run browser tests; install Chromium with `npx playwright install chromium` first |
 | `make test-raster` | Run native OpenCV/OCR fixtures in an isolated Docker container |
 | `make budget` | Measure package import sizes and check bundle boundaries |
@@ -176,6 +178,15 @@ Ordinary tests use mocked AI providers and do not spend LLM tokens. Native analy
 For model or mutation changes, regenerate the tool definitions with `npm run generate:ai-tools`.
 The geometry suite reports failing seeds; use `GEOMETRY_FUZZ_SEED=12 npm run test:geometry` to replay one,
 or `GEOMETRY_FUZZ_CASES=1000 npm run test:geometry` for a longer run.
+
+Stockmann fuzzing uses the editor's snapping and transaction path for wall and junction drags,
+polygon vertices and holes, opening placement, wall thickness, object movement, new walls,
+deletion and room splitting. It checks rollback, undo/redo, JSON reloads and isolation between
+floors. Small drags on every drawn floor must succeed; arbitrary edits may be refused only for
+known geometry constraints. Failures print a seed and the complete mutation trace with stable IDs.
+Replay with `STOCKMANN_FUZZ_SEED=12 npm run test:stockmann`. Increase coverage with
+`STOCKMANN_FUZZ_CASES=20 STOCKMANN_FUZZ_STEPS=90 npm run test:stockmann` (defaults: two seeds,
+27 mutations each). These CPU-only tests use no LLM API key or tokens.
 
 | Source | Responsibility |
 | --- | --- |

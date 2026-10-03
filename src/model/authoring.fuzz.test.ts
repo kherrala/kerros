@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import polygonClipping from 'polygon-clipping';
 import { createObject } from './factory';
 import {
@@ -26,6 +26,9 @@ import { enclosedRegions, refitEnclosedRooms } from './spaces';
 import { newProject } from './testFixtures';
 import type { Point, ProjectDocument } from './types';
 import { transact, validateProject, validateRings } from './validate';
+
+// Flush worker RPC between CPU-bound seeds, including when the campus fuzz suite runs alongside.
+afterEach(() => new Promise<void>(resolve => setImmediate(resolve)));
 
 // Replay a failure with GEOMETRY_FUZZ_SEED=<seed> npm run test:geometry.
 // Increase GEOMETRY_FUZZ_CASES for a longer local/CI stress run; no unseeded randomness.

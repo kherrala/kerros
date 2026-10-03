@@ -7,6 +7,7 @@ import {
   connectSpace,
   derivedSpaceRings,
   disconnectSpace,
+  normalizeBoundaries,
 } from './boundaries';
 import { drawBarrier, encloseRoom, dragGeometry } from './authoring';
 import {
@@ -121,6 +122,33 @@ describe('shared space boundaries', () => {
     const common = p.junctions.find(j => distance(j.position, [0, 0]) < 1e-8)!;
     expect(p.barriers).toHaveLength(4);
     expect(p.barriers.every(b => b.startId === common.id || b.endId === common.id)).toBe(true);
+  });
+
+  it('does not invent a microscopic cut beside a shared, almost collinear endpoint', () => {
+    const p = newProject();
+    // Reduced from Stockmann floor 09: solving these lines again put an intersection 1.1 µm
+    // before their shared endpoint, making every unrelated wall drag on the floor fail.
+    const points = [
+      [44.57394865777116, 34.904736298123694],
+      [44.534103906, 34.96004415],
+      [40.325503237, 40.80193429],
+    ] as import('./types').Point[];
+    p.junctions = points.map((position, i) => ({ id: `j${i}`, floorId: floor, position }));
+    p.barriers = [0, 1].map(i => ({
+      id: `b${i}`,
+      floorId: floor,
+      startId: `j${i}`,
+      endId: `j${i + 1}`,
+      kind: 'wall',
+      name: 'Partition',
+      thickness: 0.13,
+      height: 2.8,
+    }));
+    normalizeBoundaries(p, floor);
+    expect(p.barriers).toHaveLength(2);
+    expect(p.junctions).toHaveLength(3);
+    expect(p.junctions.map(j => j.position)).toEqual(points);
+    validateProject(p);
   });
 
   it('canonicalizes a partial collinear overlap without duplicate walls', () => {

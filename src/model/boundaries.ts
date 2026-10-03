@@ -127,7 +127,9 @@ function splitEdge(p: ProjectDocument, edge: BoundaryEdge, cuts: { t: number; id
   const pieces = stops.slice(1).map((end, i) => {
     const start = stops[i];
     if ((end.t - start.t) * length < (physical ? MIN_WALL_LENGTH : MIN_RING_EDGE) - EPS)
-      throw new Error('That crossing would leave a boundary segment too short.');
+      throw new Error(
+        `That crossing would leave a boundary segment too short. "${'name' in edge ? edge.name : edge.id}" would be ${((end.t - start.t) * length).toFixed(4)} m long.`,
+      );
     return { ...edge, id: i === 0 ? edge.id : uid(), startId: start.id, endId: end.id };
   });
   for (const o of openings) {
@@ -195,7 +197,15 @@ export function normalizeBoundaries(p: ProjectDocument, floorId: string | null) 
         vx = d[0] - c[0],
         vy = d[1] - c[1];
       const det = ux * vy - uy * vx;
-      if (Math.abs(det) > 1e-12 * Math.hypot(ux, uy) * Math.hypot(vx, vy)) {
+      const sharedEnd =
+        one.startId === two.startId ||
+        one.startId === two.endId ||
+        one.endId === two.startId ||
+        one.endId === two.endId;
+      // Lines with a shared endpoint already have their intersection. Solving again for almost
+      // parallel edges amplifies cancellation and can invent a second, microscopic cut beside it.
+      // Still check endpoint projections below: collinear edges can overlap beyond the junction.
+      if (!sharedEnd && Math.abs(det) > 1e-12 * Math.hypot(ux, uy) * Math.hypot(vx, vy)) {
         const t = ((c[0] - a[0]) * vy - (c[1] - a[1]) * vx) / det;
         const s = ((c[0] - a[0]) * uy - (c[1] - a[1]) * ux) / det;
         if (

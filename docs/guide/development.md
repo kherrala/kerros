@@ -63,6 +63,33 @@ Use `make check` for formatting, TypeScript, core/frontend tests, backend tests 
 
 Use `make test-raster` for deterministic OpenCV/OCR fixtures in an isolated Docker container. The build downloads dependencies when necessary; test execution has networking disabled and consumes no LLM tokens. On a host with the native dependencies installed, `npm run test:raster` runs the same fixtures directly. Ordinary tests skip this native suite. It covers wall position/thickness, real gaps, oblique lines, exterior contours, labels, coordinate transforms, cache reuse, mixed PDFs and repeated symbol hypotheses.
 
+## Review the Stockmann sample layouts
+
+The Stockmann sample has illustrative retail, office, mezzanine and parking programmes within
+its sample building footprint. The departments and interior partitions are **not surveyed
+Stockmann floor plans**. Vertical cores remain aligned between storeys; circulation is reserved
+before departments, support rooms and furniture are placed.
+
+Generate a review set directly from the model:
+
+```sh
+npm run render:stockmann -- --out .cache/stockmann-plans
+```
+
+Open `.cache/stockmann-plans/index.html` for the gallery or `atlas.png` for all 17 floors. Each
+floor has an SVG and PNG, with walls, doors, windows, furnishings and vertical circulation.
+`project.json` can be imported into the editor. `--input path/to/project.json` renders an existing
+portable project instead. Generated files stay in the ignored `.cache` directory.
+
+`app/demo/stockmannFitout.ts` defines the floor programmes, `stockmannPlanning.ts` allocates
+non-overlapping spaces and partitions, and `stockmannGarage.ts` reserves parking circulation.
+`stockmannNavigation.ts` derives walks through the rooms and doorways while retaining vertical
+rides and exterior connections. Tests check containment, shared boundaries, clear walking paths,
+room and landing reachability, and parking clearances. The renderer validates its input too.
+
+Saved browser projects are preserved when the sample generator changes. Import the generated
+JSON into a separate project to compare new layouts without deleting an edited copy.
+
 ## Published static site
 
 The **Publish site** GitHub Actions workflow builds the homepage, editor, viewer and documentation,

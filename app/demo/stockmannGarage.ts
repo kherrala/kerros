@@ -3,13 +3,16 @@ import {
   addBarrier,
   addNavEdge,
   addNavNode,
+  barrierEnds,
   centroid,
   chainVertical,
   closeRing,
   createObject,
   navPath,
   pointInRing,
+  segmentProjection,
 } from '@kerros/schema';
+import { intersection, areaOf } from './stockmannPlanning';
 
 // The below-grade half of the Stockmann demo: three parking decks that sprawl past the tower
 // footprint, linked by drivable ramps, with entry/exit driveways surfacing at the surrounding streets.
@@ -27,6 +30,7 @@ export const GARAGE_FLOORS: [id: string, name: string, elevation: number, code: 
 ];
 /** The store level the garage cores surface into (Herkku food market, -9 m). */
 const LOBBY_FLOOR = 'floor-basement';
+const CROSSWALK_SOUTH = -12.5;
 // Scale of each deck relative to the plan above: each is a little smaller than the one over it,
 // because excavation costs money the deeper you go.
 const DECK_INSET = [1, 0.9, 0.78];
@@ -181,11 +185,35 @@ export function stockmannGarage(p: ProjectDocument): void {
 
   for (const deck of decks) {
     const c = centroid(deck.ring);
+    const core = coreOf(deck.ring);
+    const lobbyOutline = box(core, 13, 8);
+    const serviceOutline = box(at(c, 14, -7), deck.code === 'P1' ? 12 : 10, deck.code === 'P3' ? 8 : 6);
+    const pedestrian = box(at(c, -4, 0), 2.4, 105);
+    const crosswalk = box(at(c, 5, CROSSWALK_SOUTH), 25, 2.4);
+    const reserved = [
+      lobbyOutline,
+      serviceOutline,
+      pedestrian,
+      crosswalk,
+      // Ramp lanes and their turning aprons are circulation, never parking stalls.
+      box(at(c, deck.code === 'P1' ? 40 : 30, 0), 6, 45),
+    ];
+    const touchesReserved = (ring: Point[]) =>
+      reserved.some(r => intersection([closeRing(ring)], [closeRing(r)]).some(pg => areaOf(pg) > 0.01));
     // The deck plate — the outline the excavation is unioned from.
     const plate = area(p, 'zone', `Parking deck ${deck.code}`, deck.ring, deck.id, CONCRETE);
     plate.material = 'paving';
     // Bays fill the plan wherever they fit, so each deck's layout follows its own (smaller) outline.
-    const fits = (bay: Point[]) => bay.every(pt => pointInRing(pt, plate.rings![0]));
+    const fits = (bay: Point[]) => bay.every(pt => pointInRing(pt, plate.rings![0])) && !touchesReserved(bay);
+    for (const [label, outline] of [
+      ['Protected pedestrian spine', pedestrian],
+      ['Lobby crosswalk', crosswalk],
+    ] as const)
+      for (const rings of intersection([closeRing(outline)], plate.rings!)) {
+        const walk = area(p, 'room', `${label} · ${deck.code}`, rings[0], deck.id, '#cededb');
+        walk.category = 'circulation';
+        walk.material = 'paving';
+      }
     let bayNumber = 0;
     for (const [a, aisle] of AISLES.entries()) {
       // Size the drive lane to the bays that actually fit this deck, so lanes never overhang the plate
@@ -205,6 +233,8 @@ export function stockmannGarage(p: ProjectDocument): void {
         deck.id,
         LANE,
       );
+      const clippedLane = intersection(lane.rings!, plate.rings!)[0];
+      if (clippedLane) lane.rings = clippedLane;
       lane.symbol = 'driveway';
       // Strip lights down the middle of every drive lane, one every eight metres, which is what
       // lights a garage. Without them the walk had nothing to light the deck by and it read as a
@@ -269,13 +299,44 @@ export function stockmannGarage(p: ProjectDocument): void {
       for (const side of [-1, 1])
         for (let e = -52.5; e <= 52.5; e += 7.5) {
           const post = at(c, e, aisle + side * (AISLE / 2 + BAY_DEEP / 2));
-          if (pointInRing(post, plate.rings![0])) fixture(p, 'Column', post, deck.id, 'post');
+          if (pointInRing(post, plate.rings![0]) && !touchesReserved(box(post, 0.9, 0.9)))
+            fixture(p, 'Column', post, deck.id, 'post');
         }
     // Lift and stair core, with a door onto the deck.
-    const core = coreOf(deck.ring);
-    const lobby = area(p, 'room', `Garage lobby ${deck.code}`, box(core, 13, 8), deck.id, '#d3d7de');
+    const lobby = area(p, 'room', `Garage lobby ${deck.code}`, lobbyOutline, deck.id, '#d3d7de');
     lobby.height = 3;
+    lobby.category = 'circulation';
     lobby.feedId = `garage-lobby-${deck.id}`;
+    const service = area(
+      p,
+      'room',
+      deck.code === 'P1'
+        ? 'Bicycle & mobility store'
+        : deck.code === 'P2'
+          ? 'Charging support room'
+          : 'Ventilation plant',
+      serviceOutline,
+      deck.id,
+      '#c2c7c1',
+    );
+    service.category = 'service';
+    for (const room of [lobby, service]) {
+      const ring = closeRing(room.rings![0]);
+      const walls = ring.slice(1).map((end, i) => {
+        const wall = addBarrier(p, ring[i], end, deck.id, 'wall')!;
+        Object.assign(wall, { name: `${room.name} wall`, thickness: 0.2, height: 3.22, material: 'plaster' });
+        return wall;
+      });
+      const entrances =
+        room === lobby ? [at(core, 0, -4), at(core, 0, 4)] : [at(c, 14, deck.code === 'P3' ? -11 : -10)];
+      for (const point of entrances) {
+        const wall = walls.find(w => segmentProjection(point, ...barrierEnds(p, w)).distance < 0.01)!;
+        const hit = segmentProjection(point, ...barrierEnds(p, wall));
+        const door = createObject('door', hit.point, deck.id, `${room.name} entrance`);
+        Object.assign(door, { barrierId: wall.id, offset: hit.t * hit.length, width: 1.8, doorType: 'double' });
+        p.objects.push(door);
+      }
+    }
     const lift = createObject('elevator', at(core, -3.5, 0), deck.id, 'Garage lift');
     // The car sits square in the lobby it opens onto: the site origin carries the block's bearing, so
     // an unrotated box stands askew to every wall around it.
@@ -400,18 +461,27 @@ function garageNav(p: ProjectDocument, decks: { id: string; code: string; ring: 
     const inside = (pt: Point) => pointInRing(pt, plate.rings![0]);
     const spines: Point[][] = [];
     for (const aisle of AISLES) {
-      const line = [at(c, -50, aisle), at(c, -25, aisle), at(c, 0, aisle), at(c, 25, aisle), at(c, 50, aisle)].filter(
+      const line = [at(c, -50, aisle), at(c, -25, aisle), at(c, -4, aisle), at(c, 25, aisle), at(c, 50, aisle)].filter(
         inside,
       );
       if (line.length > 1) spines.push(navPath(p, deck.id, line).map(n => n.position));
     }
+    navPath(p, deck.id, [
+      at(c, -4, CROSSWALK_SOUTH),
+      at(c, 5, CROSSWALK_SOUTH),
+      at(c, 14, CROSSWALK_SOUTH),
+      at(c, 14, deck.code === 'P3' ? -11 : -10),
+    ]);
     // A cross corridor tying the aisles together and running into the core.
-    const cross = AISLES.map(a => at(c, 0, a)).filter(inside);
+    const cross = [...AISLES, CROSSWALK_SOUTH]
+      .sort((a, b) => a - b)
+      .map(a => at(c, -4, a))
+      .filter(inside);
     if (cross.length > 1) navPath(p, deck.id, cross);
     const core = at(centroid(deck.ring), -4, -MODULE / 2 - 9);
     const lift = p.objects.find(o => o.floorId === deck.id && o.name === 'Garage lift')!;
     const stair = p.objects.find(o => o.floorId === deck.id && o.name === 'Garage stair')!;
-    navPath(p, deck.id, [at(c, 0, AISLES[0]), core]);
+    navPath(p, deck.id, [at(c, -4, AISLES[0]), at(core, 0, -4), core, at(core, 0, 4), at(c, -4, 0)]);
     addNavEdge(p, 'walk', addNavNode(p, deck.id, core), addNavNode(p, deck.id, lift.position, lift.id), undefined);
     addNavEdge(p, 'walk', addNavNode(p, deck.id, core), addNavNode(p, deck.id, stair.position, stair.id), undefined);
     void spines;
