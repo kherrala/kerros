@@ -18,6 +18,8 @@ it('keeps overview pool holes and depth without tessellation or a transmission p
     waves = surface(detailed);
   expect(flat.material).toBeInstanceOf(THREE.MeshBasicMaterial);
   expect((waves.material as THREE.MeshPhysicalMaterial).transmission).toBeGreaterThan(0.9);
+  expect((waves.material as THREE.MeshPhysicalMaterial).side).toBe(THREE.FrontSide);
+  expect((waves.material as THREE.MeshPhysicalMaterial).forceSinglePass).toBe(true);
   expect(flat.geometry.getAttribute('position').count).toBeLessThan(waves.geometry.getAttribute('position').count / 10);
   overview.updateMatrixWorld(true);
   const ray = new THREE.Raycaster(new THREE.Vector3(0, 0, 5), new THREE.Vector3(0, 0, -1));

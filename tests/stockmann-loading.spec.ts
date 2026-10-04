@@ -76,7 +76,10 @@ test('opens Stockmann and reuses its saved layout in both viewer hosts', async (
             const p = read.result as ProjectDocument;
             counts = [p.floors.length, p.objects.length, p.navNodes!.length, p.navEdges!.length];
             p.name = name;
-            store.put(p, id);
+            // Simulate the previous release: startup must rename, not purge this edited save.
+            p.id = 'demo-campus-15';
+            store.put(p, p.id);
+            store.delete(id);
           };
           tx.oncomplete = () => {
             db.close();
@@ -90,7 +93,7 @@ test('opens Stockmann and reuses its saved layout in both viewer hosts', async (
       }),
     { id: STOCKMANN_ID, name },
   );
-  expect(counts).toEqual([17, 4719, 7158, 32510]);
+  expect(counts).toEqual([17, 4615, 7158, 32510]);
 
   await page.goto('/app.html');
   requested.length = 0;
@@ -101,6 +104,7 @@ test('opens Stockmann and reuses its saved layout in both viewer hosts', async (
     [],
   );
   await expect(page.getByText('All changes saved', { exact: true })).toBeVisible();
+  await expect(page).toHaveURL(/#p=stockmann&/);
 
   await page.goto('/viewer.html');
   await measure('savedViewer', () => page.getByRole('button', { name, exact: false }).click());
@@ -110,6 +114,18 @@ test('opens Stockmann and reuses its saved layout in both viewer hosts', async (
     'floor-08',
   );
   await page.screenshot({ path: info.outputPath('stockmann-viewer.png') });
+
+  // Legacy bookmarks keep resolving after the source record has been renamed.
+  for (const host of ['app.html', 'viewer.html']) {
+    await page.goto(`/${host}#p=demo-campus-15&f=floor-p3&v=2d`);
+    await expect(page.locator('.map-wrap')).toHaveAttribute('data-frame', 'ready');
+    await expect(page.locator('.app-shell').getByText(name, { exact: true }).first()).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Active floor', exact: true })).toHaveAttribute(
+      'data-value',
+      'floor-p3',
+    );
+    await expect(page).toHaveURL(/#p=stockmann&/);
+  }
   expect(errors).toEqual([]);
   await writeFile(info.outputPath('timings.json'), JSON.stringify(timings, null, 2));
   console.log(JSON.stringify(timings));

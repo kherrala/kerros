@@ -309,7 +309,7 @@ export function shaftVoids(
     const model = stairModel(project, o);
     if (o.kind === 'stairs' && (model === 'straight' || model === 'escalator')) {
       const run = flightRun(project, o, flight.rise, model, index);
-      const height = ceiling ? flight.rise : level.elevation - flight.from.elevation;
+      const height = level.elevation + (ceiling ? level.height : 0) - flight.from.elevation;
       out.push(headroomBand(run, flight.rise, height, o.width));
       continue;
     }

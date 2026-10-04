@@ -27,6 +27,7 @@ import {
 } from '@kerros/editor/host';
 import type { BackroomsOptions } from './demo/backrooms';
 import { BACKROOMS_ID, currentDemoId, DEMO_IDS, SILO_ID, STOCKMANN_ID } from './demo/ids';
+import { migrateStockmann } from './demo/migrate';
 import { BackroomsCard } from './BackroomsCard';
 import { useLiftController } from './LiftPanel';
 // The generators are dynamic: between them they build several thousand objects' worth of code, and
@@ -155,16 +156,16 @@ function Home() {
       .then(setSaved)
       .catch(() => setSaved([]));
   };
-  // Demo generators evolve (and change ids): stale saved demo copies would otherwise shadow the
-  // new content via deep links and the picker forever. Purge outdated demo saves on startup.
+  // Stockmann keeps its saved layout under one stable ID. Migrate before pruning other obsolete demos.
   useEffect(() => {
     (async () => {
+      await migrateStockmann(adapters.projects);
       const current = new Set(DEMO_IDS);
       for (const summary of await adapters.projects.list().catch(() => []))
         if (summary.id.startsWith('demo-') && !current.has(summary.id))
           await adapters.projects.delete(summary.id).catch(() => {});
       refresh();
-    })();
+    })().catch(e => setError((e as Error).message));
   }, [adapters.projects]);
   // Deep links (#p=<id>&f=…&v=…&c=…) reopen a project straight into the exact linked view. Saved
   // copies win; the built-in demo generators answer for their fixed ids on a fresh browser.
@@ -172,22 +173,29 @@ function Home() {
     const link = parseViewLink();
     if (!link.project) return;
     (async () => {
-      const saved = await adapters.projects.load(link.project!).catch(() => null);
+      await migrateStockmann(adapters.projects);
       const wanted = link.project!;
-      // A saved demo copy counts only when its id matches the CURRENT generation — an old id in
-      // the hash must never resurrect a stale save (the startup purge may not have run yet).
       const current = currentDemoId(wanted);
+      const saved = await adapters.projects.load(current ?? wanted).catch(() => null);
       const staleDemo = current !== null && current !== wanted;
-      const demo = (staleDemo ? undefined : saved) ?? (await builtIn(current));
-      if (demo) setOpen({ project: demo, readOnly: false, view: link });
-      else setError('The linked project is not available in this browser.');
-    })();
+      const demo = (staleDemo && current !== STOCKMANN_ID ? undefined : saved) ?? (await builtIn(current));
+      if (demo) {
+        const view = { ...link, project: demo.id };
+        if (demo.id !== wanted) writeViewLink(view);
+        setOpen({ project: demo, readOnly: false, view });
+      } else setError('The linked project is not available in this browser.');
+    })().catch(e => setError((e as Error).message));
   }, [adapters.projects]);
   // Reopening a demo resumes its saved copy so edits survive the trip back home.
   async function openDemo(readOnly = false) {
-    const existing = await adapters.projects.load(STOCKMANN_ID).catch(() => null);
-    const project = existing ?? (await import('./demo/demo')).createDemo();
-    setOpen({ project, readOnly });
+    try {
+      await migrateStockmann(adapters.projects);
+      const existing = await adapters.projects.load(STOCKMANN_ID);
+      const project = existing ?? (await import('./demo/demo')).createDemo();
+      setOpen({ project, readOnly });
+    } catch (e) {
+      setError((e as Error).message);
+    }
   }
   async function openSilo() {
     const existing = await adapters.projects.load(SILO_ID).catch(() => null);

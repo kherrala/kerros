@@ -1,5 +1,26 @@
 import { centroid, pointInRing, ringArea } from '../model/geometry';
 import type { Floor, ProjectDocument, Ring, SiteObject } from '../model/types';
+import { flights, primaryShafts } from '../model/vertical';
+import { rampFloors } from '../model/ramps';
+
+/** Build the structural surroundings of both landings before a passenger starts climbing.
+ * The selected floor remains the walking datum; these levels only supply visible context. */
+export function walkConnectionContext(project: ProjectDocument, active: Floor, primary = primaryShafts(project)) {
+  const levels = new Map<string, Floor>();
+  for (const o of project.objects) {
+    const pairs =
+      o.kind === 'stairs' && primary.has(o.id)
+        ? flights(project, o).map(f => [f.from, f.to])
+        : o.slope
+          ? [Object.values(rampFloors(project, o))]
+          : [];
+    for (const pair of pairs) {
+      if (!pair.some(f => f?.id === active.id)) continue;
+      for (const f of pair) if (f && f.id !== active.id) levels.set(f.id, f);
+    }
+  }
+  return [...levels.values()];
+}
 
 /** Structural storeys seen through an authored atrium. Stops at a plate that closes the opening;
  * room fit-out is deliberately left on its own floor. A room nested in a zone adds no new void. */

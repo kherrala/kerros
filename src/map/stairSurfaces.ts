@@ -1,7 +1,8 @@
 import { BODY } from './walkDimensions';
 import type { Point, ProjectDocument, Ring } from '../model/types';
 import type { StatusReading } from '../model/live';
-import { add, distance, pointInRing, rectangle, rotate, segmentProjection } from '../model/geometry';
+import { add, distance, pointInRing, rectangle, rotate, segmentProjection, slopeElevation } from '../model/geometry';
+import { rampFloors } from '../model/ramps';
 import { flights, flightRun, primaryShafts, stairModel } from '../model/vertical';
 import { spiralGeometry, stairGeometry } from '../model/stairGeometry';
 import { supportedStep } from './walkSurfaces';
@@ -13,6 +14,7 @@ export interface StairSurface {
   low: number;
   high: number;
   ring: Ring;
+  holes?: Ring[];
   height(at: Point): number;
   drive?: Point;
   rail?: true;
@@ -24,6 +26,20 @@ export function stairSurfaces(project: ProjectDocument, statuses?: Map<string, S
   const primary = primaryShafts(project),
     surfaces: StairSurface[] = [];
   for (const o of project.objects) {
+    if (o.slope && o.rings?.length) {
+      const { low, high } = rampFloors(project, o);
+      if (low && high)
+        surfaces.push({
+          flightId: o.id,
+          fromFloor: low.id,
+          toFloor: high.id,
+          low: o.slope.low,
+          high: o.slope.high,
+          ring: o.rings[0],
+          holes: o.rings.slice(1),
+          height: at => slopeElevation(o.slope!, at),
+        });
+    }
     if (o.kind !== 'stairs' || !primary.has(o.id)) continue;
     const model = stairModel(project, o);
     for (const [index, flight] of flights(project, o).entries()) {
@@ -103,6 +119,7 @@ export class StairWalker {
     if (!this.active) return;
     this.active = surfaces
       .filter(s => !s.rail && s.flightId === this.active!.flightId && pointInRing(at, s.ring))
+      .filter(s => !s.holes?.some(h => pointInRing(at, h)))
       .sort((a, b) => Math.abs(a.height(at) - this.height) - Math.abs(b.height(at) - this.height))[0];
   }
   reset(elevation: number) {
@@ -125,7 +142,7 @@ export class StairWalker {
       )
     )
       return from;
-    const hits = surfaces.filter(s => !s.rail && pointInRing(to, s.ring));
+    const hits = surfaces.filter(s => !s.rail && pointInRing(to, s.ring) && !s.holes?.some(h => pointInRing(to, h)));
     const reachable = hits
       .filter(s => Math.abs(s.height(to) - previous) <= 0.3)
       .sort((a, b) => Math.abs(a.height(to) - previous) - Math.abs(b.height(to) - previous));

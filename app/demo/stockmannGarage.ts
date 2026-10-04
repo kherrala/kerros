@@ -183,6 +183,60 @@ export function stockmannGarage(p: ProjectDocument): void {
   }));
   const coreOf = (ring: Point[]) => at(centroid(ring), -4, -MODULE / 2 - 9);
 
+  // Ramps between decks: alternating runs so a car works its way down rather than dropping through
+  // the same slot twice. Each has its own lane, and the lower lane sits further in than the one above
+  // it: every deck is smaller than the deck over it, so a ramp that simply ran back down the first
+  // one's strip — which is what a single lane offset meant, the same rectangle twice — put the P2→P3
+  // ramp's foot a couple of metres off the edge of the P3 plate, a car driving down onto nothing.
+  const RAMP_LANES = [40, 30];
+  for (let i = 0; i < decks.length - 1; i++) {
+    const from = decks[i],
+      to = decks[i + 1];
+    const dir = i % 2 === 0 ? SOUTH : NORTH;
+    const highEnd = at(centroid(from.ring), RAMP_LANES[i % RAMP_LANES.length], i % 2 === 0 ? -18 : 18);
+    ramp(
+      p,
+      `Ramp ${from.code} → ${to.code}`,
+      highEnd,
+      add(highEnd, scale(dir, 36)),
+      3.4,
+      from.elevation,
+      to.elevation,
+      from.id,
+    );
+  }
+
+  // Street connections: cut-and-cover driveways that climb from the top deck all the way out to grade
+  // at the surrounding roads. They are long because they have to be — a 15 m rise at a drivable
+  // gradient needs about a hundred metres of run, which carries them well past the tower footprint and
+  // out under the streets. That reach is exactly the case the excavation union exists to cover.
+  const top = decks[0];
+  const tc = centroid(top.ring);
+  const mouths: { gate: SiteObject; foot: Point }[] = [];
+  for (const [name, dir, out] of [
+    ['Entry ramp · Mannerheimintie', WEST, 151],
+    ['Exit ramp · Kaivokatu', SOUTH, 151],
+  ] as [string, Point, number][]) {
+    const mouth = add(tc, scale(dir, out)),
+      foot = add(tc, scale(dir, 26));
+    ramp(p, name, mouth, foot, 4, 0, top.elevation, top.id);
+    // The mouth is the one place the garage touches the outside world, so it is a real object on the
+    // site level rather than the far end of a buried zone: a gate you can route to, name and stand
+    // at. Without it the ramps ran a hundred metres out under the streets and connected to nothing.
+    const gate = createObject('gate', mouth, null, name.replace(' ramp', ' · garage'));
+    gate.symbol = 'driveway';
+    gate.width = 4.4;
+    gate.depth = 0.6;
+    gate.height = 3.2;
+    gate.rotation = heading(dir);
+    gate.color = '#6a7079';
+    p.objects.push(gate);
+    mouths.push({ gate, foot });
+  }
+  // A flat service link east to the existing Keskuskatu loading dock.
+  const link = area(p, 'zone', 'Service link · Keskuskatu', strip(at(tc, 24, 0), EAST, 40, 3.2), top.id, LANE);
+  link.symbol = 'service';
+
   for (const deck of decks) {
     const c = centroid(deck.ring);
     const core = coreOf(deck.ring);
@@ -196,7 +250,14 @@ export function stockmannGarage(p: ProjectDocument): void {
       pedestrian,
       crosswalk,
       // Ramp lanes and their turning aprons are circulation, never parking stalls.
-      box(at(c, deck.code === 'P1' ? 40 : 30, 0), 6, 45),
+      ...p.objects
+        .filter(o => o.slope && [o.slope.low, o.slope.high].some(z => Math.abs(z - deck.elevation) < 0.01))
+        .map(o => {
+          const [high, low] = o.slope!.axis;
+          const length = Math.hypot(low[0] - high[0], low[1] - high[1]);
+          const direction: Point = [(low[0] - high[0]) / length, (low[1] - high[1]) / length];
+          return strip(add(high, scale(direction, -6)), direction, length + 12, 4.5);
+        }),
     ];
     const touchesReserved = (ring: Point[]) =>
       reserved.some(r => intersection([closeRing(ring)], [closeRing(r)]).some(pg => areaOf(pg) > 0.01));
@@ -349,60 +410,6 @@ export function stockmannGarage(p: ProjectDocument): void {
     stair.servedFloorIds = [LOBBY_FLOOR, ...GARAGE_FLOORS.map(([id]) => id)];
     p.objects.push(stair);
   }
-
-  // Ramps between decks: alternating runs so a car works its way down rather than dropping through
-  // the same slot twice. Each has its own lane, and the lower lane sits further in than the one above
-  // it: every deck is smaller than the deck over it, so a ramp that simply ran back down the first
-  // one's strip — which is what a single lane offset meant, the same rectangle twice — put the P2→P3
-  // ramp's foot a couple of metres off the edge of the P3 plate, a car driving down onto nothing.
-  const RAMP_LANES = [40, 30];
-  for (let i = 0; i < decks.length - 1; i++) {
-    const from = decks[i],
-      to = decks[i + 1];
-    const dir = i % 2 === 0 ? SOUTH : NORTH;
-    const highEnd = at(centroid(from.ring), RAMP_LANES[i % RAMP_LANES.length], i % 2 === 0 ? -18 : 18);
-    ramp(
-      p,
-      `Ramp ${from.code} → ${to.code}`,
-      highEnd,
-      add(highEnd, scale(dir, 36)),
-      3.4,
-      from.elevation,
-      to.elevation,
-      from.id,
-    );
-  }
-
-  // Street connections: cut-and-cover driveways that climb from the top deck all the way out to grade
-  // at the surrounding roads. They are long because they have to be — a 15 m rise at a drivable
-  // gradient needs about a hundred metres of run, which carries them well past the tower footprint and
-  // out under the streets. That reach is exactly the case the excavation union exists to cover.
-  const top = decks[0];
-  const tc = centroid(top.ring);
-  const mouths: { gate: SiteObject; foot: Point }[] = [];
-  for (const [name, dir, out] of [
-    ['Entry ramp · Mannerheimintie', WEST, 151],
-    ['Exit ramp · Kaivokatu', SOUTH, 151],
-  ] as [string, Point, number][]) {
-    const mouth = add(tc, scale(dir, out)),
-      foot = add(tc, scale(dir, 26));
-    ramp(p, name, mouth, foot, 4, 0, top.elevation, top.id);
-    // The mouth is the one place the garage touches the outside world, so it is a real object on the
-    // site level rather than the far end of a buried zone: a gate you can route to, name and stand
-    // at. Without it the ramps ran a hundred metres out under the streets and connected to nothing.
-    const gate = createObject('gate', mouth, null, name.replace(' ramp', ' · garage'));
-    gate.symbol = 'driveway';
-    gate.width = 4.4;
-    gate.depth = 0.6;
-    gate.height = 3.2;
-    gate.rotation = heading(dir);
-    gate.color = '#6a7079';
-    p.objects.push(gate);
-    mouths.push({ gate, foot });
-  }
-  // A flat service link east to the existing Keskuskatu loading dock.
-  const link = area(p, 'zone', 'Service link · Keskuskatu', strip(at(tc, 24, 0), EAST, 40, 3.2), top.id, LANE);
-  link.symbol = 'service';
 
   // Underground retaining walls reach the ceiling. The old one-metre curbs exposed the sky in
   // POV. Cut actual ramp/service mouths out of the perimeter before emitting the full-height walls.

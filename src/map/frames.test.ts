@@ -12,7 +12,7 @@ import {
 } from './SceneLayer';
 import { EYE } from './walk';
 import { createDemo } from '../../app/demo/demo';
-import { ringArea } from '../model/geometry';
+import { pointInRing, ringArea } from '../model/geometry';
 import { DEPTH_CAP, undergroundView } from './underground';
 import { addFloor, newProject } from '../model/testFixtures';
 import { createObject } from '../model/factory';
@@ -87,11 +87,10 @@ describe('shell plates', () => {
     expect(Math.max(...plates.map(pg => Math.abs(ringArea(pg[0]))))).toBeGreaterThan(2000);
   });
 
-  it('reaches down the ramps, which is what runs out past the building', () => {
-    const ramp = demo.objects.find(o => o.floorId === 'floor-p1' && o.slope)!;
+  it('does not flatten the street ramp into a horizontal extension of the garage slab', () => {
+    const ramp = demo.objects.find(o => o.floorId === 'floor-p1' && o.slope?.high === 0)!;
     const plates = shellPlate(demo, 'floor-p1');
-    const far = Math.max(...ramp.rings![0].map(pt => pt[0]));
-    expect(Math.max(...plates.flatMap(pg => pg[0].map(pt => pt[0])))).toBeGreaterThanOrEqual(far - 0.01);
+    expect(plates.some(pg => pointInRing(ramp.slope!.axis[0], pg[0]))).toBe(false);
   });
 
   it('keeps a fit-out storey to one plate', () => {

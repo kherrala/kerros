@@ -83,6 +83,14 @@ describe('what a plate and a lid each have to be open for', () => {
 });
 
 describe('how big the hole is', () => {
+  it('opens a low ceiling early enough even when the destination slab is higher', () => {
+    const { p, shaft, ids } = tower('stairs', { stairModel: 'straight', width: 2.5, depth: 9 });
+    p.floors[0].height = 3.4;
+    const ceiling = shaftVoids(p, ids[0], new Set([shaft.id]), { through: 'ceiling' })[0];
+    const landing = shaftVoids(p, ids[1], new Set([shaft.id]))[0];
+    // The stair must clear the soffit 0.8 m before it clears the next storey's slab.
+    expect(ringArea(ceiling)).toBeGreaterThan(ringArea(landing));
+  });
   it('cuts a lift its whole footprint: a shaft is a shaft all the way up', () => {
     const { p, shaft, ids } = tower('elevator', { width: 2, depth: 2 });
     expect(area(p, ids[2], shaft)).toBeCloseTo(4, 1);

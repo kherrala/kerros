@@ -111,6 +111,12 @@ metres in the same frame as `Floor.elevation`, so one ramp can span several floo
 constant beyond either end of the axis, so a footprint longer than its axis keeps level aprons where it
 meets the decks it joins. `slopeElevation(slope, point)` gives the elevation anywhere on the plate.
 
+For an inter-floor ramp, file the area on its upper floor and match `high` and `low` to the two
+floor elevations in the same building. Walk mode follows that profile in either direction and
+switches floors at the landing. The upper slab and the lower ceiling receive derived openings;
+stairs and ramps bring their destination level's structural surroundings into view before arrival.
+Keep the ramp footprint and its approaches clear of fixtures on both connected floors.
+
 Below-grade ramps also widen the excavation: the 3D pit is the union of every below-grade floor plate
 *and* every ramp, so a driveway that surfaces out at the street is cut through soil for its whole run
 rather than hanging in open air.

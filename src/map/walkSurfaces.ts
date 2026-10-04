@@ -1,5 +1,6 @@
 import type { Point, ProjectDocument, Ring, SiteObject } from '../model/types';
-import { objectArea, pointInRing } from '../model/geometry';
+import { objectArea, pointInRing, slopeElevation } from '../model/geometry';
+import { rampFloors } from '../model/ramps';
 import { spacePoint } from '../model/spaces';
 import { wallPieces } from './features';
 import { wallFootprints } from './wallJoins';
@@ -30,6 +31,10 @@ export function walkingWallRings(project: ProjectDocument, floorId: string | nul
 export function floorSupport(project: ProjectDocument) {
   const floors = new Map(project.floors.map(f => [f.id, f]));
   const areas = new Map<string | null, SiteObject[]>();
+  const ramps = project.objects.filter(o => o.slope && o.rings?.length);
+  const openings = new Map(
+    project.floors.map(f => [f.id, ramps.filter(o => o.floorId === f.id && rampFloors(project, o).high?.id === f.id)]),
+  );
   for (const o of project.objects) {
     if ((o.kind !== 'room' && o.kind !== 'zone') || !o.rings?.length) continue;
     const own = areas.get(o.floorId) ?? [];
@@ -67,6 +72,15 @@ export function floorSupport(project: ProjectDocument) {
   };
   const supports = (at: Point, id: string | null): boolean => {
     const floor = floors.get(id ?? '');
+    // The ramp walker supplies support on the incline. The deck must not supply an invisible
+    // horizontal floor above it when someone tries to enter the opening from the side.
+    if (
+      floor &&
+      openings
+        .get(floor.id)
+        ?.some(o => pointInRing(at, o.rings![0]) && slopeElevation(o.slope!, at) < floor.elevation - 0.05)
+    )
+      return false;
     if (!floor || !areas.get(id)?.length || solid(at, id)) return true;
     if (hole(at, id)) return !!dropAt(at, id);
     // An exposed gallery edge is not an authored opening. At grade, the surrounding ground

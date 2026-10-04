@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import type { Point, SiteObject } from '../model/types';
-import { rotate } from '../model/geometry';
+import { closeRing, rotate } from '../model/geometry';
 import type { MaterialLibrary } from './materials';
 import { metricUVs } from './surfaces';
 import { poolBounces } from './poolLighting';
@@ -27,6 +27,30 @@ vec3 poolWave(vec2 p) {
   return wave;
 }
 `;
+
+/** Screen-space refraction has no knowledge of occluders: its exit pixel may actually show the
+ * deck in front of the pool. Fade to the undistorted sample when that sight line crosses outside
+ * the basin, including holes, instead of importing a camera-dependent patch of foreground tiles. */
+function refractionGuard(edgeCount: number) {
+  return `
+uniform vec4 poolEdges[${edgeCount}];
+uniform float poolRefractionGuard;
+float poolClearance(vec2 p) {
+  bool inside = false;
+  float clearance = 1e6;
+  for (int i = 0; i < ${edgeCount}; i++) {
+    vec2 a = poolEdges[i].xy, b = poolEdges[i].zw, edge = b-a;
+    float t = clamp(dot(p-a, edge) / max(dot(edge, edge), 1e-8), 0.0, 1.0);
+    clearance = min(clearance, length(p-a-edge*t));
+    if ((a.y > p.y) != (b.y > p.y)) {
+      float x = a.x + (p.y-a.y) * edge.x / edge.y;
+      if (p.x < x) inside = !inside;
+    }
+  }
+  return inside ? clearance : -clearance;
+}
+`;
+}
 
 /** Tessellate the authored shape without moving its boundary or closing its holes. */
 function waveGeometry(shape: THREE.Shape, base: number): THREE.BufferGeometry {
@@ -126,12 +150,22 @@ export function makePool(
     attenuationDistance: 12,
     transparent: true,
     depthWrite: false,
-    side: THREE.DoubleSide,
+    // Water is an open surface viewed from above, not a solid glass volume. DoubleSide makes
+    // Three render its back face into the transmission target and resolve mipmaps a second time.
+    side: THREE.FrontSide,
+    forceSinglePass: true,
     envMapIntensity: 0.8,
   });
+  const edges = rings
+    .map(closeRing)
+    .flatMap(ring => ring.slice(0, -1).map((a, i) => new THREE.Vector4(...xy(a), ...xy(ring[i + 1]))));
+  const guard = { value: 1 };
+  water.userData.refractionGuard = guard;
   water.onBeforeCompile = shader => {
     shader.uniforms.poolTime = time;
     shader.uniforms.poolRipple = { value: o.water!.ripple ?? 0.015 };
+    shader.uniforms.poolEdges = { value: edges };
+    shader.uniforms.poolRefractionGuard = guard;
     shader.vertexShader =
       waves +
       shader.vertexShader.replace(
@@ -140,14 +174,31 @@ export function makePool(
       );
     shader.fragmentShader =
       waves +
-      shader.fragmentShader.replace(
-        '#include <normal_fragment_begin>',
-        `#include <normal_fragment_begin>
+      refractionGuard(edges.length) +
+      shader.fragmentShader
+        .replace(
+          '#include <normal_fragment_begin>',
+          `#include <normal_fragment_begin>
       vec3 wave = poolWave(poolXY);
       normal = normalize(mat3(viewMatrix) * vec3(-wave.y, -wave.z, 1.0)) * faceDirection;`,
-      );
+        )
+        .replace(
+          '#include <transmission_pars_fragment>',
+          THREE.ShaderChunk.transmission_pars_fragment.replaceAll(
+            'vec4 ndcPos = projMatrix * viewMatrix * vec4( refractedRayExit, 1.0 );',
+            `
+          vec3 sight = refractedRayExit - cameraPosition;
+          // Test at the rim, slightly above the waterline, to include the retaining face.
+          float crossing = (position.z + 0.12 - cameraPosition.z) / min(sight.z, -0.00001);
+          vec2 entry = cameraPosition.xy + sight.xy * crossing;
+          float safeRefraction = smoothstep(0.12, 0.42, poolClearance(entry));
+          refractedRayExit = mix(position, refractedRayExit, mix(1.0, safeRefraction, poolRefractionGuard));
+          vec4 ndcPos = projMatrix * viewMatrix * vec4(refractedRayExit, 1.0);
+          `,
+          ),
+        );
   };
-  water.customProgramCacheKey = () => 'pool-water-v1';
+  water.customProgramCacheKey = () => `pool-water-v2-${edges.length}`;
   const surface = add(waveGeometry(shape, base - 0.08), water);
   surface.userData.water = true;
   surface.renderOrder = 2;

@@ -59,7 +59,11 @@ import { ambient, FIXED, type Sun, sunlight } from './lighting';
 import { FixtureLights } from './FixtureLights';
 import { EYE } from './walk';
 import { tallSpaceContext } from './walkSurfaces';
-import { walkVoidContext } from './walkContext';
+import { walkVoidContext, walkConnectionContext } from './walkContext';
+import { rampJoins } from '../model/ramps';
+import { rampVoids, rampSections } from './rampGeometry';
+export { rampJoins } from '../model/ramps';
+export { rampVoids } from './rampGeometry';
 import { applyPoolCaustics, makePool, makeWaterSlide } from './water';
 import { cabinDimensions, cabinFloorVoids, elevatorDoorWidth, elevatorWalls } from './elevators';
 import { CabinMaterials } from './CabinMaterials';
@@ -168,8 +172,8 @@ const snapRing = (ring: Ring): Ring =>
  *  Only the storey's top-level areas go in. A parking deck is one plate carrying four hundred bays
  *  drawn on it as zones; unioning every one of them is the input polygon-clipping's sweep line gives
  *  up on, and the caller's catch then left the deck with no slab at all. The bays are inside the
- *  plate anyway, so they say nothing about where the storey reaches. Ramps do — they run out past
- *  the building to the street — so they are unioned in.
+ *  plate anyway, so they say nothing about where the storey reaches. Sloped areas keep their own
+ *  geometry: flattening their footprints into this plate seals the ramp with a horizontal lid.
  *
  *  A storey drawn as rooms rather than as a zone has no single plate, and `floorOutline` already
  *  knows how to make one: rooms plus the walls between them, snapped and cached. */
@@ -181,20 +185,19 @@ export function shellPlate(
 ): Ring[][] {
   const index = floorIndex(project);
   const own = index.objects.get(floorId) ?? [];
-  const zones = own.filter(o => o.kind === 'zone' && !o.parentId && o.rings?.length);
+  const zones = own.filter(o => o.kind === 'zone' && !o.parentId && !o.slope && o.rings?.length);
   // A zone keeps all its rings: the -1A gallery is a loop around the atrium, and dropping its hole
   // would floor the void it exists to ring.
   const plates: Ring[][] = zones.length
     ? zones.map(o => o.rings!.map(r => snapRing(closeRing(r))))
     : floorOutline(project, floorId).map(r => [snapRing(closeRing(r))]);
-  const ramps: Ring[][] = own.filter(o => o.slope && o.rings?.length).map(o => [snapRing(closeRing(o.rings![0]))]);
-  const input = [...plates, ...ramps];
+  const input = plates;
   if (!input.length) return [];
   try {
     let merged = polygonClipping.union(input[0], ...input.slice(1)) as unknown as Ring[][];
     // A shaft that carries on past this storey goes through its floor, and a slab drawn over it is
     // a lid on the flight below.
-    const voids = shaftVoids(project, floorId, primary, voidOptions);
+    const voids = [...shaftVoids(project, floorId, primary, voidOptions), ...rampVoids(project, floorId)];
     if (voids.length)
       merged = polygonClipping.difference(
         merged as never,
@@ -203,10 +206,9 @@ export function shellPlate(
     return merged;
   } catch {
     // Snapping is not a guarantee, and a storey with no slab reads as a storey that is not there.
-    // Its largest area and its ramps are the shape a shell is for: where the storey is, how far it
-    // reaches, and nothing inside it.
+    // Fall back to the largest authored plate without inventing a horizontal surface over ramps.
     const largest = index.outlines.get(floorId)?.rings;
-    return [...(largest ? [largest.map(r => closeRing(r))] : []), ...ramps];
+    return largest ? [largest.map(r => closeRing(r))] : [];
   }
 }
 /** Milliseconds between frames of a permanent animation — 24 fps, a step band's own rate. */
@@ -237,27 +239,6 @@ const boxesMeet = (a: Ring, b: Ring) => {
     if (ahi < blo || bhi < alo) return false;
   }
   return true;
-};
-
-/** Does this ramp join the level at `elevation`? A sloped zone spans two decks and is filed on one of
- *  them, so the other has to claim it or the deck a car arrives at draws no way onto it. Its ends are
- *  what it joins — not every storey the incline passes through on the way. */
-export const rampJoins = (o: SiteObject, elevation: number) =>
-  !!o.slope && [o.slope.low, o.slope.high].some(end => Math.abs(end - elevation) < 0.01);
-
-/** The plan hole a deck's own driveway needs: the ramp that sets off from this level, and so is under
- *  this level's plate from the moment it starts falling.
- *
- *  Only that one. A ramp arriving from the deck above lies OVER this plate and wants no hole — cut
- *  one and the storey gets a forty-metre trench with nothing under it — and a driveway that merely
- *  passes this elevation a hundred metres away beneath the street has nothing to do with this floor,
- *  which is how a slot for the Mannerheimintie ramp came to be cut through the shop. */
-export const rampVoids = (project: ProjectDocument, floorId: string): Ring[] => {
-  const level = project.floors.find(f => f.id === floorId);
-  if (!level) return [];
-  return project.objects
-    .filter(o => o.floorId === floorId && o.slope && o.rings?.length && Math.abs(o.slope.high - level.elevation) < 0.01)
-    .map(o => closeRing(o.rings![0]));
 };
 
 /** An escalator step: 0.4 m of going and a 0.2 m face, the world over. These are properties of the
@@ -768,34 +749,36 @@ export class SceneLayer implements CustomLayerInterface {
     color: string,
     ghost: boolean | number = false,
   ) {
-    const shape = new THREE.Shape(o.rings![0].map(p => new THREE.Vector2(...this.xy(p))));
-    shape.holes = o.rings!.slice(1).map(r => new THREE.Path(r.map(p => new THREE.Vector2(...this.xy(p)))));
-    const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
-    geometry.translate(0, 0, -thickness); // extrude downward: the driving surface is the top face
-    metricUVs(geometry);
-    // Ride the slope in scene space: Mercator is conformal, so at building scale xy() is an affine
-    // similarity and projecting onto the transformed axis matches slopeElevation() in local metres.
-    const [ax, ay] = this.xy(slope.axis[0]),
-      [bx, by] = this.xy(slope.axis[1]);
-    const dx = bx - ax,
-      dy = by - ay,
-      len2 = dx * dx + dy * dy;
-    const positions = geometry.getAttribute('position');
-    for (let i = 0; i < positions.count; i++) {
-      const t = len2
-        ? Math.max(0, Math.min(1, ((positions.getX(i) - ax) * dx + (positions.getY(i) - ay) * dy) / len2))
-        : 0;
-      // getZ is 0 on the driving surface and -thickness underneath, so the deck keeps its thickness.
-      positions.setZ(i, this.present(positions.getZ(i) + slope.high + (slope.low - slope.high) * t + lift));
+    for (const rings of rampSections(o.rings!, slope)) {
+      const shape = new THREE.Shape(rings[0].map(p => new THREE.Vector2(...this.xy(p))));
+      shape.holes = rings.slice(1).map(r => new THREE.Path(r.map(p => new THREE.Vector2(...this.xy(p)))));
+      const geometry = new THREE.ExtrudeGeometry(shape, { depth: thickness, bevelEnabled: false });
+      geometry.translate(0, 0, -thickness); // extrude downward: the driving surface is the top face
+      metricUVs(geometry);
+      // Ride the slope in scene space: Mercator is conformal, so at building scale xy() is an affine
+      // similarity and projecting onto the transformed axis matches slopeElevation() in local metres.
+      const [ax, ay] = this.xy(slope.axis[0]),
+        [bx, by] = this.xy(slope.axis[1]);
+      const dx = bx - ax,
+        dy = by - ay,
+        len2 = dx * dx + dy * dy;
+      const positions = geometry.getAttribute('position');
+      for (let i = 0; i < positions.count; i++) {
+        const t = len2
+          ? Math.max(0, Math.min(1, ((positions.getX(i) - ax) * dx + (positions.getY(i) - ay) * dy) / len2))
+          : 0;
+        // getZ is 0 on the driving surface and -thickness underneath, so the deck keeps its thickness.
+        positions.setZ(i, this.present(positions.getZ(i) + slope.high + (slope.low - slope.high) * t + lift));
+      }
+      geometry.computeVertexNormals();
+      this.batch.add(
+        geometry,
+        ghost
+          ? this.materials.ghost(color, typeof ghost === 'number' ? ghost : this.ghostAlpha)
+          : this.materials.solid(color),
+        o.id,
+      );
     }
-    geometry.computeVertexNormals();
-    this.batch.add(
-      geometry,
-      ghost
-        ? this.materials.ghost(color, typeof ghost === 'number' ? ghost : this.ghostAlpha)
-        : this.materials.solid(color),
-      o.id,
-    );
   }
   /** The façade envelope for a set of levels: each level's slab, its exterior walls with their
    *  authored finish, and the glazing punched into them. Interior partitions are deliberately left
@@ -968,7 +951,7 @@ export class SceneLayer implements CustomLayerInterface {
     primary: Set<string>,
     through: 'floor' | 'ceiling' = 'floor',
     wells = true,
-  ): Ring[] {
+  ): Ring[][] {
     const key = `${floorId}|${through}|${wells}`;
     let voids = this.voidCache.get(key);
     if (!voids) {
@@ -977,15 +960,10 @@ export class SceneLayer implements CustomLayerInterface {
       voids = wells
         ? shaftVoids(project, floorId, primary, { through, lowest: this.buried || this.walking ? -Infinity : -0.01 })
         : [];
-      // A driveway is a hole in a deck as surely as a stairwell is. The ramp off P1 dives under the
-      // plate it is filed on the moment it starts falling, so drawn whole that plate is a lid over
-      // it and the ramp was invisible from the deck it leaves. Where ramp and deck meet they are
-      // level with each other, so the ramp fills exactly what it cuts. Floors only: nothing drives
-      // up out of the storey overhead into the ceiling.
+      voids = [...voids, ...rampVoids(project, floorId, through)];
       if (through === 'floor')
         voids = [
           ...voids,
-          ...rampVoids(project, floorId),
           ...project.objects.filter(o => o.floorId === floorId && o.water && o.rings?.length).map(o => o.rings![0]),
           // In POV the car supplies its own floor, including at the lowest landing. Stairwell
           // cuts are disabled when no lower storey is drawn; leaving the room finish here put
@@ -994,17 +972,17 @@ export class SceneLayer implements CustomLayerInterface {
         ];
       this.voidCache.set(key, voids);
     }
-    if (!voids.length || !rings.length) return rings;
+    if (!voids.length || !rings.length) return rings.length ? [rings] : [];
     const hits = voids.filter(v => boxesMeet(v, rings[0]));
-    if (!hits.length) return rings;
+    if (!hits.length) return rings.length ? [rings] : [];
     try {
       const cut = polygonClipping.difference(
         [rings.map(r => closeRing(r))] as never,
         ...hits.map(v => [v] as never),
       ) as unknown as Ring[][];
-      return cut.flat();
+      return cut;
     } catch {
-      return rings; // degenerate shaft footprint: an uncut floor beats no floor
+      return rings.length ? [rings] : []; // degenerate shaft footprint: an uncut floor beats no floor
     }
   }
   /** A stair, spiral or escalator, drawn as the climb it actually makes.
@@ -1697,6 +1675,14 @@ export class SceneLayer implements CustomLayerInterface {
     const contextFloors = new Set(spanningObjects.map(o => o.floorId).filter(Boolean) as string[]);
     const atrium =
       walk && activeF && floorId ? walkVoidContext(project, activeF, walkCeiling(project, floorId)!.floor) : undefined;
+    const connections =
+      walk && activeF
+        ? walkConnectionContext(project, activeF, index.primary).filter(
+            f => f.id !== under?.id && !over.some(o => o.id === f.id) && !contextFloors.has(f.id),
+          )
+        : [];
+    const connectionIds = new Set(connections.map(f => f.id));
+    const structuralLevels = [...new Map([...(atrium?.levels ?? []), ...connections].map(f => [f.id, f])).values()];
     const drawnLevels = new Set<string>(
       [...shellBelow, ...lower.keys(), ...contextFloors, under?.id, belowShell?.id, floorId].filter(
         Boolean,
@@ -1746,6 +1732,10 @@ export class SceneLayer implements CustomLayerInterface {
               ...(under ? (index.objects.get(under.id) ?? []) : []),
               ...over.flatMap(f => index.objects.get(f.id) ?? []),
               ...spanningObjects,
+              // Openings in the carried walls need their doors and glazing as well.
+              ...connections.flatMap(f =>
+                (index.objects.get(f.id) ?? []).filter(o => o.kind === 'door' || o.kind === 'window'),
+              ),
               ...(floorId ? (index.objects.get(floorId) ?? []) : []),
               // A stair that climbs to this level belongs on it, even though it is filed under the
               // one it starts from. Without this the flight you are standing at the top of is not
@@ -1787,7 +1777,13 @@ export class SceneLayer implements CustomLayerInterface {
       // ground where it really does. Hiding it left the garage with no mouth and the kerb with an
       // unexplained gap in it.
       const surfaces = floorId === null && !!o.slope && Math.max(o.slope.high, o.slope.low) >= -0.01;
-      if (!buried && belowGrade(o.floorId) && !(isVertical(o.kind) && reaches(project, o, floorId)) && !surfaces)
+      if (
+        !buried &&
+        belowGrade(o.floorId) &&
+        !connectionIds.has(o.floorId!) &&
+        !(isVertical(o.kind) && reaches(project, o, floorId)) &&
+        !surfaces
+      )
         continue;
       // A twin of a shaft already drawn from its lowest level. One lift, one shaft.
       if (isVertical(o.kind) && !index.primary.has(o.id)) continue;
@@ -1887,6 +1883,30 @@ export class SceneLayer implements CustomLayerInterface {
         // carry the ramp's footprint flat, and now that the storey draws its own plates it has to
         // draw its own slopes with them or the garage loses its way in and out.
         this.slopedSurface(o, o.slope, LIFT + SLAB + ground, SLAB, color, ghostFill);
+        // Wheel curbs follow the incline and its flat aprons; both ends stay open for turning.
+        const [head, foot] = o.slope.axis;
+        const axisLength = distance(head, foot);
+        const ring = closeRing(o.rings[0]);
+        for (let i = 1; i < ring.length; i++) {
+          const a = ring[i - 1],
+            b = ring[i],
+            length = distance(a, b);
+          const along =
+            ((b[0] - a[0]) * (foot[0] - head[0]) + (b[1] - a[1]) * (foot[1] - head[1])) / (length * axisLength);
+          if (!Number.isFinite(along) || Math.abs(along) < 0.98) continue;
+          const edge = {
+            ...o,
+            rings: [
+              rectangle(
+                [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2],
+                length,
+                0.18,
+                (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI,
+              ),
+            ],
+          };
+          this.slopedSurface(edge, o.slope, LIFT + SLAB + ground + 0.16, 0.16, '#c7bd91', ghostFill);
+        }
         continue;
       }
       if (o.rings) {
@@ -1901,34 +1921,36 @@ export class SceneLayer implements CustomLayerInterface {
               ? 0.02
               : GROUND);
         const height = elevated ? o.height : indoor ? (o.kind === 'room' ? ROOM : SLAB) : 0.04;
-        this.surface(
-          // A stairwell is a hole in the floor you are standing on, too. Added as holes in the
-          // area's own rings so the plate keeps its shape and loses only the shaft.
+        // Clipping can split an aisle into separate polygons; each keeps its own holes.
+        const plates =
           indoor && o.floorId
             ? this.withVoids(project, o.rings, o.floorId, index.primary, 'floor', punchWells(o.floorId))
-            : o.rings,
-          base,
-          height,
-          color,
-          o.id,
-          // The floor you are standing on used to be the one surface with no finish at all, which left
-          // the largest expanse in the frame as flat untextured colour. Give it the same plaster as
-          // the levels below — it is subtle enough not to compete with the plan, and without it a
-          // whole storey reads as paper.
-          ghosted ? undefined : (o.material ?? (indoorFinish ? 'plaster' : undefined)),
-          ghostFill,
-          false,
-          lidsOverBelow && indoorFinish
-            ? this.materials.plate(color)
-            : // Walking, the floor is the one surface that can say where the light is, and only
-              // because you see it along rather than down onto it.
-              walk && indoorFinish && !ghosted && o.material !== 'carpet'
-              ? this.materials.polished(this.materials.get(o.material ?? 'plaster', color))
-              : undefined,
-          !indoor,
-          undefined,
-          floorAxis(o.floorId),
-        );
+            : [o.rings];
+        for (const plate of plates)
+          this.surface(
+            plate,
+            base,
+            height,
+            color,
+            o.id,
+            // The floor you are standing on used to be the one surface with no finish at all, which left
+            // the largest expanse in the frame as flat untextured colour. Give it the same plaster as
+            // the levels below — it is subtle enough not to compete with the plan, and without it a
+            // whole storey reads as paper.
+            ghosted ? undefined : (o.material ?? (indoorFinish ? 'plaster' : undefined)),
+            ghostFill,
+            false,
+            lidsOverBelow && indoorFinish
+              ? this.materials.plate(color)
+              : // Walking, the floor is the one surface that can say where the light is, and only
+                // because you see it along rather than down onto it.
+                walk && indoorFinish && !ghosted && o.material !== 'carpet'
+                ? this.materials.polished(this.materials.get(o.material ?? 'plaster', color))
+                : undefined,
+            !indoor,
+            undefined,
+            floorAxis(o.floorId),
+          );
       } else if (['stairs', 'elevator', 'turnstile', 'door', 'gate', 'window'].includes(o.kind)) {
         // A door or a window belongs to its own storey and is left to it when that storey is only a
         // ghost. A shaft belongs to all of them at once, and the rule that skipped every ghosted
@@ -1990,15 +2012,13 @@ export class SceneLayer implements CustomLayerInterface {
       const tallRoofs = spanningObjects.filter(
         o => o.ceilingHeight && o.rings?.length && (floors.get(o.floorId!)?.elevation ?? 0) < activeF.elevation,
       );
-      const openCeiling = (rings: Ring[]) => {
+      const openCeiling = (rings: Ring[][]) => {
         if (!atrium?.ceilingOpenings.length) return rings;
         try {
-          return (
-            polygonClipping.difference(
-              [rings] as never,
-              ...atrium.ceilingOpenings.map(r => [r] as never),
-            ) as unknown as Ring[][]
-          ).flat();
+          return polygonClipping.difference(
+            rings as never,
+            ...atrium.ceilingOpenings.map(r => [r] as never),
+          ) as unknown as Ring[][];
         } catch {
           return rings;
         }
@@ -2014,22 +2034,21 @@ export class SceneLayer implements CustomLayerInterface {
                 (floors.get(o.floorId!)?.elevation ?? activeF.elevation) + o.ceilingHeight - activeF.elevation,
               )
             : soffit;
-        this.surface(
-          // The lid is open where a flight sets OFF through it, which is not where the floor is open:
-          // the bottom of a run departs without arriving, and a run's top arrives without departing.
-          openCeiling(this.withVoids(project, o.rings, ceilingFloor.id, index.primary, 'ceiling')),
-          roof - nestingLift(objectArea(o)),
-          SLAB,
-          '#f0f1ee',
-          `ceiling:${o.id}`,
-          undefined,
-          false,
-          false,
-          o.material === 'tile' ? tiled : lit,
-          false,
-          undefined,
-          floorAxis(ceilingFloor.id),
-        );
+        for (const plate of openCeiling(this.withVoids(project, o.rings, ceilingFloor.id, index.primary, 'ceiling')))
+          this.surface(
+            plate,
+            roof - nestingLift(objectArea(o)),
+            SLAB,
+            '#f0f1ee',
+            `ceiling:${o.id}`,
+            undefined,
+            false,
+            false,
+            o.material === 'tile' ? tiled : lit,
+            false,
+            undefined,
+            floorAxis(ceilingFloor.id),
+          );
       }
       // The wells the stairs and escalators climb through are punched out of the lid, and only this
       // storey is built — so through each one you looked straight at the sky. What is up a well is
@@ -2053,16 +2072,48 @@ export class SceneLayer implements CustomLayerInterface {
         through: 'ceiling',
         lowest: buried ? -Infinity : -0.01,
       });
-      if (!atrium?.levels.length)
+      if (!structuralLevels.length)
         for (const [i, well] of wells.entries())
           this.surface([well], wellHead, SLAB, '#d9dad6', `well:${floorId}:${i}`);
       // Complete structural plates support the surfaces visible through the atrium. Isolated well
       // caps looked like floating furniture, while ghost shafts continued into an otherwise empty sky.
-      for (const level of atrium?.levels ?? []) {
+      for (const level of structuralLevels) {
         if (level.id === under?.id || over.some(f => f.id === level.id) || contextFloors.has(level.id)) continue;
         const z = relative(level.id);
+        const finish = (index.objects.get(level.id) ?? []).find(
+          o => o.kind === 'zone' && !o.parentId && !o.slope && o.material,
+        );
         for (const plate of shellPlate(project, level.id, index.primary, { lowest: -Infinity }))
-          this.surface(plate, z + LIFT + SLAB, SLAB, '#deddd6', `atrium-plate:${level.id}`, 'plaster');
+          this.surface(
+            plate,
+            z + LIFT,
+            SLAB,
+            finish?.color ?? '#deddd6',
+            `atrium-plate:${level.id}`,
+            finish?.material ?? 'plaster',
+            false,
+            false,
+            undefined,
+            false,
+            undefined,
+            floorAxis(level.id),
+          );
+        if (connectionIds.has(level.id) && !atrium?.levels.some(f => f.id === level.id)) {
+          // A whole ceiling and the surrounding walls replace the floating cap over each well.
+          // Keep holes toward the active floor; the far side of this context is capped until visited.
+          for (const ring of floorOutline(project, level.id))
+            for (const plate of level.elevation < activeF.elevation
+              ? this.withVoids(project, [ring], level.id, index.primary, 'ceiling')
+              : [[ring]])
+              this.surface(
+                plate,
+                walkSoffit(z, level.height),
+                SLAB,
+                '#e4e2db',
+                `connection-ceiling:${level.id}`,
+                'ceiling',
+              );
+        }
       }
       if (atrium?.roof)
         for (const ring of floorOutline(project, atrium.roof.id))
@@ -2083,10 +2134,12 @@ export class SceneLayer implements CustomLayerInterface {
       ...over.flatMap(f => wallPieces(project, f.id, false)),
       // Distant atrium levels retain their authored envelope and open railings. A synthetic
       // wall around every outline ring incorrectly sealed the hole from floor to ceiling.
-      ...(atrium?.levels ?? [])
+      ...structuralLevels
         .filter(f => f.id !== under?.id && !over.some(o => o.id === f.id) && !contextFloors.has(f.id))
         .flatMap(f =>
-          wallPieces(project, f.id).filter(p => exterior.has(p.id) || barriers.get(p.id)?.kind === 'fence'),
+          wallPieces(project, f.id).filter(
+            p => connectionIds.has(f.id) || exterior.has(p.id) || barriers.get(p.id)?.kind === 'fence',
+          ),
         ),
       ...[...contextFloors]
         .filter(id => id !== under?.id && !over.some(f => f.id === id))
@@ -2101,12 +2154,30 @@ export class SceneLayer implements CustomLayerInterface {
     for (const p of allPieces) {
       if (buried && (p.floorId === null || (activeF && floors.get(p.floorId)?.buildingId !== activeF.buildingId)))
         continue;
-      if (!buried && belowGrade(p.floorId)) continue;
+      if (!buried && belowGrade(p.floorId) && !connectionIds.has(p.floorId!)) continue;
       if (p.floorId && outlineOnly.has(p.floorId)) continue;
       if (p.floorId && shellBelow.has(p.floorId) && !exterior.has(p.id)) continue;
       if (structureOverview && p.floorId !== floorId && !exterior.has(p.id)) continue;
       const finish = finishes.get(p.id)!;
       const barrier = barriers.get(p.id)!;
+      // Enclose the service gap between a suspended ceiling and the next structural slab. It
+      // becomes visible while climbing; without this perimeter band the basement exposes sky.
+      const own = floors.get(p.floorId ?? '');
+      if (walk && own && !own.mezzanine && exterior.has(p.id) && p.height >= own.height - SLAB - 0.01) {
+        const next = project.floors
+          .filter(f => f.buildingId === own.buildingId && !f.mezzanine && f.elevation > own.elevation)
+          .sort((a, b) => a.elevation - b.elevation)[0];
+        const gap = next ? next.elevation - own.elevation - p.height - SLAB : 0;
+        if (gap > 0.01)
+          this.surface(
+            [p.ring],
+            relative(p.floorId) + wallBase(p.floorId) + p.height,
+            gap,
+            finish.color,
+            `plenum:${p.id}`,
+            finish.material,
+          );
+      }
       // Every wall but the active floor's turns translucent in the stacked view — including the
       // storeys *below*, which used to stay solid. "Cutaway" has to actually cut something away: with
       // eight solid storeys of brick under the selected floor, a seventeen-level building showed one
@@ -2702,6 +2773,10 @@ export class SceneLayer implements CustomLayerInterface {
       this.renderer.state.buffers.depth.setClear(1);
       this.renderer.clearDepth();
     }
+    // Refraction is blurred by the water's small ripples already. Half linear resolution cuts
+    // the transmission target, its MSAA resolve and mip chain to a quarter of the pixels while
+    // preserving full-resolution reflections, pool geometry and the final water surface.
+    this.renderer.transmissionResolutionScale = this.hasWater ? 0.5 : 1;
     this.renderer.render(this.scene, this.camera);
     this.renderer.resetState();
   }

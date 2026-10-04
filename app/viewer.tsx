@@ -25,6 +25,8 @@ import {
 // minus the renderer, so naming FloorViewer through a dynamic import is what keeps the two apart.
 const FloorViewer = lazy(() => import('@kerros/viewer').then(m => ({ default: m.FloorViewer })));
 import { mmlBasemap } from './mmlBasemap';
+import { currentDemoId, STOCKMANN_ID } from './demo/ids';
+import { migrateStockmann } from './demo/migrate';
 import { cameraPose, parseViewLink, writeViewLink, type ViewLink } from './viewLink';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import '../src/styles.css';
@@ -295,15 +297,19 @@ function ViewerHome() {
       .then(setSaved)
       .catch(() => setSaved([]));
   };
-  useEffect(refresh, [projects]);
+  useEffect(() => {
+    migrateStockmann(projects)
+      .then(refresh)
+      .catch(e => setError((e as Error).message));
+  }, [projects]);
   // Deep links use the same #p=…&f=…&v=…&c=… fragment as the editor; the older ?project= query
   // remains accepted for existing bookmarks.
   useEffect(() => {
     const link = parseViewLink();
     const id = link.project ?? new URLSearchParams(location.search).get('project');
     if (id)
-      projects
-        .load(id)
+      migrateStockmann(projects)
+        .then(() => projects.load(currentDemoId(id) === STOCKMANN_ID ? STOCKMANN_ID : id))
         .then(p => {
           if (p) setOpen({ project: p, assets: storedAssets, view: link });
         })
