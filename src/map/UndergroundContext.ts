@@ -137,6 +137,7 @@ const grain = (x: number, y: number, z: number) => {
 /** Only the shaft boundary needs vertical faces; no 1.8 km cap to triangulate or raycast. */
 export function undergroundPit(ring: Point[], floor: number, bottom: number, strata: number[] = []): THREE.Group {
   const group = new THREE.Group();
+  group.name = 'kerros-excavation';
   const layerAt = (z: number, target: THREE.Color) => {
     let index = PROFILE.findIndex(l => z >= l.until);
     if (index < 0) index = PROFILE.length - 1;

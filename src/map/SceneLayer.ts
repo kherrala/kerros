@@ -1,4 +1,5 @@
 import { makeDoor } from './Doors';
+import { fenceGeometry } from './fences';
 import * as THREE from 'three';
 import polygonClipping from 'polygon-clipping';
 import {
@@ -24,7 +25,7 @@ import {
   toLngLat,
 } from '../model/geometry';
 import { distance, pointInRing } from '../model/geometry';
-import { floorOutline } from '../model/walls';
+import { floorOutline, mainAxis } from '../model/walls';
 import { COLORS, objectRings, type WallPiece, wallPieces } from './features';
 import {
   type Flight,
@@ -48,7 +49,8 @@ import type { MapStyleOptions } from '../theme';
 import { exteriorWalls } from './exteriors';
 import { mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 import { hitEntity, metricUVs, OUTSIDE, splitWallFace, SurfaceBatch } from './surfaces';
-import { excavationRings, floorIndex, MAX_CAGE_LEVELS, type UndergroundView, undergroundView } from './underground';
+import { excavationRings } from './excavation';
+import { floorIndex, MAX_CAGE_LEVELS, type UndergroundView, undergroundView } from './underground';
 import { UndergroundCage, undergroundPit } from './UndergroundContext';
 import { includeSceneDepth, walkNearPlane } from './projection';
 import { syncLightingCamera } from './projection';
@@ -707,6 +709,7 @@ export class SceneLayer implements CustomLayerInterface {
     // landscaping, a fence: lit by the sky and nothing else, whatever the lamps inside are doing.
     outdoor = false,
     interiorFace?: [Point, Point] | null,
+    horizontalAxis?: Point,
   ) {
     // An area a void has swallowed whole — a parking bay lying under the ramp that runs over it — has
     // no plate left to draw, and asking for the first of no rings took the rest of the storey down
@@ -723,7 +726,7 @@ export class SceneLayer implements CustomLayerInterface {
           })
         : new THREE.ShapeGeometry(shape);
     geometry.translate(0, 0, base);
-    metricUVs(geometry);
+    metricUVs(geometry, horizontalAxis);
     // Computed before any depth compression, so the gradient follows real metres off the floor.
     if (ao && !ghost) {
       const positions = geometry.getAttribute('position');
@@ -1471,6 +1474,7 @@ export class SceneLayer implements CustomLayerInterface {
     const index = floorIndex(project),
       floors = index.floors;
     const buildings = new Map(project.buildings.map(b => [b.id, b]));
+    const barriers = new Map(project.barriers.map(b => [b.id, b]));
     const finishes = new Map(
       project.barriers.map(b => {
         const preset = buildings.get(floors.get(b.floorId ?? '')?.buildingId ?? '')?.exteriorPreset;
@@ -1712,6 +1716,21 @@ export class SceneLayer implements CustomLayerInterface {
       fid
         ? this.rebase + ((floors.get(fid)?.elevation ?? activeF?.elevation ?? 0) - (activeF?.elevation ?? 0))
         : ground;
+    // Transform the drawing axis through the site's bearing and Mercator frame. Shared UVs
+    // keep adjacent rooms in register without rotating the cached material for other levels.
+    const floorAxes = new Map<string, Point>();
+    const floorAxis = (id: string | null): Point | undefined => {
+      if (!id) return;
+      let axis = floorAxes.get(id);
+      if (!axis) {
+        const a = this.xy([0, 0]),
+          b = this.xy(rotate([1, 0], mainAxis(project, id)));
+        const length = distance(a, b);
+        axis = [(b[0] - a[0]) / length, (b[1] - a[1]) / length];
+        floorAxes.set(id, axis);
+      }
+      return axis;
+    };
     /** Where an authored depth is shown, for the geometry that is placed outright rather than built
      *  and then presented: the excavation face and the cage. Same mapping present() puts the model
      *  through, or the soil and the plate standing in it disagree about how deep the storey is. */
@@ -1907,6 +1926,8 @@ export class SceneLayer implements CustomLayerInterface {
               ? this.materials.polished(this.materials.get(o.material ?? 'plaster', color))
               : undefined,
           !indoor,
+          undefined,
+          floorAxis(o.floorId),
         );
       } else if (['stairs', 'elevator', 'turnstile', 'door', 'gate', 'window'].includes(o.kind)) {
         // A door or a window belongs to its own storey and is left to it when that storey is only a
@@ -2005,6 +2026,9 @@ export class SceneLayer implements CustomLayerInterface {
           false,
           false,
           o.material === 'tile' ? tiled : lit,
+          false,
+          undefined,
+          floorAxis(ceilingFloor.id),
         );
       }
       // The wells the stairs and escalators climb through are punched out of the lid, and only this
@@ -2039,23 +2063,6 @@ export class SceneLayer implements CustomLayerInterface {
         const z = relative(level.id);
         for (const plate of shellPlate(project, level.id, index.primary, { lowest: -Infinity }))
           this.surface(plate, z + LIFT + SLAB, SLAB, '#deddd6', `atrium-plate:${level.id}`, 'plaster');
-        for (const ring of floorOutline(project, level.id)) {
-          const edge = openRing(ring);
-          for (let i = 0; i < edge.length; i++) {
-            const a = edge[i],
-              b = edge[(i + 1) % edge.length];
-            const length = distance(a, b),
-              angle = (Math.atan2(b[1] - a[1], b[0] - a[0]) * 180) / Math.PI;
-            this.surface(
-              [rectangle([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2], length, 0.16, angle)],
-              z + LIFT + SLAB,
-              level.height - SLAB,
-              '#e3e0d7',
-              `atrium-shell:${level.id}`,
-              'plaster',
-            );
-          }
-        }
       }
       if (atrium?.roof)
         for (const ring of floorOutline(project, atrium.roof.id))
@@ -2074,6 +2081,13 @@ export class SceneLayer implements CustomLayerInterface {
       ...wallPieces(project, floorId, stack),
       ...(under ? wallPieces(project, under.id, false) : []),
       ...over.flatMap(f => wallPieces(project, f.id, false)),
+      // Distant atrium levels retain their authored envelope and open railings. A synthetic
+      // wall around every outline ring incorrectly sealed the hole from floor to ceiling.
+      ...(atrium?.levels ?? [])
+        .filter(f => f.id !== under?.id && !over.some(o => o.id === f.id) && !contextFloors.has(f.id))
+        .flatMap(f =>
+          wallPieces(project, f.id).filter(p => exterior.has(p.id) || barriers.get(p.id)?.kind === 'fence'),
+        ),
       ...[...contextFloors]
         .filter(id => id !== under?.id && !over.some(f => f.id === id))
         .flatMap(id =>
@@ -2092,6 +2106,7 @@ export class SceneLayer implements CustomLayerInterface {
       if (p.floorId && shellBelow.has(p.floorId) && !exterior.has(p.id)) continue;
       if (structureOverview && p.floorId !== floorId && !exterior.has(p.id)) continue;
       const finish = finishes.get(p.id)!;
+      const barrier = barriers.get(p.id)!;
       // Every wall but the active floor's turns translucent in the stacked view — including the
       // storeys *below*, which used to stay solid. "Cutaway" has to actually cut something away: with
       // eight solid storeys of brick under the selected floor, a seventeen-level building showed one
@@ -2104,6 +2119,27 @@ export class SceneLayer implements CustomLayerInterface {
       // enough to say where the building is and how it is banded, weak enough to see the floors.
       const wallGhost =
         stack && floorId !== null && !!p.floorId && p.floorId !== floorId && ghostStrength(p.floorId, true);
+      if (barrier.kind === 'fence') {
+        const [a, b] = barrierEnds(project, barrier).map(pt => this.xy(pt)) as [Point, Point];
+        const geometry = fenceGeometry(
+          a,
+          b,
+          p.ring.map(pt => this.xy(pt)),
+          p.base + wallBase(p.floorId) + (stack ? 0 : relative(p.floorId)),
+          p.height - p.base,
+          barrier.thickness,
+        );
+        const positions = geometry.getAttribute('position');
+        for (let i = 0; i < positions.count; i++) positions.setZ(i, this.present(positions.getZ(i)));
+        geometry.computeVertexNormals();
+        this.batch.add(
+          geometry,
+          wallGhost ? this.materials.ghost(finish.color, wallGhost) : this.materials.metal(finish.color),
+          p.id,
+          p.floorId === null,
+        );
+        continue;
+      }
       this.surface(
         [p.ring],
         p.base + wallBase(p.floorId) + (stack ? 0 : relative(p.floorId)),
@@ -2163,7 +2199,7 @@ export class SceneLayer implements CustomLayerInterface {
     // are ways of looking AT a buried building from outside it; inside it they have nothing to say.
     if (buried && excavation && !walk) {
       const outline = index.outlines.get(activeF?.id ?? view.levels[0]?.id ?? '');
-      const excavation = excavationRings(project, view.levels);
+      const excavation = excavationRings(project, view.levels, stack ? Infinity : activeF?.elevation);
       const rings = excavation.length ? excavation : outline?.rings?.[0] ? [openRing(outline.rings[0])] : [];
       const split = shown(activeF?.elevation ?? 0);
       // The cut has to reach whatever the view actually draws below the floor in focus — the shelled
@@ -2196,8 +2232,12 @@ export class SceneLayer implements CustomLayerInterface {
         );
       }
     }
-    if (buried && activeF && !walk && (!stack || structureOverview)) {
-      const above = view.levels.filter(f => f.elevation > activeF.elevation).sort((a, b) => a.elevation - b.elevation);
+    if (buried && activeF && excavation && !walk && (!stack || structureOverview)) {
+      // A basement section needs reference decks up to grade. Tracing every roof storey over
+      // a garage cutaway creates a tall wireframe unrelated to the inspected excavation.
+      const above = view.levels
+        .filter(f => f.elevation > activeF.elevation && (stack || f.elevation <= 0))
+        .sort((a, b) => a.elevation - b.elevation);
       const stride = Math.max(1, Math.ceil((above.length - 1) / (MAX_CAGE_LEVELS - 1)));
       const samples = above.filter((_, i) => i % stride === 0 || i === above.length - 1);
       const rings: THREE.Vector3[][] = [];
@@ -2223,7 +2263,7 @@ export class SceneLayer implements CustomLayerInterface {
         rings,
         columns,
         shown(activeF.elevation) + LIFT,
-        topFl ? shown(topFl.elevation + topFl.height) : 0,
+        topFl ? shown(topFl.elevation + (stack ? topFl.height : 0)) : 0,
         evening,
       );
       this.cage.setBearing(this.map?.getBearing() ?? 0);

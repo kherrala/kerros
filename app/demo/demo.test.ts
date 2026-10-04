@@ -102,13 +102,13 @@ describe('demo projects', () => {
     const mezzanines = p.floors.filter(f => f.mezzanine);
     expect(mezzanines).toHaveLength(2);
     for (const m of mezzanines) {
-      // A walker's eye is 2.03 m: anything under about 2.4 is a shelf, not a level you walk on.
-      expect(m.height, `${m.name} is standable`).toBeGreaterThanOrEqual(2.4);
+      // Generous shop-floor headroom above the finish and below the structural slab.
+      expect(m.height, `${m.name} is standable`).toBeGreaterThanOrEqual(3.4);
       const host = p.floors
         .filter(f => !f.mezzanine && f.buildingId === m.buildingId && f.elevation <= m.elevation)
         .sort((a, b) => b.elevation - a.elevation)[0];
       expect(host, `${m.name} hangs in a storey`).toBeTruthy();
-      expect(m.elevation - host.elevation, `${m.name} leaves headroom under it`).toBeGreaterThanOrEqual(2.4);
+      expect(m.elevation - host.elevation, `${m.name} leaves headroom under it`).toBeGreaterThanOrEqual(3.4);
       expect(m.elevation + m.height, `${m.name} fits under its host's slab`).toBeLessThanOrEqual(
         host.elevation + host.height + 1e-9,
       );
@@ -230,7 +230,7 @@ it('opposes each escalator pair within a shared rectangular well and tiles the g
   );
 });
 
-it('Stockmann partitions reach their storey ceiling and all selling levels use matching tiles', () => {
+it('Stockmann partitions reach their ceilings, selling floors share tiles and the café gallery has oak', () => {
   const p = createDemo();
   const ground = p.floors.find(f => f.id === 'floor-ground')!;
   const partitions = p.barriers.filter(b => b.floorId === ground.id && b.name === 'Partition');
@@ -241,8 +241,8 @@ it('Stockmann partitions reach their storey ceiling and all selling levels use m
     const rooms = p.objects.filter(o => o.floorId === floor.id && o.kind === 'room');
     expect(rooms.length).toBeGreaterThan(0);
     for (const room of rooms) {
-      expect(room.material).toBe('terrazzo');
-      expect(room.color).toBe('#e6dfcf');
+      expect(room.material).toBe(code === '1A' ? 'oak' : 'terrazzo');
+      expect(room.color).toBe(code === '1A' ? '#cdb28b' : '#e6dfcf');
     }
   }
 });

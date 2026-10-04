@@ -35,6 +35,8 @@ const CHUNKS: ReadonlyArray<readonly [marker: string, chunk: string]> = [
   ['/src/map/Passenger', 'scene'],
   ['/src/map/UndergroundContext', 'scene'],
   ['/src/map/architecture', 'scene'],
+  ['/src/map/fences', 'scene'],
+  ['/src/map/excavation', 'scene'],
   ['/src/map/materials', 'scene'],
   ['/src/map/projection', 'scene'],
   ['/src/map/surfaces', 'scene'],

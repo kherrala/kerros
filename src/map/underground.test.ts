@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { dropContained, excavationRings, undergroundView } from './underground';
+import { undergroundView } from './underground';
+import { dropContained, excavationRings } from './excavation';
 import { createObject } from '../model/factory';
 import { newProject } from '../model/testFixtures';
 import { addBarrier, closeRing, ringArea } from '../model/geometry';
@@ -65,6 +66,29 @@ describe('excavation outline', () => {
     plate(p, 'p1', rect(0, 0, 10, 10));
     plate(p, 'p2', rect(100, 100, 110, 110));
     expect(excavationRings(p, p.floors)).toHaveLength(2);
+  });
+
+  it('does not project a shallow tunnel or the street end of a ramp down to the bottom deck', () => {
+    const p = belowGradeProject();
+    plate(p, 'p2', rect(0, 0, 20, 20));
+    plate(p, 'p1', rect(-50, 0, 20, 20), 'Shallow tunnel');
+    const ramp = plate(p, 'p1', rect(20, 5, 60, 11), 'Arriving ramp');
+    ramp.slope = {
+      axis: [
+        [60, 8],
+        [30, 8],
+      ],
+      high: -8,
+      low: -12,
+    };
+    const rings = excavationRings(p, p.floors, -12);
+    expect(rings).toHaveLength(1);
+    expect(Math.min(...rings[0].map(p => p[0]))).toBe(0);
+    expect(Math.max(...rings[0].map(p => p[0]))).toBeCloseTo(30);
+    expect(ringArea(rings[0])).toBeCloseTo(400 + 10 * 6);
+    const full = excavationRings(p, p.floors);
+    expect(Math.min(...full[0].map(p => p[0]))).toBe(-50);
+    expect(Math.max(...full[0].map(p => p[0]))).toBe(60);
   });
 });
 

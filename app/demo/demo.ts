@@ -2,6 +2,7 @@ import { stockmannNavigation } from './stockmannNavigation';
 import { stockmannFitout, stockmannMezzanine } from './stockmannFitout';
 import { STOCKMANN_ID } from './ids';
 import { attachOntology } from './ontology';
+import { stockmannGuardrails } from './stockmannGuardrails';
 import { stockmannGarage } from './stockmannGarage';
 import type { ModelKind, ObjectKind, Point, ProjectDocument, Ring, SiteObject } from '@kerros/schema';
 import {
@@ -213,10 +214,10 @@ const boxWalls = (r: Point[]): [Point, Point][] => r.map((pt, i) => [pt, r[(i + 
 // standing at y -12 and 20 the inner end of every run, and the landing on it, hung over the atrium on
 // each of the floors that punch the void through their plate, and you stepped off into a hole.
 const STK_ESCALATORS: [string, number, number, number, 'up' | 'down'][] = [
-  ['Escalator up', 6, -15.5, 0, 'up'],
-  ['Escalator down', 11, -15.5, 180, 'down'],
-  ['Escalator up', 6, 23.5, 0, 'up'],
-  ['Escalator down', 11, 23.5, 180, 'down'],
+  ['Escalator up', 6, -18, 0, 'up'],
+  ['Escalator down', 11, -18, 180, 'down'],
+  ['Escalator up', 6, 26, 0, 'up'],
+  ['Escalator down', 11, 26, 180, 'down'],
 ];
 /** The flat comb plate at each end of an escalator run, in metres — the length `SceneLayer.flight()`
  *  takes out of the footprint before it lays the steps out, so the incline is `depth - 2 * COMB`. */
@@ -230,11 +231,8 @@ const STK_SPIRALS: Point[] = [
 ];
 const STK_SPIRAL_SIZE = 3.6;
 // id, name, elevation, storey height, colour, isOffice
-// Two storeys are taller than the rest because each has a mezzanine standing inside it: the ground
-// hall carries the entresol gallery half way up it, Herkku the pharmacy gallery. At 4.2 m neither
-// host had room for a level anyone could stand up in — the entresol was 1.6 m under a soffit, a
-// walker's eye is 2.03 — so the hall is 5.6 m and the food market 4.6 m, and the selling floors
-// above start from the hall's own top rather than from a nominal 4.2.
+// Both mezzanine halls are 7.2 m high, with the gallery at half height. After the
+// 180 mm slab this leaves about 3.4 m of clear space on either level.
 // Every storey shares one brightness: an elevation-graded ladder read as the lower floors being
 // badly lit rather than lower, and a visitor stepping between levels expects the same daylight.
 // Every level wears a light cool neutral — daylight grey rather than the warm putty these plates
@@ -242,18 +240,18 @@ const STK_SPIRAL_SIZE = 3.6;
 // a model made of cardboard. Offices sit a shade bluer than retail, and basements only a step darker
 // so below-grade still reads below-grade.
 const STK_FLOORS: [string, string, number, number, string, boolean][] = [
-  ['floor-basement', 'Herkku food market', -9, 4.8, '#d2d8de', false],
+  ['floor-basement', 'Herkku food market', -11.4, 7.2, '#d2d8de', false],
   ['floor-b1', 'Electronics & services', -4.2, 4.2, '#d2d8de', false],
-  ['floor-ground', 'Beauty & cosmetics', 0, 5.6, '#e1e6ea', false],
-  ['floor-01', 'Womenswear', 5.6, 4.2, '#e1e6ea', false],
-  ['floor-02', 'Menswear & denim', 9.8, 4.2, '#e1e6ea', false],
-  ['floor-03', 'Shoes & accessories', 14, 4.2, '#e1e6ea', false],
-  ['floor-04', 'Kids & sport', 18.2, 4.2, '#e1e6ea', false],
-  ['floor-05', 'Home & interior', 22.4, 4.2, '#e1e6ea', false],
-  ['floor-06', 'Books, toys & café', 26.6, 4.2, '#e1e6ea', false],
-  ['floor-07', 'Offices · buying & admin', 30.8, 4.2, '#dfe6ec', true],
-  ['floor-08', 'Offices · marketing & HR', 35, 4.2, '#dfe6ec', true],
-  ['floor-09', 'Offices · management & F8 lounge', 39.2, 4.2, '#dfe6ec', true],
+  ['floor-ground', 'Beauty & cosmetics', 0, 7.2, '#e1e6ea', false],
+  ['floor-01', 'Womenswear', 7.2, 4.2, '#e1e6ea', false],
+  ['floor-02', 'Menswear & denim', 11.4, 4.2, '#e1e6ea', false],
+  ['floor-03', 'Shoes & accessories', 15.6, 4.2, '#e1e6ea', false],
+  ['floor-04', 'Kids & sport', 19.8, 4.2, '#e1e6ea', false],
+  ['floor-05', 'Home & interior', 24, 4.2, '#e1e6ea', false],
+  ['floor-06', 'Books, toys & café', 28.2, 4.2, '#e1e6ea', false],
+  ['floor-07', 'Offices · buying & admin', 32.4, 4.2, '#dfe6ec', true],
+  ['floor-08', 'Offices · marketing & HR', 36.6, 4.2, '#dfe6ec', true],
+  ['floor-09', 'Offices · management & F8 lounge', 40.8, 4.2, '#dfe6ec', true],
 ];
 // A floor plate is the footprint with the atrium (and, for offices, the cores) punched out.
 /** Push a ring outward from its centre by `metres` — a serviceable buffer for the broadly convex
@@ -381,8 +379,8 @@ function createCampus(): ProjectDocument {
   // the top storey's arcade beneath it. Each façade edge becomes one roof plane leaning inward from
   // the eave to the flat deck, and a final section closes the deck itself.
   {
-    const EAVE = 43.4, // top of floor-09 (39.2 + 4.2)
-      PEAK = 48.6,
+    const EAVE = 45, // top of floor-09 (40.8 + 4.2)
+      PEAK = 50.2,
       SETBACK = 5.4;
     const c = centroid(STK);
     const span = Math.max(...STK.map(pt => Math.hypot(pt[0] - c[0], pt[1] - c[1])));
@@ -412,24 +410,22 @@ function createCampus(): ProjectDocument {
   }));
   // Entresol: the department store's historic intermediate gallery ringing the atrium between the
   // ground hall and Womenswear — a mezzanine level shown in context of the floors around it.
-  // It splits its host storey in two: 2.8 m of hall under the gallery slab and 2.8 m of gallery over
-  // it, which is the least a level can be and still be one you walk through rather than crouch in.
+  // A partial gallery inside the 7.2 m hall, leaving generous headroom on both levels.
   p.floors.splice(2, 0, {
     id: 'floor-entresol',
     buildingId: 'building-main',
     name: 'Accessories & café · 1A',
-    elevation: 2.8,
-    height: 2.8,
+    elevation: 3.6,
+    height: 3.6,
     mezzanine: true,
   });
-  // The same split under Herkku: 2.4 m of food market below the pharmacy gallery, 2.4 m on it, and
-  // its top flush with the electronics floor's slab.
+  // The same 3.6 + 3.6 m split in Herkku, below the electronics floor.
   p.floors.push({
     id: 'floor-b1a',
     buildingId: 'building-main',
     name: 'Pharmacy & wellness · -1A',
-    elevation: -6.6,
-    height: 2.4,
+    elevation: -7.8,
+    height: 3.6,
     mezzanine: true,
   });
   // Level codes follow the store's real signage: three below-ground levels and 1A over the hall.
@@ -589,15 +585,15 @@ function createCampus(): ProjectDocument {
     normalizeBoundaries(p, f);
     if (level >= 0) windowsAlong(p, f, STK, 'Stockmann glazing', { width: 1.25, height: 2.95, bay: 2.9 });
   }
-  // The selling floors and both gallery levels share the same shopping-hall tile finish.
+  // Selling floors use shopping-hall tiles; the café gallery has a warm oak finish.
   for (const o of p.objects) {
     if (
       o.floorId !== null &&
       !['floor-07', 'floor-08', 'floor-09'].includes(o.floorId) &&
       ['room', 'zone'].includes(o.kind)
     ) {
-      o.material = 'terrazzo';
-      o.color = '#e6dfcf';
+      o.material = o.floorId === 'floor-entresol' ? 'oak' : 'terrazzo';
+      o.color = o.floorId === 'floor-entresol' ? '#cdb28b' : '#e6dfcf';
     }
   }
   // Which levels each shaft actually reaches. The cores above were handed the whole floor list, which
@@ -625,6 +621,7 @@ function createCampus(): ProjectDocument {
   // level buried a 17-storey building under its own ground floor.
   p.initialFloorId = 'floor-08';
   stockmannGarage(p);
+  stockmannGuardrails(p, ENT, ATRIUM);
   campusNav(p);
   stockmannNavigation(p);
   return p;

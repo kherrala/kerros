@@ -90,7 +90,7 @@ test('opens Stockmann and reuses its saved layout in both viewer hosts', async (
       }),
     { id: STOCKMANN_ID, name },
   );
-  expect(counts).toEqual([17, 4695, 6962, 32182]);
+  expect(counts).toEqual([17, 4719, 7158, 32510]);
 
   await page.goto('/app.html');
   requested.length = 0;

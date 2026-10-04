@@ -147,14 +147,14 @@ export function hitEntity(hit: THREE.Intersection): string | null {
 }
 
 /** Use distances along each face, not a world-axis projection that squashes diagonal façades. */
-export function metricUVs(geometry: THREE.BufferGeometry) {
+export function metricUVs(geometry: THREE.BufferGeometry, horizontalAxis: readonly [number, number] = [1, 0]) {
   const p = geometry.getAttribute('position'),
     n = geometry.getAttribute('normal');
   const uv = new Float32Array(p.count * 2);
   for (let i = 0; i < p.count; i++) {
     if (Math.abs(n.getZ(i)) > 0.5) {
-      uv[i * 2] = p.getX(i);
-      uv[i * 2 + 1] = p.getY(i);
+      uv[i * 2] = p.getX(i) * horizontalAxis[0] + p.getY(i) * horizontalAxis[1];
+      uv[i * 2 + 1] = -p.getX(i) * horizontalAxis[1] + p.getY(i) * horizontalAxis[0];
     } else {
       let tx = -n.getY(i),
         ty = n.getX(i);

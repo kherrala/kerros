@@ -102,13 +102,32 @@ test('Stockmann interior facades have one finish per face and every window stays
       // The inward normal is taken from the actual face, including oblique facade edges.
       const nx = (inner[1][1] - inner[0][1]) / Math.hypot(inner[1][0] - inner[0][0], inner[1][1] - inner[0][1]);
       const ny = -(inner[1][0] - inner[0][0]) / Math.hypot(inner[1][0] - inner[0][0], inner[1][1] - inner[0][1]);
-      const from = new THREE.Vector3(...l.xy([a[0] + nx * 0.8, a[1] + ny * 0.8]), 2);
+      // Probe just inside the facade. A point 0.8 m inside can be behind a legitimate
+      // partition meeting the window bay at an oblique angle.
+      const wall = p.barriers.find((b: any) => b.id === window.barrierId);
+      const reach = wall.thickness / 2 + 0.03;
+      const from = new THREE.Vector3(...l.xy([a[0] + nx * reach, a[1] + ny * reach]), 2);
       const to = new THREE.Vector3(...l.xy(a), 2);
       const ray = new THREE.Raycaster(from, to.clone().sub(from).normalize(), 0, 1.2);
       const hits = ray.intersectObjects(l.scene.children, true).filter((h: any) => h.object.material);
       const first = hits[0];
       if (!first || !first.object.material.transparent || first.object.material.opacity >= 0.5)
-        opaqueHits.push(window.id);
+        opaqueHits.push(
+          JSON.stringify({
+            window: window.name,
+            at: a,
+            hit: first?.object.userData.entityId,
+            spans: first?.object.userData.spans
+              ?.filter(
+                (s: any) => (first.faceIndex ?? -1) * 3 >= s.start && (first.faceIndex ?? -1) * 3 < s.start + s.count,
+              )
+              .map((s: any) => ({
+                id: s.id,
+                name:
+                  p.objects.find((o: any) => o.id === s.id)?.name ?? p.barriers.find((b: any) => b.id === s.id)?.name,
+              })),
+          }),
+        );
       else panes.push(first.object.material.opacity);
     }
     return { panes: panes.length, windows: windows.length, opaqueHits };
@@ -147,20 +166,151 @@ test('the POV atrium shows supported storeys without floating well caps or ghost
   const result = await page.evaluate(() => {
     const l = (window as any).__kerrosMap.getLayer('kerros-3d').implementation;
     const plates = new Set(),
+      shells = new Set(),
+      rails = new Set(),
       caps = new Set(),
       ghosts = new Set();
     const lifts = new Set(l.project.objects.filter((o: any) => o.kind === 'elevator').map((o: any) => o.id));
     l.scene.traverse((o: any) => {
       for (const s of o.userData.spans ?? []) {
         if (s.id.startsWith('atrium-plate:')) plates.add(s.id);
+        if (s.id.startsWith('atrium-shell:')) shells.add(s.id);
+        const barrier = l.project.barriers.find((b: any) => b.id === s.id);
+        if (barrier?.kind === 'fence' && barrier.floorId !== l.activeFloor) rails.add(barrier.floorId);
         if (s.id.startsWith('well:')) caps.add(s.id);
         if (lifts.has(s.id) && o.material?.transparent) ghosts.add(s.id);
       }
     });
-    return { plates: plates.size, caps: caps.size, ghosts: ghosts.size };
+    return { plates: plates.size, caps: caps.size, ghosts: ghosts.size, shells: shells.size, rails: rails.size };
   });
   expect(result.plates).toBeGreaterThan(6);
   expect(result.caps).toBe(0);
   expect(result.ghosts).toBe(0);
+  expect(result.shells).toBe(0);
+  expect(result.rails).toBeGreaterThan(6);
   await page.screenshot({ path: info.outputPath('stockmann-atrium-context.png') });
+});
+
+test('mezzanine has aligned oak flooring and restores the basemap after walking', async ({ page }, info) => {
+  test.setTimeout(90000);
+  await page.route('**/vectortiles/stylejson/**', route =>
+    route.fulfill({
+      json: {
+        version: 8,
+        sources: {
+          surroundings: {
+            type: 'geojson',
+            data: {
+              type: 'Feature',
+              properties: {},
+              geometry: {
+                type: 'Polygon',
+                coordinates: [
+                  [
+                    [24.93, 60.16],
+                    [24.96, 60.16],
+                    [24.96, 60.18],
+                    [24.93, 60.18],
+                    [24.93, 60.16],
+                  ],
+                ],
+              },
+            },
+          },
+        },
+        layers: [
+          { id: 'bg', type: 'background', paint: { 'background-color': '#ddd' } },
+          { id: 'surroundings', type: 'fill', source: 'surroundings', paint: { 'fill-color': '#b3c3a9' } },
+        ],
+      },
+    }),
+  );
+  await page.goto('/app.html');
+  await page.getByRole('button', { name: /Stockmann Helsinki.*Open/ }).click();
+  await expect(page.locator('.map-wrap')).toHaveAttribute('data-scene', 'ready');
+  await page.getByRole('button', { name: 'Active floor' }).click();
+  await page.locator('.place-option').filter({ hasText: 'Accessories & café' }).click();
+  await page.getByRole('button', { name: 'Walk', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__kerrosMap.getLayoutProperty('surroundings', 'visibility')))
+    .toBe('none');
+  const result = await page.evaluate(async () => {
+    const { mainAxis } = await import('/src/model/walls.ts' as string);
+    const { rotate } = await import('/src/model/geometry.ts' as string);
+    const l = (window as any).__kerrosMap.getLayer('kerros-3d').implementation;
+    const a = l.xy([0, 0]),
+      b = l.xy(rotate([1, 0], mainAxis(l.project, 'floor-entresol')));
+    const length = Math.hypot(b[0] - a[0], b[1] - a[1]);
+    const axis = [(b[0] - a[0]) / length, (b[1] - a[1]) / length];
+    let vertices = 0,
+      error = 0;
+    l.scene.traverse((mesh: any) => {
+      if (mesh.material?.userData.finish !== 'oak') return;
+      const g = mesh.geometry.attributes;
+      const rooms = new Set(
+        l.project.objects
+          .filter((o: any) => o.floorId === 'floor-entresol' && ['room', 'zone'].includes(o.kind))
+          .map((o: any) => o.id),
+      );
+      for (const span of mesh.userData.spans ?? []) {
+        if (!rooms.has(span.id)) continue;
+        for (let i = span.start; i < span.start + span.count; i++) {
+          if (g.normal.getZ(i) < 0.5) continue;
+          vertices++;
+          error = Math.max(
+            error,
+            Math.abs(g.uv.getX(i) - (g.position.getX(i) * axis[0] + g.position.getY(i) * axis[1])),
+          );
+        }
+      }
+    });
+    const w = (window as any).__kerrosWalk;
+    w.pitch = 85;
+    w.place([-12, -6], 100);
+    return { vertices, error };
+  });
+  expect(result.vertices).toBeGreaterThan(100);
+  expect(result.error).toBeLessThan(0.0001);
+  await page.waitForTimeout(500);
+  await page.screenshot({ path: info.outputPath('stockmann-mezzanine-walk.png') });
+  await page.getByRole('button', { name: '3D', exact: true }).click();
+  await expect
+    .poll(() => page.evaluate(() => (window as any).__kerrosMap.getLayoutProperty('surroundings', 'visibility')))
+    .toBe('visible');
+  await page.evaluate(() =>
+    (window as any).__kerrosMap.jumpTo({ center: [24.9421808, 60.1683719], zoom: 18.4, bearing: -28, pitch: 58 }),
+  );
+  await page.waitForTimeout(600);
+  await page.screenshot({ path: info.outputPath('stockmann-mezzanine-cutaway.png') });
+  await page.getByRole('button', { name: 'Active floor' }).click();
+  await page.locator('.place-option').filter({ hasText: 'Parking P3' }).click();
+  await page.waitForTimeout(600);
+  const garage = await page.evaluate(() => {
+    const l = (window as any).__kerrosMap.getLayer('kerros-3d').implementation;
+    const xs: number[] = [],
+      ys: number[] = [];
+    for (const group of l.scene.children.filter((o: any) => o.name === 'kerros-excavation')) {
+      group.traverse((mesh: any) => {
+        const p = mesh.geometry?.attributes.position;
+        if (!p) return;
+        for (let i = 0; i < p.count; i++) {
+          xs.push(p.getX(i));
+          ys.push(p.getY(i));
+        }
+      });
+    }
+    return { width: Math.max(...xs) - Math.min(...xs), depth: Math.max(...ys) - Math.min(...ys), top: l.cage.top };
+  });
+  expect(garage.width).toBeLessThan(130);
+  expect(garage.depth).toBeLessThan(130);
+  expect(garage.top).toBe(0);
+  await page.screenshot({ path: info.outputPath('stockmann-p3-cutaway.png') });
+  await page.getByRole('button', { name: 'Map settings', exact: true }).click();
+  await page.getByRole('switch', { name: /Ground section/ }).click();
+  expect(
+    await page.evaluate(() => {
+      const l = (window as any).__kerrosMap.getLayer('kerros-3d').implementation;
+      return l.scene.children.some((o: any) => o.name === 'kerros-excavation' || o === l.cage);
+    }),
+  ).toBe(false);
 });

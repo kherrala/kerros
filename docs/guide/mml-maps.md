@@ -16,6 +16,29 @@ The reference apps can use the National Land Survey of Finland (Maanmittauslaito
 
 The `VITE_` key is visible in browser requests and compiled browser assets. Keep `.env.local` out of Git; use MML's account tools to replace the key if necessary. Do not use this public configuration mechanism for the Claude secret.
 
+## GitHub Pages
+
+The **Publish site** workflow reads an Actions **variable** named `VITE_MML_API_KEY` from the
+`github-pages` environment (or a repository variable when the environment has no override).
+Local `.env.local` settings are not available to GitHub Actions.
+
+1. Open the repository's **Settings → Environments → github-pages**.
+2. Under **Environment variables**, choose **Add variable**, use `VITE_MML_API_KEY` as the name and your MML key as the value.
+3. Open **Actions → Publish site → Run workflow**, select `main`, and run it. A new build is required because Vite embeds the key in the browser assets.
+4. After deployment, reload the app and choose **Map settings → Basemap → MML · Finnish land survey**.
+
+With GitHub CLI, run these commands from the repository. The first command prompts for the value:
+
+```sh
+gh variable set VITE_MML_API_KEY --env github-pages
+gh workflow run pages.yml --ref main
+```
+
+Both the build and deployment jobs use `environment: github-pages`, so the build can read the
+environment variable before producing the static files. A repository variable can instead be set
+under **Settings → Secrets and variables → Actions → Variables** (omit `--env` in the CLI command).
+See [GitHub's variable instructions](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-variables).
+
 ## What the adapter requests
 
 `app/mmlBasemap.ts` ([source below](#reference-adapter)) is the reference implementation. It uses:

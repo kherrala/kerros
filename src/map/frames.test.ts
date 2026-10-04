@@ -23,13 +23,13 @@ const floor = (id: string) => demo.floors.find(f => f.id === id)!;
 
 describe('one frame for everything', () => {
   it('carries an authored elevation onto the floor being walked', () => {
-    const p1 = floor('floor-p1'); // a garage deck at -12.6
-    expect(p1.elevation).toBe(-12.6);
+    const p1 = floor('floor-p1'); // a garage deck at -15
+    expect(p1.elevation).toBe(-15);
     // Walk mode puts the deck on the map's own ground plane and everything authored has to follow.
     const ground = sceneGround(false, 0, p1.elevation);
-    expect(ground).toBeCloseTo(12.6);
+    expect(ground).toBeCloseTo(15);
     // The ramp off the deck is authored at the deck's own elevation, and its driving surface has to
-    // land on the deck's plate rather than 12.6 m under the walker's feet.
+    // land on the deck's plate rather than 15 m under the walker's feet.
     const ramp = demo.objects.find(o => o.floorId === 'floor-p1' && o.slope)!;
     expect(Math.max(ramp.slope!.high, ramp.slope!.low) + ground + LIFT + SLAB).toBeCloseTo(LIFT + SLAB);
     // Grade — the pavement parcel, the fences, the shadow plane — is a storey-and-a-half of garage
@@ -166,7 +166,7 @@ describe('a ramp belongs to both decks it joins', () => {
   });
 
   it('leaves the storeys its incline merely passes alone', () => {
-    // The driveway out to Mannerheimintie falls 12.6 m under the street, crossing -4.2, -6.6 and -9
+    // The driveway out to Mannerheimintie falls 15 m under the street, crossing -4.2, -7.8 and -11.4
     // a hundred metres from the building. Drawn on those it would lay tarmac through the food hall.
     const street = named('Entry ramp \u00b7 Mannerheimintie');
     for (const id of ['floor-b1', 'floor-b1a', 'floor-basement'])

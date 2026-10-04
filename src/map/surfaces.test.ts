@@ -2,6 +2,29 @@ import { expect, it } from 'vitest';
 import * as THREE from 'three';
 import { splitWallFace, metricUVs } from './surfaces';
 
+it('aligns metre-sized horizontal UVs with the level axis without changing wall UVs', () => {
+  const geometry = new THREE.BoxGeometry(4, 6, 2).toNonIndexed();
+  geometry.rotateZ(Math.PI / 6);
+  geometry.translate(8, -12, 3);
+  metricUVs(geometry);
+  const original = geometry.getAttribute('uv').clone();
+  const axis: [number, number] = [Math.cos(Math.PI / 6), Math.sin(Math.PI / 6)];
+  metricUVs(geometry, axis);
+  const p = geometry.getAttribute('position'),
+    n = geometry.getAttribute('normal'),
+    uv = geometry.getAttribute('uv');
+  for (let i = 0; i < p.count; i++) {
+    if (Math.abs(n.getZ(i)) > 0.5) {
+      expect(uv.getX(i)).toBeCloseTo(p.getX(i) * axis[0] + p.getY(i) * axis[1], 5);
+      expect(uv.getY(i)).toBeCloseTo(-p.getX(i) * axis[1] + p.getY(i) * axis[0], 5);
+    } else {
+      expect(uv.getX(i)).toBe(original.getX(i));
+      expect(uv.getY(i)).toBe(original.getY(i));
+    }
+  }
+  geometry.dispose();
+});
+
 it.each([0, 37, 123])(
   'assigns an oblique wall interior a finish with no duplicate or missing triangles (%s°)',
   angle => {

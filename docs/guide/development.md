@@ -98,6 +98,7 @@ then deploys `dist/` to GitHub Pages after pushes to `main`. It can also be star
 links remain relative to the site rather than naming a custom domain.
 
 Pages serves static files only. AI import and PDF conversion still need the separate server module;
-use `make up` for those features locally. The optional repository Actions variable `VITE_MML_API_KEY`
-enables the public MML basemap in the published build. Never put a Claude credential in a browser
+use `make up` for those features locally. The optional Actions variable `VITE_MML_API_KEY` in the
+`github-pages` environment (or at repository scope) enables the public MML basemap in the published
+build. See [MML configuration](./mml-maps#github-pages). Never put a Claude credential in a browser
 build variable. The workflow runs no paid model requests.

@@ -24,11 +24,11 @@ const SOUTH: Point = [0.821, 0.571]; // toward Kaivokatu
 const NORTH: Point = [-0.821, -0.571];
 
 export const GARAGE_FLOORS: [id: string, name: string, elevation: number, code: string][] = [
-  ['floor-p1', 'Parking P1', -12.6, 'P1'],
-  ['floor-p2', 'Parking P2', -16.8, 'P2'],
-  ['floor-p3', 'Parking P3', -21, 'P3'],
+  ['floor-p1', 'Parking P1', -15, 'P1'],
+  ['floor-p2', 'Parking P2', -19.2, 'P2'],
+  ['floor-p3', 'Parking P3', -23.4, 'P3'],
 ];
-/** The store level the garage cores surface into (Herkku food market, -9 m). */
+/** The store level the garage cores surface into (Herkku food market, -11.4 m). */
 const LOBBY_FLOOR = 'floor-basement';
 const CROSSWALK_SOUTH = -12.5;
 // Scale of each deck relative to the plan above: each is a little smaller than the one over it,
@@ -374,15 +374,15 @@ export function stockmannGarage(p: ProjectDocument): void {
   }
 
   // Street connections: cut-and-cover driveways that climb from the top deck all the way out to grade
-  // at the surrounding roads. They are long because they have to be — a 12.6 m rise at a drivable
+  // at the surrounding roads. They are long because they have to be — a 15 m rise at a drivable
   // gradient needs about a hundred metres of run, which carries them well past the tower footprint and
   // out under the streets. That reach is exactly the case the excavation union exists to cover.
   const top = decks[0];
   const tc = centroid(top.ring);
   const mouths: { gate: SiteObject; foot: Point }[] = [];
   for (const [name, dir, out] of [
-    ['Entry ramp · Mannerheimintie', WEST, 132],
-    ['Exit ramp · Kaivokatu', SOUTH, 128],
+    ['Entry ramp · Mannerheimintie', WEST, 151],
+    ['Exit ramp · Kaivokatu', SOUTH, 151],
   ] as [string, Point, number][]) {
     const mouth = add(tc, scale(dir, out)),
       foot = add(tc, scale(dir, 26));

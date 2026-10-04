@@ -1,7 +1,7 @@
 import { beforeAll, expect, it } from 'vitest';
 import { createDemo } from './demo';
 import { areaOf, intersection } from './stockmannPlanning';
-import { containedBy, footprint, objectArea } from '../../src/model/geometry';
+import { barrierEnds, containedBy, distance, footprint, objectArea } from '../../src/model/geometry';
 import { createRouteClearance } from '../../src/model/routeClearance';
 import { normalizeBoundaries } from '../../src/model/boundaries';
 import type { ProjectDocument } from '../../src/model/types';
@@ -10,6 +10,25 @@ let p: ProjectDocument;
 beforeAll(() => {
   p = createDemo();
 }, 30_000);
+
+it('guards the mezzanine edges and upper atrium with physical, low railings', () => {
+  const clearance = createRouteClearance(p);
+  for (const floor of p.floors.filter(f => f.mezzanine || f.elevation > 0)) {
+    const guards = p.barriers.filter(b => b.floorId === floor.id && b.kind === 'fence');
+    expect(guards.length, floor.name).toBeGreaterThan(3);
+    for (const guard of guards) {
+      expect(guard.height).toBe(1.1);
+      const [a, b] = barrierEnds(p, guard),
+        length = distance(a, b);
+      if (length < 1) continue;
+      const x = (a[0] + b[0]) / 2,
+        y = (a[1] + b[1]) / 2;
+      const nx = -(b[1] - a[1]) / length,
+        ny = (b[0] - a[0]) / length;
+      expect(clearance(floor.id)([x + nx, y + ny], [x - nx, y - ny]), floor.name).toBe(false);
+    }
+  }
+});
 
 it('gives every storey its own programme and reserves circulation before departments', () => {
   const programmes = new Set<string>();

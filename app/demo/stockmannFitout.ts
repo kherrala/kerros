@@ -274,8 +274,8 @@ export function stockmannFitout(p: ProjectDocument, floorId: string, outline: Ri
   f.claim({ name: 'East lift approach', use: 'circulation' }, box(17, -7, 34, 20), 0, 1);
   f.claim({ name: 'West lift approach', use: 'circulation' }, box(-40, -17, -24, 2), 0, 1);
   for (const ring of shafts) f.claim({ name: 'Vertical circulation landing', use: 'circulation' }, ring, 0, 1);
-  f.claim({ name: 'South escalator hall', use: 'circulation' }, box(1.5, -24, 20, -8), 0, 1);
-  f.claim({ name: 'North escalator hall', use: 'circulation' }, box(1.5, 16, 20, 32), 0, 1);
+  f.claim({ name: 'South escalator hall', use: 'circulation' }, box(1.5, -27, 20, -8), 0, 1);
+  f.claim({ name: 'North escalator hall', use: 'circulation' }, box(1.5, 16, 20, 35), 0, 1);
   if (!holes.length)
     f.claim({ name: plan.centre[0], use: floorId === 'floor-ground' ? 'retail' : 'lounge' }, box(-9, -9, 17, 17));
   f.claim({ name: 'Atrium promenade', use: 'circulation' }, box(-13.5, -13.5, 20, 21), 0, 1);
