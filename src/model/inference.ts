@@ -12,6 +12,7 @@ import {
   objectArea,
   objectPosition,
   openRing,
+  pointInRing,
   segmentProjection,
   splitRoom,
 } from './geometry';
@@ -120,13 +121,43 @@ export function inferOpenBoundaries(project: ProjectDocument): Portal[] {
     for (const floor of servedFloors(project, space))
       if (floor.id !== space.floorId && !here?.has(floor.id)) standOn(space, floor.id);
   }
-  const wallsByFloor = new Map<string, [Point, Point][]>();
+  // This index belongs to this inference pass: mutable editor drafts must never reuse stale
+  // footprints. Bounds reject distant candidates before polygon tests and wall projections.
+  type Bounds = [number, number, number, number];
+  const bounds = (points: Point[], pad = 0): Bounds => {
+    const box: Bounds = [Infinity, Infinity, -Infinity, -Infinity];
+    for (const [x, y] of points) {
+      box[0] = Math.min(box[0], x - pad);
+      box[1] = Math.min(box[1], y - pad);
+      box[2] = Math.max(box[2], x + pad);
+      box[3] = Math.max(box[3], y + pad);
+    }
+    return box;
+  };
+  const within = (box: Bounds, x: number, y: number) => x >= box[0] && y >= box[1] && x <= box[2] && y <= box[3];
+  const shapes = new Map(
+    [...byFloor.values()].flat().map(o => {
+      const rings = footprint(o);
+      return [o.id, { rings, bounds: bounds(rings[0] ?? []) }] as const;
+    }),
+  );
+  const inside = (space: SiteObject, point: Point) => {
+    const shape = shapes.get(space.id)!;
+    return (
+      within(shape.bounds, ...point) &&
+      !!shape.rings[0] &&
+      pointInRing(point, shape.rings[0]) &&
+      !shape.rings.slice(1).some(h => pointInRing(point, h))
+    );
+  };
+  const wallsByFloor = new Map<string, { ends: [Point, Point]; bounds: Bounds }[]>();
   for (const barrier of project.barriers) {
     const key = barrier.floorId ?? '';
     const list = wallsByFloor.get(key);
     const ends = barrierEnds(project, barrier);
-    if (list) list.push(ends);
-    else wallsByFloor.set(key, [ends]);
+    const wall = { ends, bounds: bounds(ends, REACH) };
+    if (list) list.push(wall);
+    else wallsByFloor.set(key, [wall]);
   }
   const shared = new Map<string, number>();
   for (const [floorKey, onFloor] of byFloor) {
@@ -137,7 +168,7 @@ export function inferOpenBoundaries(project: ProjectDocument): Portal[] {
       // Every ring, holes included. A courtyard's edge is as much a boundary as the outer wall, and
       // a pavilion standing in that courtyard connects to nothing if only the outline is walked.
       // Probing back into the space itself is skipped below, so a hole over open void costs nothing.
-      for (const ringRaw of footprint(space)) {
+      for (const ringRaw of shapes.get(space.id)!.rings) {
         if (!ringRaw?.length) continue;
         const ring = openRing(ringRaw);
         for (let i = 0; i < ring.length; i++) {
@@ -155,11 +186,12 @@ export function inferOpenBoundaries(project: ProjectDocument): Portal[] {
             const px = a[0] + ux * t,
               py = a[1] + uy * t;
             // Built across this stretch? Then whatever is beyond it is behind a wall.
-            if (walls.some(([wa, wb]) => segmentProjection([px, py], wa, wb).distance < REACH)) continue;
+            if (walls.some(w => within(w.bounds, px, py) && segmentProjection([px, py], ...w.ends).distance < REACH))
+              continue;
             for (const sign of [1, -1]) {
               const probe: Point = [px + nx * REACH * sign, py + ny * REACH * sign];
-              if (inSpace(space, probe)) continue; // still inside ourselves
-              const other = ordered.find(o => o.id !== space.id && inSpace(o, probe));
+              if (inside(space, probe)) continue; // still inside ourselves
+              const other = ordered.find(o => o.id !== space.id && inside(o, probe));
               if (!other) continue;
               // Shared geometry already says whether these two faces have an open edge. A coarse
               // probe must neither miss a narrow opening nor invent a shortcut at a wall junction.

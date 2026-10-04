@@ -64,15 +64,25 @@ export function stockmannNavigation(p: ProjectDocument) {
   p.navEdges = graph.edges;
   // Adjacent semantic faces may meet through a clipped corner or an unlabelled sliver. Connect
   // nearby visible waypoints too; the physical floor/wall clearance remains authoritative.
+  const linked = new Map<string, Set<string>>();
+  for (const edge of p.navEdges) {
+    const neighbours = linked.get(edge.aId) ?? new Set<string>();
+    neighbours.add(edge.bId);
+    linked.set(edge.aId, neighbours);
+  }
   for (const floor of p.floors) {
     const nodes = p.navNodes.filter(n => n.floorId === floor.id);
     const clear = visible.get(floor.id)!;
-    const linked = new Set(p.navEdges.flatMap(e => [`${e.aId}:${e.bId}`, `${e.bId}:${e.aId}`]));
     for (let i = 0; i < nodes.length; i++)
       for (let j = i + 1; j < nodes.length; j++) {
         const a = nodes[i],
           b = nodes[j];
-        if (linked.has(`${a.id}:${b.id}`) || distance(a.position, b.position) > 8 || !clear(a.position, b.position))
+        if (
+          distance(a.position, b.position) > 8 ||
+          linked.get(a.id)?.has(b.id) ||
+          linked.get(b.id)?.has(a.id) ||
+          !clear(a.position, b.position)
+        )
           continue;
         p.navEdges.push({ id: uid(), kind: 'walk', aId: a.id, bId: b.id });
       }

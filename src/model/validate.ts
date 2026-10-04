@@ -70,6 +70,17 @@ export function validateRings(rings: Ring[], minEdge = 0.001, minArea = 0.01): s
 /** Spatial relationships between entities: ring sanity per object, parent containment without
  *  cycles, and openings that actually fit the barriers they sit in. */
 export function validateRelationships(project: ProjectDocument): string | null {
+  // A facade can have thousands of windows. Index attachments once per validation pass rather
+  // than searching every object again for every opening; drafts may mutate between passes.
+  const objects = new Map(project.objects.map(o => [o.id, o]));
+  const barriers = new Map(project.barriers.map(b => [b.id, b]));
+  const attachments = new Map<string, SiteObject[]>();
+  for (const o of project.objects) {
+    if (!o.barrierId) continue;
+    const list = attachments.get(o.barrierId) ?? [];
+    list.push(o);
+    attachments.set(o.barrierId, list);
+  }
   // Reject degenerate segments, while allowing real returns and jambs below the drawing-grid size.
   for (const barrier of project.barriers) {
     const [a, b] = barrierEnds(project, barrier);
@@ -82,7 +93,7 @@ export function validateRelationships(project: ProjectDocument): string | null {
       if (error) return error;
     }
     if (object.parentId) {
-      const parent = project.objects.find(o => o.id === object.parentId);
+      const parent = objects.get(object.parentId);
       if (
         !parent?.rings ||
         !object.rings ||
@@ -95,14 +106,14 @@ export function validateRelationships(project: ProjectDocument): string | null {
       while (ancestor) {
         if (seen.has(ancestor.id)) return 'Zone parents cannot form a cycle.';
         seen.add(ancestor.id);
-        ancestor = project.objects.find(o => o.id === ancestor!.parentId);
+        ancestor = ancestor.parentId ? objects.get(ancestor.parentId) : undefined;
       }
     }
     if (object.barrierId) {
       // Only an opening belongs in a barrier: a camera "set into" a wall is a placement bug, and
       // validating it as an opening would let it punch a hole through the rendering.
       if (!isOpening(object.kind)) return 'Only a door, window or gate can sit in a barrier.';
-      const barrier = project.barriers.find(b => b.id === object.barrierId);
+      const barrier = barriers.get(object.barrierId);
       if (!barrier || barrier.floorId !== object.floorId)
         return 'Opening references a missing barrier or a different floor.';
       const [a, b] = barrierEnds(project, barrier);
@@ -113,12 +124,9 @@ export function validateRelationships(project: ProjectDocument): string | null {
       if (offset - object.width / 2 < -0.001 || offset + object.width / 2 > distance(a, b) + 0.001)
         return `The barrier is too short for its attached opening. Opening "${object.name || object.id}" (${object.id}) on barrier ${barrier.id}: width ${object.width.toFixed(2)} m, centre offset ${offset.toFixed(2)} m, segment length ${distance(a, b).toFixed(2)} m. The centre offset must be between ${(object.width / 2).toFixed(2)} and ${(distance(a, b) - object.width / 2).toFixed(2)} m; if that interval is empty, choose a longer host segment.`;
       if (
-        project.objects.some(
-          o =>
-            o.id !== object.id &&
-            o.barrierId === barrier.id &&
-            Math.abs((o.offset ?? 0) - offset) < (o.width + object.width) / 2 - 0.001,
-        )
+        attachments
+          .get(barrier.id)!
+          .some(o => o.id !== object.id && Math.abs((o.offset ?? 0) - offset) < (o.width + object.width) / 2 - 0.001)
       )
         return 'Attached openings cannot overlap.';
     }
@@ -131,12 +139,12 @@ export function validateRelationships(project: ProjectDocument): string | null {
 export function validateNavigation(p: ProjectDocument): string | null {
   const nodes = navNodes(p),
     byId = new Map(nodes.map(n => [n.id, n]));
+  const objects = new Map(p.objects.map(o => [o.id, o]));
   const floorIds = new Set(p.floors.map(f => f.id));
   for (const n of nodes) {
     if (!point(n.position)) return 'A route node needs a valid position.';
     if (n.floorId !== null && !floorIds.has(n.floorId)) return 'A route node references an unknown floor.';
-    if (n.objectId !== undefined && !p.objects.some(o => o.id === n.objectId))
-      return 'A route node references a missing object.';
+    if (n.objectId !== undefined && !objects.has(n.objectId)) return 'A route node references a missing object.';
   }
   for (const e of navEdges(p)) {
     if (!['walk', 'door', 'stairs', 'elevator'].includes(e.kind)) return 'Unknown route edge kind.';
@@ -151,7 +159,7 @@ export function validateNavigation(p: ProjectDocument): string | null {
     if (e.kind === 'door' && a.floorId !== b.floorId && a.floorId !== null && b.floorId !== null)
       return 'Door edges must stay on one floor or step outside.';
     if (e.objectId === undefined) continue;
-    const object = p.objects.find(o => o.id === e.objectId);
+    const object = objects.get(e.objectId);
     if (!object) return 'A route edge references a missing object.';
     if (e.kind === 'door' && !['door', 'gate', 'turnstile'].includes(object.kind))
       return 'A door edge must bind a door, gate or turnstile.';

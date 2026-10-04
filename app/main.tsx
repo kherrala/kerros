@@ -185,14 +185,14 @@ function Home() {
   }, [adapters.projects]);
   // Reopening a demo resumes its saved copy so edits survive the trip back home.
   async function openDemo(readOnly = false) {
-    const demo = (await import('./demo/demo')).createDemo();
-    const existing = await adapters.projects.load(demo.id).catch(() => null);
-    setOpen({ project: existing ?? demo, readOnly });
+    const existing = await adapters.projects.load(STOCKMANN_ID).catch(() => null);
+    const project = existing ?? (await import('./demo/demo')).createDemo();
+    setOpen({ project, readOnly });
   }
   async function openSilo() {
-    const demo = (await import('./demo/silo')).createSilo();
-    const existing = await adapters.projects.load(demo.id).catch(() => null);
-    setOpen({ project: existing ?? demo, readOnly: false });
+    const existing = await adapters.projects.load(SILO_ID).catch(() => null);
+    const project = existing ?? (await import('./demo/silo')).createSilo();
+    setOpen({ project, readOnly: false });
   }
   async function openBackrooms(options: BackroomsOptions) {
     try {

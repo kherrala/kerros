@@ -31,6 +31,16 @@ const fract = (x: number) => x - Math.floor(x);
 const hash = (x: number, y: number) => fract(Math.sin(x * 127.1 + y * 311.7 + 74.7) * 43758.5453);
 const smooth = (x: number) => x * x * (3 - 2 * x);
 
+const lattices = new Map<number, Float64Array>();
+function lattice(cells: number) {
+  let values = lattices.get(cells);
+  if (!values) {
+    values = Float64Array.from({ length: cells * cells }, (_, i) => hash(i % cells, Math.floor(i / cells)));
+    lattices.set(cells, values);
+  }
+  return values;
+}
+
 /** Periodic noise: both value and slope meet at the tile edges, including broad weathering. */
 function noise(u: number, v: number, cells: number) {
   const x = u * cells,
@@ -39,13 +49,34 @@ function noise(u: number, v: number, cells: number) {
     iy = Math.floor(y);
   const a = smooth(fract(x)),
     b = smooth(fract(y));
-  const at = (dx: number, dy: number) => hash((ix + dx) % cells, (iy + dy) % cells);
+  const values = lattice(cells);
+  const at = (dx: number, dy: number) => values[((iy + dy) % cells) * cells + ((ix + dx) % cells)];
   return (at(0, 0) * (1 - a) + at(1, 0) * a) * (1 - b) + (at(0, 1) * (1 - a) + at(1, 1) * a) * b;
+}
+
+const SIZE = 512;
+let sharedNoise: { grain: Float64Array; weather: Float64Array } | undefined;
+function textureNoise() {
+  if (!sharedNoise) {
+    const grain = new Float64Array(SIZE * SIZE),
+      weather = new Float64Array(SIZE * SIZE);
+    for (let y = 0; y < SIZE; y++)
+      for (let x = 0; x < SIZE; x++) {
+        const i = y * SIZE + x;
+        grain[i] = hash(x, y);
+        weather[i] = noise(x / SIZE, y / SIZE, 4) * 0.6 + noise(x / SIZE, y / SIZE, 16) * 0.4;
+      }
+    sharedNoise = { grain, weather };
+  }
+  return sharedNoise;
 }
 
 /** Separate colour, relief and roughness maps: a dark stain must not become a dent in the wall. */
 export function surfaceTextures(kind: SurfaceFinish) {
-  const size = 512;
+  const size = SIZE;
+  // All finishes sample the same deterministic field. Keep CPU data across scene lifetimes;
+  // each caller still owns fresh canvas/GPU textures and can dispose them independently.
+  const field = textureNoise();
   const canvases = Array.from({ length: 3 }, () => {
     const canvas = document.createElement('canvas');
     canvas.width = canvas.height = size;
@@ -57,8 +88,8 @@ export function surfaceTextures(kind: SurfaceFinish) {
     for (let x = 0; x < size; x++) {
       const u = x / size,
         v = y / size,
-        grain = hash(x, y);
-      const weather = noise(u, v, 4) * 0.6 + noise(u, v, 16) * 0.4;
+        grain = field.grain[y * size + x];
+      const weather = field.weather[y * size + x];
       // Plaster covers the floor plates — most of any interior frame. Its map must average out
       // near WHITE: the texture multiplies the authored room colour, so any headroom it keeps for
       // itself darkens every interior. At the earlier 0.91 ± 0.065 swing a whole storey read as

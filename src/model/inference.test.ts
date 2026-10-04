@@ -35,6 +35,18 @@ describe('open boundaries — the connections with no door in them', () => {
     addBarrier(p, [3, -3], [3, 3], 'floor-ground', 'wall');
     expect(inferOpenBoundaries(p)).toEqual([]);
   });
+  it('rebuilds its spatial lookups after rooms and wall junctions move in the same draft', () => {
+    const p = pair();
+    expect(inferOpenBoundaries(p)).toHaveLength(1);
+    const right = p.objects.find(o => o.id === 'right')!;
+    right.rings = right.rings!.map(ring => ring.map(([x, y]) => [x + 20, y]));
+    expect(inferOpenBoundaries(p)).toEqual([]);
+    right.rings = [rectangle([6, 0], 6, 6)];
+    addBarrier(p, [3, -3], [3, 3], 'floor-ground', 'wall');
+    expect(inferOpenBoundaries(p)).toEqual([]);
+    for (const junction of p.junctions) junction.position[0] += 20;
+    expect(inferOpenBoundaries(p)).toHaveLength(1);
+  });
   it('ignores spaces that only brush at a corner', () => {
     const p = newProject();
     space(p, 'a', 'floor-ground', [0, 0]);

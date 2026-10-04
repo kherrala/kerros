@@ -27,12 +27,47 @@ test('the viewer opens a browser-saved project, switches floors and enters 3D wi
 }) => {
   const errors: string[] = [];
   page.on('pageerror', error => errors.push(error.message));
+  // Deliberately let the basemap load before the 3D module. The scene must build without a
+  // floor change or live-status update to wake it up.
+  let releaseScene!: () => void;
+  const sceneGate = new Promise<void>(resolve => {
+    releaseScene = resolve;
+  });
+  await page.route(/\/src\/map\/SceneLayer\.tsx?$|\/assets\/scene-[^/]+\.js$/, async route => {
+    await sceneGate;
+    await route.continue();
+  });
   // The viewer picker only lists browser-persisted projects, so seed the demo the way the editor saves it.
-  await page.addInitScript(p => localStorage.setItem(`kerros:project:${p.id}`, JSON.stringify(p)), createDemo());
+  // Stockmann exceeds localStorage's quota; use the same IndexedDB store as the editor.
+  await page.goto('/viewer.html');
+  await page.evaluate(
+    p =>
+      new Promise<void>((resolve, reject) => {
+        const open = indexedDB.open('kerros-projects', 1);
+        open.onupgradeneeded = () => open.result.createObjectStore('projects');
+        open.onerror = () => reject(open.error);
+        open.onsuccess = () => {
+          const db = open.result,
+            tx = db.transaction('projects', 'readwrite');
+          tx.objectStore('projects').put(p, p.id);
+          tx.oncomplete = () => {
+            db.close();
+            resolve();
+          };
+          tx.onabort = tx.onerror = () => {
+            db.close();
+            reject(tx.error);
+          };
+        };
+      }),
+    createDemo(),
+  );
   await page.goto('/viewer.html');
   await page.getByRole('button', { name: /Stockmann Helsinki/ }).click();
   await expect(page.locator('.map-loading')).toHaveCount(0);
   await expect(page.locator('.map-wrap')).toHaveAttribute('data-frame', 'ready');
+  releaseScene();
+  await expect(page.locator('.map-wrap')).toHaveAttribute('data-scene', 'ready');
   // Scoped to the sidebar because zone overlays on the map expose buttons with the same names.
   const floor = (name: RegExp) => page.locator('.sidebar').getByRole('button', { name });
   await expect(floor(/Herkku food market/)).toBeVisible();

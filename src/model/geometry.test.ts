@@ -182,6 +182,15 @@ describe('relationship validation', () => {
       p.objects.push(door);
     }
     expect(validateRelationships(p)).toMatch(/overlap/);
+    // Reusing a mutable draft must not leave stale attachment or barrier lookups behind.
+    p.objects[1].offset = 8;
+    expect(validateRelationships(p)).toBeNull();
+    addBarrier(p, [0, 4], [10, 4], 'floor-ground', 'wall');
+    p.objects[1].barrierId = p.barriers[1].id;
+    p.objects[1].offset = 5;
+    expect(validateRelationships(p)).toBeNull();
+    p.barriers.pop();
+    expect(validateRelationships(p)).toMatch(/missing barrier/);
   });
   it('rejects openings wider than their barrier allows', () => {
     const p = newProject();

@@ -287,7 +287,11 @@ export function MapCanvas(props: MapCanvasProps) {
     let active = true;
     void loadScene()
       .then(() => {
-        if (active) setFrame(n => n + 1);
+        if (!active) return;
+        // A cached project/style may already be ready. A marker-frame update alone does not
+        // rerun the scene-sync effect, leaving 3D blank until a later floor or status change.
+        sync();
+        setFrame(n => n + 1);
       })
       .catch(error => {
         scenePending.current = null;
@@ -2674,7 +2678,11 @@ export function MapCanvas(props: MapCanvasProps) {
     equipment: '#9a8f74',
   };
   return (
-    <div className={`map-wrap ${props.threeD ? 'perspective' : ''}`} data-frame={frame > 0 ? 'ready' : 'loading'}>
+    <div
+      className={`map-wrap ${props.threeD ? 'perspective' : ''}`}
+      data-frame={frame > 0 ? 'ready' : 'loading'}
+      data-scene={props.threeD && props.showPlan ? (scene.current?.diagnostics.drawCalls ? 'ready' : 'loading') : 'off'}
+    >
       <div className="map-surface" ref={container} data-testid="map-canvas" />
       <div className="map-overlay" ref={overlay}>
         {markers.map(({ o, s, world, isLabel, mini, voidLabel }) => {

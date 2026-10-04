@@ -74,7 +74,10 @@ export function chainVertical(p: ProjectDocument, object: SiteObject): NavNode[]
   const travel = object.stairModel === 'escalator' ? (object.travel ?? 'up') : null;
   const floors = servedFloors(p, object);
   const key = shaftKey(object);
-  const twin = (floorId: string) => p.objects.find(o => shaftKey(o) === key && o.floorId === floorId) ?? object;
+  const twins = new Map<string | null, SiteObject>();
+  for (const o of p.objects)
+    if (o.kind === object.kind && shaftKey(o) === key && !twins.has(o.floorId)) twins.set(o.floorId, o);
+  const twin = (floorId: string) => twins.get(floorId) ?? object;
   const out = floors.map(f => {
     const t = twin(f.id);
     return addNavNode(p, f.id, objectPosition(p, t), t.id);
