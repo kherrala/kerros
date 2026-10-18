@@ -1,6 +1,6 @@
 {
   "name": "@kerros/editor",
-  "version": "0.1.0-rc.1",
+  "version": "0.1.0-rc.2",
   "description": "Kerros React floor-plan editor, browser-safe CAD conversion, SVG output and host adapters for persistence, maps and server-backed drawing imports.",
   "license": "MIT",
   "type": "module",
@@ -11,7 +11,13 @@
   },
   "homepage": "https://github.com/kherrala/kerros#readme",
   "bugs": "https://github.com/kherrala/kerros/issues",
-  "keywords": ["floor-plan", "indoor-mapping", "maplibre", "react", "editor"],
+  "keywords": [
+    "floor-plan",
+    "indoor-mapping",
+    "maplibre",
+    "react",
+    "editor"
+  ],
   "module": "./dist/index.js",
   "types": "./dist/types/editor/index.d.ts",
   "files": [

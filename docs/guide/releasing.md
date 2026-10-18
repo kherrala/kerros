@@ -32,6 +32,20 @@ The GitHub environment may require approval if that is part of the repository's 
 token is stored in the repository; the workflow uses OpenID Connect trusted publishing and requests npm
 provenance.
 
+### First publication of a new package name
+
+npm requires the package record to exist before a trusted publisher can be attached. Bootstrap each
+new package once with interactive two-factor authentication, then create its trust relationship:
+
+```sh
+npm publish --workspace @kerros/schema --access public --tag next
+npx npm@12.2.0 trust github @kerros/schema \
+  --file npm-publish.yml --repo kherrala/kerros --env npm --allow-publish --yes
+```
+
+Repeat those commands for `viewer`, `editor`, and `server`. Subsequent versions are published only by
+the GitHub workflow. Complete the first trusted publish within two days of creating the relationship.
+
 ## Publish
 
 Commit the version, changelog, lockfile, and package changes. Create a GitHub release whose tag is the
@@ -43,5 +57,5 @@ npm versions are immutable and publishing several packages is not atomic. If the
 only part of a version, fix the problem, increment the prerelease number, and release all four packages
 under the new version.
 
-Use `0.1.0-rc.1` with the npm `next` tag for the first public trial. After consumers have validated the
+Use a `0.1.0-rc.N` version with the npm `next` tag for public trials. After consumers have validated the
 API and installation, release `0.1.0`; the workflow assigns stable versions to `latest`.

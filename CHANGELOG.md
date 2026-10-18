@@ -8,6 +8,13 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+## [0.1.0-rc.2] - 2026-10-19
+
+### Changed
+
+- Published all packages through npm trusted publishing with GitHub Actions provenance after the
+  initial package records were bootstrapped with interactive two-factor authentication.
+
 ## [0.1.0-rc.1] - 2026-10-18
 
 ### Added
@@ -17,7 +24,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - `@kerros/editor`, with authoring tools, browser persistence adapters, and CAD-to-project conversion helpers.
 - `@kerros/server`, with Node.js drawing extraction, calibrated analysis, SVG output, and streamed AI imports.
 - ESM output, TypeScript declarations, exported stylesheets, package READMEs, and MIT licenses.
-- Reproducible tarball consumer tests and npm trusted publishing with provenance.
+- Reproducible tarball consumer tests and automated npm release infrastructure.
 
-[Unreleased]: https://github.com/kherrala/kerros/compare/v0.1.0-rc.1...HEAD
+[Unreleased]: https://github.com/kherrala/kerros/compare/v0.1.0-rc.2...HEAD
+[0.1.0-rc.2]: https://github.com/kherrala/kerros/compare/v0.1.0-rc.1...v0.1.0-rc.2
 [0.1.0-rc.1]: https://github.com/kherrala/kerros/releases/tag/v0.1.0-rc.1
