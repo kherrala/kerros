@@ -89,7 +89,17 @@ test('calls, boards, rides and exits the Backrooms elevator with cabin music', a
   await expect(panel.getByRole('status')).toContainText('Travelling to Deep bath chambers');
   await page.screenshot({ path: info.outputPath('inside-elevator.png') });
   await expect
-    .poll(() => page.evaluate(() => (window as any).__kerrosMap.transform.getCameraAltitude()))
+    .poll(() =>
+      page.evaluate(() => {
+        const map = (window as any).__kerrosMap;
+        const latitude = (map.getCenter().lat * Math.PI) / 180;
+        const unitsPerMetre = 1 / (40075016.68557849 * Math.cos(latitude));
+        const pixelsPerMetre = unitsPerMetre * 512 * 2 ** map.getZoom();
+        const halfFov = (map.getVerticalFieldOfView() * Math.PI) / 360;
+        const distance = (0.5 * map.getCanvas().clientHeight) / Math.tan(halfFov) / pixelsPerMetre;
+        return map.getCenterElevation() + Math.cos((map.getPitch() * Math.PI) / 180) * distance;
+      }),
+    )
     .toBeCloseTo(2.03, 2);
   await expect(page).toHaveURL(/f=backrooms-pool-1/, { timeout: 20_000 });
   await expect(panel.getByRole('button', { name: 'Exit elevator', exact: true })).toBeEnabled();

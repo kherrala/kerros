@@ -188,6 +188,7 @@ for (const pauseReason of ['input-budget', 'turn-limit'] as const)
     await expect(page.locator('.map-wrap')).toHaveAttribute('data-frame', 'ready');
     await page.getByRole('button', { name: 'Plan editor', exact: true }).click();
     if (pauseReason === 'turn-limit') await page.getByRole('button', { name: 'Switch to dark mode' }).click();
+    await expect.poll(() => new URLSearchParams(new URL(page.url()).hash.slice(1)).get('p')).not.toBeNull();
     const originalProjectId = new URLSearchParams(new URL(page.url()).hash.slice(1)).get('p');
     await page.getByRole('button', { name: 'Import plan', exact: true }).click();
     const dialog = page.getByRole('complementary', { name: 'Plan import' });
@@ -308,6 +309,9 @@ for (const pauseReason of ['input-budget', 'turn-limit'] as const)
     await page.locator('.sidebar .object-row').filter({ hasText: 'Reception' }).click();
     await page.getByRole('textbox', { name: 'Name', exact: true }).fill('Corrected reception');
     await page.getByRole('textbox', { name: 'Name', exact: true }).press('Tab');
+    // Persistence is debounced; continuation must read the correction from the saved base after reload.
+    await page.waitForTimeout(600);
+    await expect(page.locator('.save-status')).toContainText('All changes saved');
     await page.getByRole('button', { name: 'Import plan', exact: true }).click();
     await show('Activity');
     await activity.getByLabel('Message to AI').fill('Preserve my correction and finish.');

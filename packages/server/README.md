@@ -1,6 +1,10 @@
 # @kerros/server
 
-Node-only source extraction, calibrated JSON/SVG evidence and AI imports for Kerros. Requires Node.js 22+. Build and package this workspace locally before publishing a release.
+Node-only source extraction, calibrated JSON/SVG evidence and AI imports for Kerros. Requires Node.js 22+.
+
+```sh
+npm install @kerros/server
+```
 
 ```ts
 import { openVisualSource, queryCandidates, analysisSvg } from '@kerros/server';
@@ -23,4 +27,5 @@ The package includes `dist/tools/raster.py`. Raster support requires Python 3 wi
 
 The browser editor uses HTTP host adapters and does not import this package. For headless CAD conversion, this package also exports `importPlanEntities`, layer detection, sheet registration and `documentSvg`. Browser hosts get the same helpers from `@kerros/editor` or `@kerros/editor/host`; their implementation is shared internally.
 
-Build from the repository with `npm run build --workspace @kerros/server`, then create a local tarball with `npm pack --workspace @kerros/server --pack-destination /tmp`. The complete reference is in `docs/reference/server.md` in the repository.
+The complete API is in the [server reference](https://github.com/kherrala/kerros/blob/main/docs/reference/server.md).
+Release history is in the [changelog](https://github.com/kherrala/kerros/blob/main/CHANGELOG.md).

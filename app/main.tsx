@@ -38,6 +38,7 @@ import { mmlBasemap } from './mmlBasemap';
 import { createAiImportAdapter, createPdfDrawingAdapter } from './aiImport';
 import type { ImportProjection } from '@kerros/editor/host';
 import { clearViewLink, parseViewLink, writeViewLink, type ViewLink } from './viewLink';
+import { setupMaplibreWorker } from './maplibreWorker';
 import { en } from './strings';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import '../src/styles.css';
@@ -47,8 +48,9 @@ import './reset.css';
 // behind them — 1.7 MB the picker has no use for. The `/host` subpath above is the same facade minus
 // the renderer, so naming these two through a dynamic import is what keeps the two halves apart: the
 // renderer is fetched while the chosen project is being read out of storage.
-const SitePlanner = lazy(() => import('@kerros/editor').then(m => ({ default: m.FloorEditor })));
-const SiteViewer = lazy(() => import('@kerros/editor').then(m => ({ default: m.SiteViewer })));
+const loadEditor = () => Promise.all([setupMaplibreWorker(), import('@kerros/editor')]).then(([, editor]) => editor);
+const SitePlanner = lazy(() => loadEditor().then(m => ({ default: m.FloorEditor })));
+const SiteViewer = lazy(() => loadEditor().then(m => ({ default: m.SiteViewer })));
 
 const DEMOS = [
   {
@@ -102,7 +104,7 @@ function Home() {
   // the click to begin a 1.7 MB download would trade a slow start for a stare. Idle-scheduled, so it
   // queues behind the picker's own work rather than competing with it.
   useEffect(() => {
-    const warm = () => void import('@kerros/editor');
+    const warm = () => void loadEditor();
     const idle = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
     const handle = idle ? idle(warm) : window.setTimeout(warm, 400);
     return () => {

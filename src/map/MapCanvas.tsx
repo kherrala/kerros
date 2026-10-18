@@ -10,12 +10,14 @@ import {
   type CSSProperties,
   type PointerEvent as ReactPointerEvent,
 } from 'react';
-import maplibregl, {
-  type ExpressionSpecification,
-  type FilterSpecification,
-  type GeoJSONSource,
-  type ImageSource,
-  type Map as GLMap,
+import * as maplibregl from 'maplibre-gl';
+import type {
+  ExpressionSpecification,
+  FilterSpecification,
+  GeoJSONSource,
+  ImageSource,
+  Map as GLMap,
+  VisibilitySpecification,
 } from 'maplibre-gl';
 import { Compass, LocateFixed, Minus, Mountain, PersonStanding, Plus, RotateCcw, RotateCw } from 'lucide-react';
 import polygonClipping from 'polygon-clipping';
@@ -54,7 +56,7 @@ import { EntityIcon } from '../components/Icons';
 import { draftFeatures, makeFeatures, navGraphFeatures, onFloor, visibleOnFloor } from './features';
 import { boundaryEdges } from '../model/boundaries';
 import { ROUTE_COLOR, ROUTE_EDGE, ROUTE_SOFT, routeArrowImage, routeFeatures, routeFlowGradient } from './route';
-import { aimCenter, floorAim } from './cameraAim';
+import { aimCenter, cameraPosition, cameraToCenterDistance, floorAim } from './cameraAim';
 import type { JourneyPlayer } from './journey';
 import type { WalkJourney, WalkJourneyHost } from './walkJourney';
 import type { Route } from '../model/navigation';
@@ -402,7 +404,7 @@ export function MapCanvas(props: MapCanvasProps) {
    *  screen they do not appear on. Hide every layer that is not ours; a source no visible layer
    *  draws is one MapLibre stops loading tiles for. Remembered per layer and put back on the way
    *  out, so a basemap that hides its own layers by zoom keeps its arrangement. */
-  const veiled = useRef(new Map<string, string>());
+  const veiled = useRef(new Map<string, VisibilitySpecification>());
   const veilBasemap = () => {
     const m = map.current;
     if (!m || !m.getStyle()) return;
@@ -411,7 +413,10 @@ export function MapCanvas(props: MapCanvasProps) {
     if (hide) {
       for (const layer of m.getStyle().layers ?? []) {
         if (layer.id.startsWith('kerros-') || layer.type === 'background' || veiled.current.has(layer.id)) continue;
-        veiled.current.set(layer.id, (m.getLayoutProperty(layer.id, 'visibility') as string | undefined) ?? 'visible');
+        veiled.current.set(
+          layer.id,
+          (m.getLayoutProperty(layer.id, 'visibility') as VisibilitySpecification | undefined) ?? 'visible',
+        );
         m.setLayoutProperty(layer.id, 'visibility', 'none');
       }
     } else if (veiled.current.size) {
@@ -1556,7 +1561,7 @@ export function MapCanvas(props: MapCanvasProps) {
       // so the constant is half the familiar 256-pixel one; with the larger figure the camera looked
       // twice as high as it is and the depth compensation below came out at half strength.
       const perPixel = (78271.5169 * Math.cos((m.getCenter().lat * Math.PI) / 180)) / Math.pow(2, zoom);
-      const screenDistance = m.transform.cameraToCenterDistance || m.getCanvas().clientHeight * 1.5;
+      const screenDistance = cameraToCenterDistance(m);
       const altitude = screenDistance * perPixel * Math.cos((m.getPitch() * Math.PI) / 180);
       // cameraForBounds framed the plan on the ground; the storey is `elev` below it (or above), so
       // the camera is that much farther from what is being framed. Zooming in lowers the camera by
@@ -1793,8 +1798,9 @@ export function MapCanvas(props: MapCanvasProps) {
     // though, not on the ground the plan camera is centred over — on P3 the two are fifteen metres
     // apart, which is where the walk used to begin. (`walk` is already true here, so the lift the
     // view still has has to be asked for explicitly.)
-    const eyeLevel = m.transform.getCameraAltitude() < 2 * (EYE + LIFT + SLAB);
-    const cam = m.transform.getCameraLngLat();
+    const camera = cameraPosition(m);
+    const eyeLevel = camera.altitude < 2 * (EYE + LIFT + SLAB);
+    const cam = camera.lngLat;
     const here = eyeLevel
       ? toLocal([cam.lng, cam.lat], p.project.origin)
       : floorPoint(m, w / 2, h / 2, floorLift(p.threeD));

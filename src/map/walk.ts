@@ -10,10 +10,12 @@
 //
 // Deliberately free of React and of the document model: it takes plan-coordinate wall rectangles and
 // gives back a pose, so everything below the controller is testable without a GL context.
-import maplibregl, { type Map as GLMap } from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
+import type { Map as GLMap } from 'maplibre-gl';
 import type { Origin, Point, Ring } from '../model/types';
 import { toLngLat } from '../model/geometry';
 import { StairWalker, type StairSurface } from './stairSurfaces';
+import { cameraToCenterDistance } from './cameraAim';
 
 /** Eye above the slab it stands on. A constant, not the floor's height: a mezzanine and a hall are
  *  different rooms but the same visitor. */
@@ -755,7 +757,7 @@ export class WalkController {
     const bearing = wrap(this.heading + (this.origin[2] ?? 0));
     const eye = toLngLat(this.position, this.origin);
     const camera = eyeCamera(
-      map.transform,
+      { cameraToCenterDistance: cameraToCenterDistance(map), tileSize: 512 },
       [eye[0], eye[1]],
       this.terrain.eye + (this.fall?.ready ? this.fall.remaining : this.stairs.height - (this.terrain.elevation ?? 0)),
       bearing,

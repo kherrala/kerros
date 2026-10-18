@@ -1,6 +1,6 @@
 {
   "name": "kerros",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "private": true,
   "type": "module",
   "scripts": {
@@ -27,12 +27,16 @@
     "build:site": "vite build --base=./ && vitepress build docs && cp -R docs/.vitepress/dist/. dist/",
     "build:lib": "npm run build --workspaces",
     "generate:ai-tools": "node scripts/plan-import/modelSchema.mjs",
-    "check:ai-tools": "node scripts/plan-import/modelSchema.mjs --check"
+    "check:ai-tools": "node scripts/plan-import/modelSchema.mjs --check",
+    "release:check": "node scripts/release-check.mjs",
+    "release:publish": "node scripts/publish-packages.mjs",
+    "release:dry-run": "node scripts/publish-packages.mjs --dry-run",
+    "test:packages": "node scripts/test-packages.mjs"
   },
   "dependencies": {
     "@napi-rs/canvas": "^1.0.8",
     "lucide-react": "^0.468.0",
-    "maplibre-gl": "^5.6.0",
+    "maplibre-gl": "^6.4.1",
     "pdfjs-dist": "^6.3.289",
     "polygon-clipping": "^0.15.7",
     "proj4": "^2.19.0",

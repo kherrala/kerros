@@ -215,7 +215,17 @@ test('mezzanine walls and exposed edges block walking while supported gallery ho
   await expect.poll(async () => (await pose(page)).floor).toBe('floor-ground');
   await page.keyboard.up('KeyW');
   await expect
-    .poll(() => page.evaluate(() => (window as any).__kerrosMap.transform.getCameraAltitude()))
+    .poll(() =>
+      page.evaluate(() => {
+        const map = (window as any).__kerrosMap;
+        const latitude = (map.getCenter().lat * Math.PI) / 180;
+        const unitsPerMetre = 1 / (40075016.68557849 * Math.cos(latitude));
+        const pixelsPerMetre = unitsPerMetre * 512 * 2 ** map.getZoom();
+        const halfFov = (map.getVerticalFieldOfView() * Math.PI) / 360;
+        const distance = (0.5 * map.getCanvas().clientHeight) / Math.tan(halfFov) / pixelsPerMetre;
+        return map.getCenterElevation() + Math.cos((map.getPitch() * Math.PI) / 180) * distance;
+      }),
+    )
     .toBeCloseTo(2.03, 2);
   expect((await pose(page)).position[1]).toBeGreaterThan(-2);
   expect((await pose(page)).position[1]).toBeLessThan(-1.8);

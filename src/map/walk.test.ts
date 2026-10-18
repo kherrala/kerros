@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { rectangle } from '../model/geometry';
-import maplibregl from 'maplibre-gl';
+import * as maplibregl from 'maplibre-gl';
 import {
   aim,
   alongPath,
@@ -358,25 +358,21 @@ describe('walking the building that is actually drawn', () => {
   });
 
   it('leaves the room it started in', () => {
-    // Room centre to room centre, on the floor with a real fit-out. A straight line between two
-    // offices will meet walls, and should — what it must not do is leave the walker where it began.
-    const rooms = demo.objects.filter(o => o.floorId === floorId && o.kind === 'room' && o.rings?.length);
-    const centre = (ring: Point[]): Point => [
-      ring.reduce((s, p) => s + p[0], 0) / ring.length,
-      ring.reduce((s, p) => s + p[1], 0) / ring.length,
-    ];
-    // A concave room's centroid can fall in its own notch, so start in one that contains its own
-    // middle — the point of the test is the walking, not the geometry of the first room in the list.
-    const home = rooms.find(o => spaceAt(demo, floorId, centre(o.rings![0]))?.id === o.id)!;
-    const start = centre(home.rings![0]);
-    const startSpace = spaceAt(demo, floorId, start)?.id;
-    expect(startSpace).toBeTruthy();
-    const elsewhere = rooms
-      .filter(o => o !== home)
-      .slice(0, 12)
-      .map(o => spaceAt(demo, floorId, march(start, centre(o.rings![0])))?.id)
-      .filter(id => id && id !== startSpace);
-    expect(elsewhere.length).toBeGreaterThan(0);
+    // Use the plan's actual door connections. A straight line between arbitrary room centres can
+    // quite correctly hit a solid part of a wall and never discover a doorway elsewhere along it.
+    // This assertion starts inside one space, aims through a door into a different space, and proves
+    // that collision handling changes the semantic room as well as crossing the wall plane.
+    const connected = doorways.flatMap(d => {
+      const from: Point = [d.at[0] - d.through[0] * 0.8, d.at[1] - d.through[1] * 0.8];
+      const to: Point = [d.at[0] + d.through[0] * 0.8, d.at[1] + d.through[1] * 0.8];
+      const fromSpace = spaceAt(demo, floorId, from)?.id;
+      const toSpace = spaceAt(demo, floorId, to)?.id;
+      return fromSpace && toSpace && fromSpace !== toSpace ? [{ from, to, fromSpace }] : [];
+    });
+    expect(connected.length).toBeGreaterThan(0);
+    expect(connected.some(({ from, to, fromSpace }) => spaceAt(demo, floorId, march(from, to))?.id !== fromSpace)).toBe(
+      true,
+    );
   });
 });
 

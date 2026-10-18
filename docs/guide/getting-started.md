@@ -34,14 +34,20 @@ The viewer renders a `ProjectDocument`. The quickest way to get one is `parseExp
 ```tsx
 import { createRoot } from 'react-dom/client';
 import { FloorViewer, parseExport } from '@kerros/viewer';
+import { setWorkerUrl } from 'maplibre-gl';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import '@kerros/viewer/styles.css';
 
+setWorkerUrl(maplibreWorkerUrl);
 const { project, assets } = parseExport(await (await fetch('/site.json')).text());
 
 createRoot(document.getElementById('app')!).render(
   <FloorViewer project={project} assets={assets} threeD showLabels />,
 );
 ```
+
+The worker URL import is Vite syntax. Configure MapLibre's worker with your bundler's equivalent
+before mounting a viewer or editor. You only need to do this once per application.
 
 That's a complete, read-only floor plan in 2D or 3D. See [The viewer](./viewer) for the full prop list.
 

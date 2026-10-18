@@ -8,7 +8,8 @@ The repository includes reference applications with browser persistence and samp
 replace storage, basemaps, live-status feeds and import services through typed adapters.
 
 [User guide](docs/guide/getting-started.md) · [API reference](docs/reference/schema.md) ·
-[Portable format](docs/reference/portable-format.md) · [Development guide](docs/guide/development.md)
+[Portable format](docs/reference/portable-format.md) · [Development guide](docs/guide/development.md) ·
+[Release guide](docs/guide/releasing.md) · [Changelog](CHANGELOG.md)
 
 ## Modules
 
@@ -69,8 +70,11 @@ Import the package stylesheet at the application entry point; it includes MapLib
 import { createRoot } from 'react-dom/client';
 import { FloorViewer } from '@kerros/viewer';
 import { parseExport } from '@kerros/schema';
+import { setWorkerUrl } from 'maplibre-gl';
+import maplibreWorkerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url';
 import '@kerros/viewer/styles.css';
 
+setWorkerUrl(maplibreWorkerUrl);
 const response = await fetch('./building.json');
 if (!response.ok) throw new Error(`Could not load the project: ${response.status}`);
 const { project, assets } = parseExport(await response.text());
@@ -81,6 +85,9 @@ createRoot(document.getElementById('root')!).render(
   </div>,
 );
 ```
+
+The worker URL import above is Vite syntax. Configure MapLibre's worker with your bundler's equivalent
+before mounting a viewer or editor.
 
 `parseExport` validates the document and supplies an asset repository for embedded reference images.
 `controls` enables floor and view selection, structure inspection and navigation. Omit it for a

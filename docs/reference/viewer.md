@@ -6,6 +6,9 @@ Read-only floor viewer + the live-status contract. Re-exports everything from [`
 import '@kerros/viewer/styles.css';
 ```
 
+Configure the MapLibre worker once in the host before mounting `FloorViewer`; the
+[getting-started guide](../guide/getting-started) shows the Vite setup.
+
 ## Entry points
 
 | Import | What it is |

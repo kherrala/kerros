@@ -1,6 +1,6 @@
 {
   "name": "@kerros/schema",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "Kerros floor-plan project schema: types, validation, portable import/export and indoor-navigation routing. Pure functions \u2014 no React, no rendering.",
   "license": "MIT",
   "type": "module",
@@ -9,10 +9,14 @@
     "url": "git+https://github.com/kherrala/kerros.git",
     "directory": "packages/schema"
   },
+  "homepage": "https://github.com/kherrala/kerros#readme",
+  "bugs": "https://github.com/kherrala/kerros/issues",
+  "keywords": ["floor-plan", "indoor-mapping", "routing", "typescript"],
   "module": "./dist/index.js",
   "types": "./dist/types/schema/index.d.ts",
   "files": [
     "dist",
+    "README.md",
     "LICENSE"
   ],
   "exports": {
@@ -22,6 +26,11 @@
     }
   },
   "scripts": {
-    "build": "vite build && tsc -p tsconfig.dts.json"
+    "build": "vite build && tsc -p tsconfig.dts.json",
+    "prepack": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

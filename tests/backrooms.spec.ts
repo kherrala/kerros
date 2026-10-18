@@ -143,7 +143,17 @@ test('walks through a gallery opening and lights the tiled bath chambers underwa
   await page.keyboard.up('w');
   const landing = await page.evaluate(() => (window as any).__kerrosWalk.pose.position);
   await expect
-    .poll(() => page.evaluate(() => (window as any).__kerrosMap.transform.getCameraAltitude()))
+    .poll(() =>
+      page.evaluate(() => {
+        const map = (window as any).__kerrosMap;
+        const latitude = (map.getCenter().lat * Math.PI) / 180;
+        const unitsPerMetre = 1 / (40075016.68557849 * Math.cos(latitude));
+        const pixelsPerMetre = unitsPerMetre * 512 * 2 ** map.getZoom();
+        const halfFov = (map.getVerticalFieldOfView() * Math.PI) / 360;
+        const distance = (0.5 * map.getCanvas().clientHeight) / Math.tan(halfFov) / pixelsPerMetre;
+        return map.getCenterElevation() + Math.cos((map.getPitch() * Math.PI) / 180) * distance;
+      }),
+    )
     .toBeCloseTo(2.03, 2);
   expect(await page.evaluate(() => (window as any).__kerrosWalk.pose.position)).toEqual(landing);
   await page.screenshot({ path: testInfo.outputPath('double-height-hall.png') });

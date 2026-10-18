@@ -75,9 +75,10 @@ function session(initial: ProjectDocument, seed: number | string) {
         }
         // Coordinate edits must not disturb other floors, including their IDs and geometry.
         for (const key of ['junctions', 'barriers', 'objects', 'virtualBoundaries'] as const)
-          expect(result.project[key]?.filter(o => o.floorId !== floorId)).toEqual(
-            project[key]?.filter(o => o.floorId !== floorId),
-          );
+          expect(
+            result.project[key]?.filter(o => o.floorId !== floorId) ?? [],
+            `${key} changed outside ${floorId ?? 'the site'}`,
+          ).toEqual(project[key]?.filter(o => o.floorId !== floorId) ?? []);
         validateProject(JSON.parse(JSON.stringify(result.project)));
         if (JSON.stringify(result.project) !== before) accepted.set(kind, (accepted.get(kind) ?? 0) + 1);
         history = commitHistory(history, result.project);

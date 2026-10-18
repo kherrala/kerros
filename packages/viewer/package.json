@@ -1,6 +1,6 @@
 {
   "name": "@kerros/viewer",
-  "version": "0.1.0",
+  "version": "0.1.0-rc.1",
   "description": "Read-only live floor-plan viewer for Kerros projects: 2D/3D MapLibre + three rendering, device statuses, navigation routes and journeys.",
   "license": "MIT",
   "type": "module",
@@ -9,10 +9,14 @@
     "url": "git+https://github.com/kherrala/kerros.git",
     "directory": "packages/viewer"
   },
+  "homepage": "https://github.com/kherrala/kerros#readme",
+  "bugs": "https://github.com/kherrala/kerros/issues",
+  "keywords": ["floor-plan", "indoor-mapping", "maplibre", "react", "three.js"],
   "module": "./dist/index.js",
   "types": "./dist/types/viewer/index.d.ts",
   "files": [
     "dist",
+    "README.md",
     "LICENSE"
   ],
   "exports": {
@@ -27,7 +31,8 @@
     "./styles.css": "./dist/styles.css"
   },
   "scripts": {
-    "build": "vite build && tsc -p tsconfig.dts.json && cat ../../node_modules/maplibre-gl/dist/maplibre-gl.css ../../src/styles.css > dist/styles.css"
+    "build": "vite build && tsc -p tsconfig.dts.json && cat ../../node_modules/maplibre-gl/dist/maplibre-gl.css ../../src/styles.css > dist/styles.css",
+    "prepack": "npm run build"
   },
   "sideEffects": [
     "*.css"
@@ -35,11 +40,15 @@
   "peerDependencies": {
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
-    "maplibre-gl": "^5.0.0",
+    "maplibre-gl": "^6.4.1",
     "three": ">=0.170.0 <1.0.0"
   },
   "dependencies": {
     "lucide-react": "^0.468.0",
     "polygon-clipping": "^0.15.7"
+  },
+  "publishConfig": {
+    "access": "public",
+    "registry": "https://registry.npmjs.org/"
   }
 }

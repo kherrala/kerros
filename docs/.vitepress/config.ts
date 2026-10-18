@@ -60,6 +60,7 @@ export default defineConfig({
           text: 'Developer setup',
           items: [
             { text: 'Docker development stack', link: '/guide/development' },
+            { text: 'Releasing npm packages', link: '/guide/releasing' },
             { text: 'MML vector maps', link: '/guide/mml-maps' },
             { text: 'Source analysis & calibration', link: '/guide/ai-import-analysis' },
           ],

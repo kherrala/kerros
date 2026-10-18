@@ -6,6 +6,9 @@ The authoring editor, host adapters and browser-safe drawing helpers. Re-exports
 import '@kerros/editor/styles.css';
 ```
 
+Configure the MapLibre worker once in the host before mounting `FloorEditor` or `SiteViewer`; the
+[getting-started guide](../guide/getting-started) shows the Vite setup.
+
 ## Entry points
 
 | Import | What it is |

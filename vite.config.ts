@@ -98,6 +98,7 @@ const FACADES: ReadonlyArray<readonly [module: string, chunk: string]> = [
 ];
 
 export default defineConfig({
+  ...(process.env.KERROS_E2E_CACHE_DIR ? { cacheDir: process.env.KERROS_E2E_CACHE_DIR } : {}),
   server: {
     proxy: {
       '/api/ai-import': {

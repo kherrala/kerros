@@ -451,8 +451,9 @@ test('indoor navigation: authored route, cross-floor directions and journey play
   const before = (await savedProject(page)).navNodes?.length ?? 0;
   await page.getByRole('button', { name: 'Route path tool' }).click();
   await expect(page.locator('.tool-instruction')).toContainText('route node');
-  await clickAt(page, await canvasPoint(page, 0.45, 0.5));
-  await clickAt(page, await canvasPoint(page, 0.55, 0.55));
+  // Draw away from Stockmann's dense generated graph so the points cannot weld onto existing nodes.
+  await clickAt(page, await canvasPoint(page, 0.82, 0.25));
+  await clickAt(page, await canvasPoint(page, 0.88, 0.32));
   await expect.poll(async () => (await savedProject(page)).navNodes?.length ?? 0).toBeGreaterThan(before);
   await page.keyboard.press('Escape');
 
@@ -973,14 +974,13 @@ test('selecting objects from the list keeps the POV camera at the walker', async
       const { __kerrosWalk: walk, __kerrosMap: map } = window as unknown as {
         __kerrosWalk: { pose: { position: number[]; heading: number; pitch: number } };
         __kerrosMap: {
-          transform: { getCameraAltitude(): number; getCameraLngLat(): { lng: number; lat: number } };
+          getLayer(id: string): { implementation?: { camera: { position: { toArray(): number[] } } } } | undefined;
           isMoving(): boolean;
         };
       };
       return {
         ...walk.pose,
-        eye: map.transform.getCameraLngLat(),
-        altitude: map.transform.getCameraAltitude(),
+        eye: map.getLayer('kerros-3d')?.implementation?.camera.position.toArray(),
         moving: map.isMoving(),
       };
     });
@@ -1001,9 +1001,7 @@ test('selecting objects from the list keeps the POV camera at the walker', async
     await expect.poll(async () => Math.abs((await pose()).heading - expected)).toBeLessThan(0.01);
     const after = await pose();
     expect(after.position).toEqual(before.position);
-    expect(after.altitude).toBeCloseTo(before.altitude, 4);
-    expect(after.eye.lng).toBeCloseTo(before.eye.lng, 8);
-    expect(after.eye.lat).toBeCloseTo(before.eye.lat, 8);
+    after.eye!.forEach((coordinate, index) => expect(coordinate).toBeCloseTo(before.eye![index], 4));
     expect(after.pitch).toBe(before.pitch);
     expect(after.moving).toBe(false);
   }
@@ -1019,17 +1017,16 @@ test('POV field of view widens the lens without moving the eye and remembers the
       const { __kerrosWalk: walk, __kerrosMap: map } = window as unknown as {
         __kerrosWalk?: { pose: { position: number[]; heading: number; pitch: number } };
         __kerrosMap: {
+          getLayer(id: string): { implementation?: { camera: { position: { toArray(): number[] } } } } | undefined;
           getVerticalFieldOfView(): number;
           getCanvas(): HTMLCanvasElement;
-          transform: { getCameraAltitude(): number; getCameraLngLat(): { lng: number; lat: number } };
         };
       };
       const vertical = map.getVerticalFieldOfView();
       const canvas = map.getCanvas();
       return {
         pose: walk?.pose,
-        eye: map.transform.getCameraLngLat(),
-        altitude: map.transform.getCameraAltitude(),
+        eye: map.getLayer('kerros-3d')?.implementation?.camera.position.toArray(),
         vertical,
         horizontal:
           (2 * Math.atan((Math.tan((vertical * Math.PI) / 360) * canvas.clientWidth) / canvas.clientHeight) * 180) /
@@ -1058,9 +1055,7 @@ test('POV field of view widens the lens without moving the eye and remembers the
     await expect.poll(async () => (await camera()).horizontal).toBeCloseTo(119, 4);
     const after = await camera();
     expect(after.pose).toEqual(before.pose);
-    expect(after.eye.lng).toBeCloseTo(before.eye.lng, 8);
-    expect(after.eye.lat).toBeCloseTo(before.eye.lat, 8);
-    expect(after.altitude).toBeCloseTo(before.altitude, 4);
+    after.eye!.forEach((coordinate, index) => expect(coordinate).toBeCloseTo(before.eye![index], 4));
   }
   await expect(page.getByRole('button', { name: 'Zoom out', exact: true })).toBeHidden();
   await page.getByRole('button', { name: '3D', exact: true }).click();

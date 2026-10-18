@@ -20,10 +20,12 @@ import {
   type ProjectDocument,
   type ProjectSummary,
 } from '@kerros/viewer/host';
+import { setupMaplibreWorker } from './maplibreWorker';
 // FloorViewer is the only thing here that draws a plan, and drawing a plan means maplibre and three
 // — 1.7 MB that the picker screen has no use for. The `/host` subpath above is the same facade
 // minus the renderer, so naming FloorViewer through a dynamic import is what keeps the two apart.
-const FloorViewer = lazy(() => import('@kerros/viewer').then(m => ({ default: m.FloorViewer })));
+const loadViewer = () => Promise.all([setupMaplibreWorker(), import('@kerros/viewer')]).then(([, viewer]) => viewer);
+const FloorViewer = lazy(() => loadViewer().then(m => ({ default: m.FloorViewer })));
 import { mmlBasemap } from './mmlBasemap';
 import { currentDemoId, STOCKMANN_ID } from './demo/ids';
 import { migrateStockmann } from './demo/migrate';
@@ -276,7 +278,7 @@ function ViewerHome() {
   // the click to begin a 1.7 MB download would trade a slow start for a stare. Idle-scheduled, so it
   // queues behind the picker's own work rather than competing with it.
   useEffect(() => {
-    const warm = () => void import('@kerros/viewer');
+    const warm = () => void loadViewer();
     const idle = (window as unknown as { requestIdleCallback?: (cb: () => void) => number }).requestIdleCallback;
     const handle = idle ? idle(warm) : window.setTimeout(warm, 400);
     return () => {

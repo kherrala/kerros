@@ -25,8 +25,13 @@ export default defineConfig({
       : `npm run dev -- --port ${port} --strictPort`,
     // Health-check app.html, not / — the reference editor moved off the root (which is now the docs home).
     url: `http://127.0.0.1:${port}/app.html`,
-    reuseExistingServer: !process.env.CI && !process.env.KERROS_E2E_PRODUCTION,
+    // The configured import adapters and proxy target are part of these tests. Reusing an arbitrary
+    // developer server can silently remove that configuration and turn importer failures into noise.
+    reuseExistingServer: false,
     env: {
+      // Separate Vite's optimized-dependency cache from other dev servers. MapLibre emits a worker
+      // entry in that cache, so two servers invalidating the same directory can strand a worker URL.
+      KERROS_E2E_CACHE_DIR: `node_modules/.vite-e2e-${port}`,
       VITE_MML_API_KEY: 'playwright-test-key',
       VITE_AI_IMPORT_URL: '/api/ai-import',
       ANTHROPIC_API_KEY: '',
